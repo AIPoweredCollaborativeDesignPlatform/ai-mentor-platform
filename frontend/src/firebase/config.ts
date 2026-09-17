@@ -24,14 +24,14 @@ export function getStoredFirebaseConfig(): FirebaseConfig | null {
     }
   }
 
-  // Default to ai-mentor-platform-a27ce project
+  // Default to ai-mentor-web project
   const envConfig: FirebaseConfig = {
-    apiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'AIzaSyDoDvNPhO66P82nuxheWXreEqbEi3dda3M',
-    authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || 'ai-mentor-platform-a27ce.firebaseapp.com',
-    projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || 'ai-mentor-platform-a27ce',
-    storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || 'ai-mentor-platform-a27ce.firebasestorage.app',
-    messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '1005044934711',
-    appId: import.meta.env.VITE_FIREBASE_APP_ID || '1:1005044934711:web:8df0e3eba24b27247cf7b2'
+    apiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'AIzaSyAYQsML6EDnKnlDQRe_hVXjzvbV5Gqnr50',
+    authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || 'ai-mentor-web.firebaseapp.com',
+    projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || 'ai-mentor-web',
+    storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || 'ai-mentor-web.firebasestorage.app',
+    messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '160863026720',
+    appId: import.meta.env.VITE_FIREBASE_APP_ID || '1:160863026720:web:2dfcfb4bf690cb45df0645'
   };
 
   if (envConfig.apiKey && envConfig.projectId) {

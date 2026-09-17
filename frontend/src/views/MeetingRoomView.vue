@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue';
+import { ref, onMounted, onUnmounted, nextTick } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import { useRoomStore } from '../stores/room';
@@ -93,6 +93,7 @@ const simulateApplicant = () => {
 };
 
 onMounted(() => {
+  roomStore.startFirestoreListener(roomId.value);
   // Ensure room state is loaded
   if (!roomStore.currentRoom) {
     const loaded = localStorage.getItem(`ai_room_${pin}`);
@@ -103,6 +104,10 @@ onMounted(() => {
     }
   }
   scrollToBottom();
+});
+
+onUnmounted(() => {
+  roomStore.stopListening();
 });
 </script>
 

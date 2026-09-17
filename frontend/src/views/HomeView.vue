@@ -10,8 +10,10 @@ import {
   KeyRound,
   ShieldAlert,
   ArrowRight,
-  LayoutDashboard
+  LayoutDashboard,
+  Database
 } from 'lucide-vue-next';
+import FirebaseConfigModal from '../components/FirebaseConfigModal.vue';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -21,6 +23,8 @@ const pinInput = ref('');
 const inputName = ref(authStore.displayName);
 const selectedAvatar = ref(authStore.avatar);
 const errorMsg = ref('');
+const isFirebaseModalOpen = ref(false);
+const isLoading = ref(false);
 
 const avatarChoices = ['🦊', '🦉', '🎨', '🚀', '🔮', '📐', '🤖', '⚡'];
 
@@ -34,13 +38,20 @@ const handleSaveProfile = () => {
   }
 };
 
-const handleCreateRoom = () => {
+const handleCreateRoom = async () => {
   handleSaveProfile();
-  const newRoom = roomStore.createRoom();
-  router.push(`/room/${newRoom.roomId}`);
+  isLoading.value = true;
+  try {
+    const newRoom = await roomStore.createRoom();
+    router.push(`/room/${newRoom.roomId}`);
+  } catch (err) {
+    console.error(err);
+  } finally {
+    isLoading.value = false;
+  }
 };
 
-const handleJoinRoom = () => {
+const handleJoinRoom = async () => {
   handleSaveProfile();
   if (pinInput.value.trim().length !== 6) {
     errorMsg.value = '請輸入正確的 6 位數房間 PIN 碼';
@@ -48,13 +59,47 @@ const handleJoinRoom = () => {
   }
   errorMsg.value = '';
   const pin = pinInput.value.trim();
-  roomStore.applyToJoin(pin);
-  router.push(`/waiting/room_${pin}`);
+  isLoading.value = true;
+  try {
+    await roomStore.applyToJoin(pin);
+    router.push(`/waiting/room_${pin}`);
+  } catch (err) {
+    console.error(err);
+  } finally {
+    isLoading.value = false;
+  }
+};
+
+const handleGoogleSignIn = async () => {
+  try {
+    await authStore.upgradeWithGoogle();
+  } catch (err: any) {
+    if (err.code === 'auth/configuration-not-found' || err.message?.includes('api-key')) {
+      isFirebaseModalOpen.value = true;
+    } else {
+      alert(`Google 登入提示: ${err.message || err}`);
+    }
+  }
 };
 </script>
 
 <template>
-  <div class="min-h-screen flex flex-col items-center justify-center p-4 sm:p-6 bg-gradient-to-b from-slate-900 via-slate-950 to-slate-900">
+  <div class="min-h-screen flex flex-col items-center justify-center p-4 sm:p-6 bg-gradient-to-b from-slate-900 via-slate-950 to-slate-900 relative">
+    <!-- Top Right Cloud Config Button -->
+    <div class="absolute top-4 right-4 sm:top-6 sm:right-6">
+      <button
+        @click="isFirebaseModalOpen = true"
+        class="inline-flex items-center gap-1.5 text-xs px-3.5 py-1.5 rounded-xl border border-slate-700 bg-slate-900/80 hover:bg-slate-800 text-slate-300 transition backdrop-blur-md shadow"
+      >
+        <Database class="w-3.5 h-3.5 text-sky-400" />
+        <span>{{ authStore.isConfigured ? 'Firebase 已連線' : '配置 Firebase' }}</span>
+        <span
+          class="w-2 h-2 rounded-full"
+          :class="authStore.isConfigured ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'"
+        ></span>
+      </button>
+    </div>
+
     <!-- Brand / Header -->
     <div class="text-center max-w-xl mb-8">
       <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-sky-500/10 border border-sky-500/30 text-sky-400 text-xs font-semibold mb-4">
@@ -107,20 +152,20 @@ const handleJoinRoom = () => {
         </div>
 
         <!-- Google Upgrade Button -->
-        <div v-if="!authStore.isGoogleLinked" class="pt-1 border-t border-slate-800/60 flex items-center justify-between">
+        <div v-if="!authStore.isGoogleLinked" class="pt-2 border-t border-slate-800/60 flex items-center justify-between">
           <span class="text-xs text-slate-400">解鎖跨裝置專案大廳與歷史資產？</span>
           <button
-            @click="authStore.upgradeWithGoogle()"
-            class="inline-flex items-center gap-1.5 text-xs text-sky-400 hover:text-sky-300 font-medium px-2.5 py-1 rounded-lg hover:bg-sky-950/40 transition"
+            @click="handleGoogleSignIn"
+            class="inline-flex items-center gap-1.5 text-xs text-sky-400 hover:text-sky-300 font-medium px-3 py-1.5 rounded-xl border border-sky-500/30 bg-sky-500/10 hover:bg-sky-500/20 transition"
           >
             <LogIn class="w-3.5 h-3.5" /> 一鍵升級 Google
           </button>
         </div>
-        <div v-else class="pt-1 border-t border-slate-800/60 flex items-center justify-between text-xs">
+        <div v-else class="pt-2 border-t border-slate-800/60 flex items-center justify-between text-xs">
           <span class="text-emerald-400 flex items-center gap-1">
             ✓ 已綁定 Google 帳號 ({{ authStore.email }})
           </span>
-          <router-link to="/dashboard" class="text-sky-400 hover:underline flex items-center gap-1">
+          <router-link to="/dashboard" class="text-sky-400 hover:underline flex items-center gap-1 font-semibold">
             <LayoutDashboard class="w-3.5 h-3.5" /> 專案大廳
           </router-link>
         </div>
@@ -133,7 +178,8 @@ const handleJoinRoom = () => {
         <!-- 發起會議 (成為 Host) -->
         <button
           @click="handleCreateRoom"
-          class="flex flex-col justify-between p-5 rounded-2xl bg-gradient-to-br from-sky-600 to-indigo-700 hover:from-sky-500 hover:to-indigo-600 text-white shadow-lg transition duration-200 text-left group"
+          :disabled="isLoading"
+          class="flex flex-col justify-between p-5 rounded-2xl bg-gradient-to-br from-sky-600 to-indigo-700 hover:from-sky-500 hover:to-indigo-600 text-white shadow-lg transition duration-200 text-left group disabled:opacity-50"
         >
           <div>
             <div class="p-2.5 bg-white/10 rounded-xl w-fit mb-3">
@@ -145,7 +191,7 @@ const handleJoinRoom = () => {
             </p>
           </div>
           <div class="mt-4 flex items-center gap-1 text-xs font-semibold text-white group-hover:translate-x-1 transition">
-            即刻建立 <ArrowRight class="w-3.5 h-3.5" />
+            {{ isLoading ? '建立中...' : '即刻建立' }} <ArrowRight class="w-3.5 h-3.5" />
           </div>
         </button>
 
@@ -170,12 +216,19 @@ const handleJoinRoom = () => {
           </div>
           <button
             @click="handleJoinRoom"
-            class="mt-4 w-full py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs font-semibold transition"
+            :disabled="isLoading"
+            class="mt-4 w-full py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs font-semibold transition disabled:opacity-50"
           >
-            申請進入等候室
+            {{ isLoading ? '申請中...' : '申請進入等候室' }}
           </button>
         </div>
       </div>
     </div>
+
+    <!-- Firebase Config Modal -->
+    <FirebaseConfigModal
+      :isOpen="isFirebaseModalOpen"
+      @close="isFirebaseModalOpen = false"
+    />
   </div>
 </template>

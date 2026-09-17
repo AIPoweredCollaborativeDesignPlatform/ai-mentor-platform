@@ -43,12 +43,14 @@ watch(() => roomStore.myStatus, (newStatus) => {
 });
 
 onMounted(() => {
+  roomStore.startFirestoreListener(roomId.value);
   checkStatus();
   checkInterval = setInterval(checkStatus, 1500);
 });
 
 onUnmounted(() => {
   if (checkInterval) clearInterval(checkInterval);
+  roomStore.stopListening();
 });
 </script>
 

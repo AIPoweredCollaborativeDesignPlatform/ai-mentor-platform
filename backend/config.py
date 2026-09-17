@@ -1,5 +1,4 @@
 import os
-from pydantic_settings import BaseSettings if False else object
 from dotenv import load_dotenv
 
 load_dotenv()

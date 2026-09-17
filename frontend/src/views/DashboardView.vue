@@ -11,23 +11,58 @@ import {
   LogOut
 } from 'lucide-vue-next';
 
+import { ref, onMounted } from 'vue';
+
 const router = useRouter();
 const authStore = useAuthStore();
 
-const historyRooms = [
+interface RoomHistoryItem {
+  id: string;
+  pin: string;
+  title: string;
+  date: string;
+  members: number;
+  assetsCount: number;
+}
+
+const historyRooms = ref<RoomHistoryItem[]>([
   { id: 'room_849201', pin: '849201', title: '智能咖啡機人機介面概念設計', date: '2026-09-15', members: 4, assetsCount: 3 },
   { id: 'room_512930', pin: '512930', title: '遠距人體工學工作椅體量評估', date: '2026-09-12', members: 3, assetsCount: 5 },
   { id: 'room_194820', pin: '194820', title: '現代客廳幾何茶几與材質審查', date: '2026-09-10', members: 5, assetsCount: 4 }
-];
+]);
 
-const generatedAssets = [
+const generatedAssets = ref([
   { type: '3d', title: '人體工學椅原型 (Parametric 3D)', date: '2026-09-12', roomPin: '512930' },
   { type: 'moodboard', title: '現代極簡胡桃木視覺意向板', date: '2026-09-10', roomPin: '194820' },
   { type: 'doc', title: '設計協同委託草約 (Markdown)', date: '2026-09-15', roomPin: '849201' }
-];
+]);
 
-const handleLogout = () => {
-  authStore.logoutGoogle();
+onMounted(() => {
+  // Discover local sessions
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith('ai_room_')) {
+      try {
+        const item = JSON.parse(localStorage.getItem(key) || '{}');
+        if (item.pin && !historyRooms.value.some(r => r.pin === item.pin)) {
+          historyRooms.value.unshift({
+            id: item.roomId || `room_${item.pin}`,
+            pin: item.pin,
+            title: `協同設計會議 (${item.pin})`,
+            date: new Date(item.createdAt || Date.now()).toLocaleDateString(),
+            members: Object.keys(item.participants || {}).length || 1,
+            assetsCount: item.messages?.filter((m: any) => m.type === 'ai_asset')?.length || 0
+          });
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+  }
+});
+
+const handleLogout = async () => {
+  await authStore.logoutGoogle();
   router.push('/');
 };
 </script>

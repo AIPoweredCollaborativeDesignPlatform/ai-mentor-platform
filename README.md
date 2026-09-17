@@ -1,93 +1,102 @@
-# AI Mentor 協作平台 (AI Mentor Collaboration Platform)
+# AI Mentor Collaboration Platform
 
-> **定位**：融合 Google AI 生態與 GCA（Group Conversational Agent）理論的群體對話中介平台。以「讓未知的設計關係現形」為核心目標，將 AI 作為背景調解與可視化資產生成者，在群體認知出現落差或進程停滯時介入引導。
+> **Positioning**: A group conversational intermediary platform fusing the Google AI ecosystem with Group Conversational Agent (GCA) theory. Designed for remote collaborative design and client decision-making, the platform positions AI as a background mediator and visual asset generator that intervenes constructively whenever cognitive gaps or discourse stagnation arise.
 
 ---
 
-## 系統架構與流程
+## System Architecture & Interaction Flow
 
 ```mermaid
 graph TD
-    UserGuest[訪客 / Google 帳號] -->|1. 建立房間| HostRoom[主持人建立房間 (產生 6 位 PIN / 網址)]
-    UserInvited[受邀成員] -->|2. 輸入 PIN 進入| WaitingRoom[等候室 (狀態: pending)]
-    WaitingRoom -->|即時監聽 Firestore / WebSocket| HostNotify[主持人接收 Toast 通知]
-    HostNotify -->|3. 主持人於側邊 Drawer 點擊核准| HostApprove[狀態更新為 approved]
-    HostApprove -->|自動跳轉進入| MainRoom[協作聊天室 (Messages 串流)]
+    UserGuest["Guest / Google User"] -->|1. Create Room| HostRoom["Host Creates Room (6-digit PIN & URL)"]
+    UserInvited["Invited Member"] -->|2. Enter PIN| WaitingRoom["Waiting Room (Status: Pending)"]
+    WaitingRoom -->|Real-time Listener / Firestore| HostNotify["Host Receives Toast Notification"]
+    HostNotify -->|3. Host Approves in Side Drawer| HostApprove["Status Updated to Approved"]
+    HostApprove -->|Auto-redirect| MainRoom["Collaborative Meeting Room (Messages Stream)"]
     
-    MainRoom -->|群體對話流| MentorEngine[AI Mentor 監聽引擎 (FastAPI + Gemini)]
-    MentorEngine -->|讀取 Mentor 控制面板設定| SensitivityRule{敏感度判斷: Strict / Conservative / Exploratory}
-    SensitivityRule -->|觸發介入時| PublicIntervene[全體公開去衝突發言 + 生成可視化資產]
+    MainRoom -->|Dialogue Stream| MentorEngine["AI Mentor Agent (FastAPI + Gemini)"]
+    MentorEngine -->|Reads Control Panel Settings| SensitivityRule{"Sensitivity: Strict / Conservative / Exploratory"}
+    SensitivityRule -->|Trigger Met| PublicIntervene["Public De-conflict Mediation & Visual Assets"]
     
-    PublicIntervene -->|Code-to-3D| ThreeJSViewer[Three.js 參數化幾何 JSON 即時渲染]
-    PublicIntervene -->|External Mesh| ModelViewer[<model-viewer> GLB 3D 渲染]
-    PublicIntervene -->|Mood Board| MoodBoard[視覺意向板 / 色彩材質標註]
-    PublicIntervene -->|進程交付| DocViewer[Markdown 會議紀錄與合約草案]
+    PublicIntervene -->|Code-to-3D| ThreeJSViewer["Three.js Parametric Geometry JSON (Real-time)"]
+    PublicIntervene -->|External Mesh| ModelViewer["GLB 3D Viewer (model-viewer)"]
+    PublicIntervene -->|Mood Board| MoodBoard["Visual Mood Board (Palette & Materials)"]
+    PublicIntervene -->|Deliverables| DocViewer["Markdown Meeting Summary & Contract Draft"]
 ```
 
 ---
 
-## 核心規格與功能模組
+## Core Specifications & Features
 
-### 1. 登入與等候室審核 (Host Approval Flow)
-- **混合式無感身分驗證 (Progressive Onboarding)**：訪客輸入暱稱與選擇頭像即可快速加入；可一鍵升級 Google 帳號解鎖跨裝置「專案大廳 (Dashboard)」。
-- **等候室機制**：受邀者進入顯示「等待主持人核准中...」並具備動態呼吸指示。
-- **主持人抽屜審核**：側邊 Drawer 分組顯示「已加入」與「待審核」清單，提供即時 Toast 提示與允許／婉拒審核按鈕。
+### 1. Authentication & Host Approval Flow
+* **Progressive Onboarding**:
+  * **Guest Mode (Default)**: Enter nickname and select an avatar to participate immediately. Stores anonymous UID in `localStorage` with clear indicators regarding local persistence.
+  * **Google Account Upgrade**: One-click upgrade with Firebase Authentication, unlocking the cross-device **Project Dashboard** and historical AI assets.
+* **Waiting Room & Host Approval**:
+  * First creator automatically becomes **Host**, receiving a 6-digit PIN and sharable URL.
+  * Invited participants entering via PIN/URL join a **Waiting Room** displaying an animated pulse indicator ("Waiting for Host Approval...").
+  * Hosts receive real-time **Toast Notifications** and can review applicants via the **Control Drawer** ("Pending" vs. "Approved" lists) with instant Allow/Reject actions.
+  * Upon approval, invited members are automatically redirected into the collaborative session and synced with chat history.
 
-### 2. 群體互動與張力控管 (GCA Mediation)
-- **主持人 Mentor 控制面板**：
-  - `Strict`：僅在被 `@Mentor` 標記時回覆。
-  - `Conservative` (預設)：偵測連續 3 次分歧、長時間停滯或明確視覺需求時介入。
-  - `Exploratory`：主動提供變體提案與參考資產。
-- **中立去衝突原則**：System Prompt 嚴格約束 AI 發言，以客觀設計資產導向（「為促進概念具象化，提供以下參考」），禁止評判人際爭端。
+### 2. Group Interaction & Tension Control (GCA Mediation)
+* **Proactivity vs. Group Autonomy (Mentor Control Panel)**:
+  * `Strict`: Intervenes only when explicitly addressed with `@Mentor`.
+  * `Conservative` (Default): Intervenes upon detecting 3 consecutive divergent viewpoints, prolonged discussion stagnation, or explicit visual/spatial demands.
+  * `Exploratory`: Proactively provides variant proposals and reference assets.
+  * **Module Toggles**: Individual on/off switches for 3D Prototypes, Mood Boards, Fact Retrieval, and Process Deliverables.
+* **Visibility & Friction Reduction**:
+  * All AI contributions remain strictly **public to all members**.
+  * System prompt enforces objective, asset-oriented, neutral phrasing (e.g., *"To facilitate conceptual visualization, here is a reference:"*), eliminating evaluative interpersonal language.
 
-### 3. 核心功能模組與工具介面
-- **雙軌 3D 原型引擎**：
-  - `Code-to-3D`：Gemini 輸出 Three.js 參數化幾何 JSON，前端即時零延遲渲染。
-  - `External Mesh API`：高精有機形體調用 GLB 模型，封裝 `<model-viewer>` 呈現。
-- **視覺意向板 (Mood Board)**：提取抽象風格關鍵詞，生成對比切片、色彩調色盤（支援點選複製 HEX）與材質標註。
-- **結構化交付文件**：依對話脈絡自動產出 Markdown 會議紀要與合約草案，支援一鍵下載。
+### 3. Core Capabilities & Dual-Track 3D Engine
+* **Dual-Track 3D Prototype Engine**:
+  * `Code-to-3D`: Gemini generates clean Three.js geometry JSON (primitives, dimensions, PBR materials, annotations). Rendered client-side with zero latency and interactive orbit/wireframe controls.
+  * `External Mesh API`: High-fidelity organic GLB asset pipeline rendered via `<model-viewer>` with 360° inspection and shadow simulation.
+* **Visual Mood Board**: Extracts abstract aesthetic keywords and compiles color swatches with one-click HEX copying, material callouts, and curated visual slices.
+* **Structured Deliverables**: Automatically compiles Markdown meeting minutes and technical contract drafts based on JSON schemas, complete with modal preview and one-click `.md` download.
 
-### 4. Firestore 資料庫安全規則 (`firestore.rules`)
-- `participants` 集合：任何人皆可寫入 `status: "pending"` 申請；僅 `hostUid` 可將狀態更新為 `approved`。
-- `messages` 集合：嚴格限制讀寫權限，僅當請求者的 `uid` 在 `participants` 中且 `status == "approved"` 時，方可存取。
+### 4. Firestore Security Rules Architecture (`firestore.rules`)
+* `/rooms/{roomId}/participants/{uid}`: Anyone authenticated may create a `status: "pending"` application document. Only `hostUid` can update status to `approved` or `rejected`.
+* `/rooms/{roomId}/messages/{messageId}`: Strict read/write restrictions: Only participants whose status is `approved` can read chat history and dispatch new messages.
 
 ---
 
-## 目錄結構
+## Project Structure
 
 ```text
 ai-mentor-platform/
 ├── .gemini/
-│   └── rules.md             # 團隊 Antigravity AI 協作規範
-├── .gitignore               # Git 忽略配置
-├── .env.example             # 環境變數範本
-├── README.md                # 專案技術文件
-├── firestore.rules          # Firestore 安全規則
-├── backend/                 # Google Cloud Run + FastAPI 服務
-│   ├── main.py              # 路由與 API 入口
-│   ├── config.py            # 配置管理
-│   ├── Dockerfile           # 容器定義
-│   ├── requirements.txt     # Python 依賴
-│   ├── models/schemas.py    # Pydantic 資料模型
+│   └── rules.md             # Antigravity AI team collaboration rules
+├── .gitignore               # Excludes secrets, node_modules, and cache
+├── .env.example             # Environment variables template
+├── README.md                # Project documentation and guide
+├── firestore.rules          # Firestore database security rules
+├── backend/                 # Google Cloud Run + FastAPI service
+│   ├── main.py              # API routes & room lifecycle
+│   ├── config.py            # Environment settings
+│   ├── Dockerfile           # Cloud Run deployment container
+│   ├── requirements.txt     # Python dependencies (FastAPI, google-genai)
+│   ├── models/schemas.py    # Pydantic data schemas
 │   └── services/
-│       ├── mentor_agent.py  # GCA 調解引擎
-│       └── tools_engine.py  # 3D, 意向板, 交付物工具
+│       ├── mentor_agent.py  # GCA mediation engine (sensitivity logic)
+│       └── tools_engine.py  # 3D JSON, GLB, moodboard, and doc tools
 └── frontend/                # Vue 3 + TypeScript + Tailwind CSS
-    ├── package.json
-    ├── vite.config.ts
+    ├── package.json         # Three.js, model-viewer, Pinia, Lucide
+    ├── vite.config.ts       # Custom element compiler setup
     ├── index.html
     └── src/
-        ├── stores/          # Pinia 狀態庫 (auth, room, mentor)
-        ├── router/          # Vue Router (Home, Waiting, Room, Dashboard)
-        ├── components/      # 3D 畫布、模型檢視器、意向板、抽屜、Toast
-        └── views/           # 首頁、等候室、協作會議室、專案大廳
+        ├── stores/          # Pinia stores (auth, room, mentor)
+        ├── router/          # Vue Router configurations
+        ├── components/      # 3D viewers, moodboard, drawer, toasts
+        └── views/           # Home, Waiting Room, Meeting Room, Dashboard
 ```
 
 ---
 
-## 本地快速啟動 (Quick Start)
+## Quick Start
 
-### 1. 後端 (FastAPI)
+### 1. Backend Service (FastAPI)
+
 ```powershell
 cd backend
 python -m venv .venv
@@ -95,32 +104,37 @@ python -m venv .venv
 pip install -r requirements.txt
 python main.py
 ```
-> 後端服務啟動於 `http://localhost:8000`，提供 API 文檔於 `http://localhost:8000/docs`。
+> The API server runs at `http://localhost:8000`. Interactive API documentation is available at `http://localhost:8000/docs`.
 
-### 2. 前端 (Vue 3 + Vite)
+### 2. Frontend Application (Vue 3 + Vite)
+
 ```powershell
 cd frontend
 npm install
 npm run dev
 ```
-> 前端開發伺服器啟動於 `http://localhost:5173`。
+> The frontend client runs at `http://localhost:5173`.
 
 ---
 
-## 團隊 GitHub 協作流程 (Team Git Workflow)
+## Team Git Workflow
 
-1. **取得最新代碼**：
+1. **Pull Latest Changes**:
    ```powershell
    git pull origin main
    ```
-2. **開立功能分支**：
+
+2. **Create Feature Branch**:
    ```powershell
-   git checkout -b feature/waiting-room-enhancement
+   git checkout -b feature/waiting-room-enhancements
    ```
-3. **提交與推送**：
+
+3. **Commit & Push**:
    ```powershell
    git add .
-   git commit -m "feat: add real-time host approval notification"
-   git push origin feature/waiting-room-enhancement
+   git commit -m "feat: improve host approval notifications"
+   git push origin feature/waiting-room-enhancements
    ```
-4. 至 GitHub Organization 倉庫開立 Pull Request 進行代碼審查與合併。
+
+4. **Submit Pull Request**:
+   Open a Pull Request on the GitHub Organization repository (`AIPoweredCollaborativeDesignPlatform/ai-mentor-platform`) for code review and automated checks.

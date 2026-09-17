@@ -27,8 +27,34 @@ class MentorAgentService:
             try:
                 from google import genai
                 self.client = genai.Client(api_key=self.api_key)
+                print("[MentorAgentService] Real Google GenAI client successfully connected!")
             except Exception as e:
                 print(f"[MentorAgentService] Failed to init google-genai client: {e}")
+
+    def call_gemini_mediation(self, dialogue_context: str, user_intent: str) -> Optional[str]:
+        """Calls real Gemini 2.5 Flash to generate constructive de-conflicting guidance."""
+        if not self.client:
+            return None
+        try:
+            prompt = f"""
+{SYSTEM_INSTRUCTION}
+
+【近期群體對話】
+{dialogue_context}
+
+【最新發言或指令】
+{user_intent}
+
+請嚴格遵循 GCA 去衝突與資產導向原則，以中立客觀、促進概念具象化的口吻回覆一句簡短話語（100字內），開頭統一使用「為促進概念具象化，提供以下參考：」。
+"""
+            response = self.client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt
+            )
+            return response.text.strip() if response.text else None
+        except Exception as err:
+            print(f"[MentorAgentService] Gemini API call error: {err}")
+            return None
 
     def analyze_dialogue(self, request: AnalyzeRequest) -> AnalyzeResponse:
         messages = request.messages
@@ -64,7 +90,8 @@ class MentorAgentService:
                 return AnalyzeResponse(shouldIntervene=False, reason="Conservative mode: discourse within normal flow.")
 
         # If triggered, determine the best asset to generate
-        full_text = " ".join([f"{m.senderName}: {m.content}" for m in messages[-6:]])
+        # Generate dynamic Gemini speech if model client is online
+        gemini_speech = self.call_gemini_mediation(full_text, latest_content)
 
         # Priority 1: Summary / Contract
         if any(k in latest_content for k in ["總結", "紀錄", "摘要", "summary"]):
@@ -73,7 +100,7 @@ class MentorAgentService:
                 return AnalyzeResponse(
                     shouldIntervene=True,
                     reason="總結需求介入",
-                    aiMessage="為促進概念具象化，依據剛才的討論脈絡，為大家彙整以下會議紀要：",
+                    aiMessage=gemini_speech or "為促進概念具象化，依據剛才的討論脈絡，為大家彙整以下會議紀要：",
                     assetType="summary",
                     assetData=data
                 )
@@ -83,7 +110,7 @@ class MentorAgentService:
                 return AnalyzeResponse(
                     shouldIntervene=True,
                     reason="合約草案需求介入",
-                    aiMessage="為促進概念具象化，提供設計協作之權益保護合約草案：",
+                    aiMessage=gemini_speech or "為促進概念具象化，提供設計協作之權益保護合約草案：",
                     assetType="contract",
                     assetData=data
                 )
@@ -95,7 +122,7 @@ class MentorAgentService:
                 return AnalyzeResponse(
                     shouldIntervene=True,
                     reason="視覺意向提煉介入",
-                    aiMessage="為促進概念具象化，提取關鍵視覺詞彙與材質配色，提供以下意向板參考：",
+                    aiMessage=gemini_speech or "為促進概念具象化，提取關鍵視覺詞彙與材質配色，提供以下意向板參考：",
                     assetType="moodboard",
                     assetData=data
                 )
@@ -107,7 +134,7 @@ class MentorAgentService:
                 return AnalyzeResponse(
                     shouldIntervene=True,
                     reason="高精有機 3D 需求介入",
-                    aiMessage="為促進概念具象化，建立高精有機 3D 幾何模型以利評估：",
+                    aiMessage=gemini_speech or "為促進概念具象化，建立高精有機 3D 幾何模型以利評估：",
                     assetType="mesh_3d",
                     assetData=data
                 )
@@ -118,7 +145,7 @@ class MentorAgentService:
             return AnalyzeResponse(
                 shouldIntervene=True,
                 reason="參數化 3D 幾何即時量體介入",
-                aiMessage="為促進概念具象化，根據尺寸與空間討論，即時生成以下參數化 3D 幾何原型供全體同步預覽：",
+                aiMessage=gemini_speech or "為促進概念具象化，根據尺寸與空間討論，即時生成以下參數化 3D 幾何原型供全體同步預覽：",
                 assetType="parametric_3d",
                 assetData=data
             )

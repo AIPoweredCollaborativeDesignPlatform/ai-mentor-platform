@@ -14,16 +14,6 @@ export interface FirebaseConfig {
 const STORAGE_KEY = 'ai_mentor_firebase_config';
 
 export function getStoredFirebaseConfig(): FirebaseConfig | null {
-  const local = localStorage.getItem(STORAGE_KEY);
-  if (local) {
-    try {
-      const parsed = JSON.parse(local);
-      if (parsed.apiKey && parsed.projectId) return parsed;
-    } catch {
-      // ignore
-    }
-  }
-
   // Default to ai-mentor-web project
   const envConfig: FirebaseConfig = {
     apiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'AIzaSyAYQsML6EDnKnlDQRe_hVXjzvbV5Gqnr50',
@@ -34,11 +24,17 @@ export function getStoredFirebaseConfig(): FirebaseConfig | null {
     appId: import.meta.env.VITE_FIREBASE_APP_ID || '1:160863026720:web:2dfcfb4bf690cb45df0645'
   };
 
-  if (envConfig.apiKey && envConfig.projectId) {
-    return envConfig;
+  const local = localStorage.getItem(STORAGE_KEY);
+  if (local) {
+    try {
+      const parsed = JSON.parse(local);
+      if (parsed.apiKey && parsed.projectId === envConfig.projectId) return parsed;
+    } catch {
+      // ignore
+    }
   }
 
-  return null;
+  return envConfig;
 }
 
 export function saveFirebaseConfig(config: FirebaseConfig) {

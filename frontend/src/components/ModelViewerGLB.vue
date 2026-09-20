@@ -22,7 +22,7 @@ onMounted(async () => {
       <div class="flex items-center gap-2">
         <Layers class="w-5 h-5 text-purple-400" />
         <h4 class="font-semibold text-slate-100 text-sm tracking-wide">
-          {{ assetData?.title || '外部高精有機 3D 模型' }}
+          {{ assetData?.title || 'External 3D Model' }}
         </h4>
         <span class="text-[10px] bg-purple-500/20 text-purple-300 font-mono px-2 py-0.5 rounded-full border border-purple-500/30 flex items-center gap-1">
           <Sparkles class="w-2.5 h-2.5" /> GLB / External Mesh
@@ -47,9 +47,9 @@ onMounted(async () => {
     </div>
 
     <div class="mt-2 flex items-center justify-between text-xs text-slate-400">
-      <span>格式: {{ assetData?.format?.toUpperCase() || 'GLB' }}</span>
-      <span>檔案大小: {{ assetData?.filesize || '3.2 MB' }}</span>
-      <span class="text-purple-400">支援 360° 拖曳與滾輪縮放</span>
+      <span>Format: {{ assetData?.format?.toUpperCase() || 'GLB' }}</span>
+      <span>Size: {{ assetData?.filesize || '3.2 MB' }}</span>
+      <span class="text-purple-400">360° drag & scroll zoom</span>
     </div>
   </div>
 </template>

@@ -23,10 +23,10 @@ const copyColor = (hex: string) => {
       <div class="flex items-center gap-2">
         <Palette class="w-5 h-5 text-amber-400" />
         <h4 class="font-semibold text-slate-100 text-sm tracking-wide">
-          {{ assetData?.title || '設計視覺意向板' }}
+          {{ assetData?.title || 'Visual Mood Board' }}
         </h4>
         <span class="text-[10px] bg-amber-500/20 text-amber-300 font-mono px-2 py-0.5 rounded-full border border-amber-500/30">
-          Imagen 3 視覺意向
+          AI Generated
         </span>
       </div>
     </div>
@@ -63,7 +63,7 @@ const copyColor = (hex: string) => {
 
     <!-- Color Palette -->
     <div v-if="assetData?.palette?.length" class="mb-3">
-      <h5 class="text-xs font-semibold text-slate-400 mb-1.5">色彩調色盤 (點選複製 HEX)</h5>
+      <h5 class="text-xs font-semibold text-slate-400 mb-1.5">Color Palette (click to copy HEX)</h5>
       <div class="grid grid-cols-4 gap-2">
         <button
           v-for="color in assetData.palette"
@@ -87,7 +87,7 @@ const copyColor = (hex: string) => {
 
     <!-- Materials list -->
     <div v-if="assetData?.materials?.length" class="space-y-1.5">
-      <h5 class="text-xs font-semibold text-slate-400">材質標註</h5>
+      <h5 class="text-xs font-semibold text-slate-400">Materials</h5>
       <div
         v-for="(mat, idx) in assetData.materials"
         :key="idx"

@@ -65,6 +65,7 @@ class MentorAgentService:
             return AnalyzeResponse(shouldIntervene=False)
 
         latest_content = messages[-1].content if messages else ""
+        full_text = "\n".join(f"{m.senderName}: {m.content}" for m in messages)
         has_at_mentor = "@Mentor" in latest_content or "@mentor" in latest_content or forced
 
         # 1. Check Sensitivity Level: Strict

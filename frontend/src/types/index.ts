@@ -34,6 +34,7 @@ export interface MessageItem {
 export interface RoomData {
   roomId: string;
   pin: string;
+  roomName?: string;
   hostUid: string;
   createdAt: number;
   mentorConfig: MentorConfig;

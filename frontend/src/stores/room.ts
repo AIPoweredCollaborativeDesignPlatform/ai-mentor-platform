@@ -87,6 +87,7 @@ export const useRoomStore = defineStore('room', () => {
         } else {
           currentRoom.value.hostUid = data.hostUid;
           currentRoom.value.pin = data.pin;
+          currentRoom.value.roomName = data.roomName;
           currentRoom.value.mentorConfig = data.mentorConfig;
         }
         if (data.mentorConfig) {
@@ -113,7 +114,7 @@ export const useRoomStore = defineStore('room', () => {
 
         // Trigger Host Toast for new pending applicants
         if (isHost.value && p.status === 'pending' && !currentRoom.value?.participants[p.uid]) {
-          pushToast('新成員等候審核', `${p.displayName} 正在等候室申請加入`, 'warning');
+          pushToast('New join request', `${p.displayName} is waiting for approval`, 'warning');
         }
       });
       currentRoom.value.participants = parts;
@@ -134,7 +135,7 @@ export const useRoomStore = defineStore('room', () => {
   };
 
   // Create room as Host
-  const createRoom = async () => {
+  const createRoom = async (roomName?: string) => {
     const pin = Math.floor(100000 + Math.random() * 900000).toString();
     const roomId = `room_${pin}`;
     const hostUser: Participant = {
@@ -146,9 +147,12 @@ export const useRoomStore = defineStore('room', () => {
       joinedAt: Date.now()
     };
 
+    const displayRoomName = roomName?.trim() || `Meeting ${pin}`;
+
     const newRoom: RoomData = {
       roomId,
       pin,
+      roomName: displayRoomName,
       hostUid: authStore.uid,
       createdAt: Date.now(),
       mentorConfig: { ...mentorStore.config },
@@ -157,10 +161,10 @@ export const useRoomStore = defineStore('room', () => {
         {
           id: `msg_${Date.now()}`,
           senderUid: 'system',
-          senderName: '系統',
+          senderName: 'System',
           senderAvatar: '🏛️',
           type: 'text',
-          content: `會議室已建立！PIN 碼為 ${pin}。受邀成員輸入 PIN 進入等候室後，需經主持人核准方可加入對話。`,
+          content: `Room "${displayRoomName}" created! PIN: ${pin}. Share this PIN with participants — they will need your approval to join.`,
           timestamp: Date.now()
         }
       ]
@@ -174,6 +178,7 @@ export const useRoomStore = defineStore('room', () => {
         await setDoc(doc(db, 'rooms', roomId), {
           roomId,
           pin,
+          roomName: displayRoomName,
           hostUid: authStore.uid,
           createdAt: Date.now(),
           mentorConfig: mentorStore.config
@@ -241,10 +246,10 @@ export const useRoomStore = defineStore('room', () => {
         const participant = currentRoom.value.participants[uid];
         await addDoc(collection(db, 'rooms', currentRoom.value.roomId, 'messages'), {
           senderUid: 'system',
-          senderName: '系統',
+          senderName: 'System',
           senderAvatar: '👋',
           type: 'text',
-          content: `歡迎 ${participant?.displayName || '新成員'} 加入設計協同會議！`,
+          content: `${participant?.displayName || 'New member'} has joined the meeting!`,
           timestamp: Date.now()
         });
       } catch (err) {
@@ -258,16 +263,16 @@ export const useRoomStore = defineStore('room', () => {
         currentRoom.value.messages.push({
           id: `sys_${Date.now()}`,
           senderUid: 'system',
-          senderName: '系統',
+          senderName: 'System',
           senderAvatar: '👋',
           type: 'text',
-          content: `歡迎 ${participant.displayName} 加入設計協同會議！`,
+          content: `${participant.displayName} has joined the meeting!`,
           timestamp: Date.now()
         });
         saveToStorage(currentRoom.value);
       }
     }
-    pushToast('成員核准成功', '受邀者已獲准進入協作會議室', 'success');
+    pushToast('Member approved', 'The participant has been granted access', 'success');
   };
 
   // Host Action: Reject participant
@@ -289,7 +294,7 @@ export const useRoomStore = defineStore('room', () => {
         saveToStorage(currentRoom.value);
       }
     }
-    pushToast('成員審核', '已婉拒該加入申請', 'warning');
+    pushToast('Request declined', 'The join request has been declined', 'warning');
   };
 
   // Update Mentor Config on Firestore
@@ -359,7 +364,7 @@ export const useRoomStore = defineStore('room', () => {
         throw new Error('Backend offline');
       }
     } catch {
-      // Local fallback simulation logic
+      // Local fallback when backend is unreachable
       handleLocalMentorResponse(latestText);
     } finally {
       isAnalyzing.value = false;
@@ -399,67 +404,52 @@ export const useRoomStore = defineStore('room', () => {
     const isMentioned = lower.includes('@mentor');
     if (config.sensitivity === 'Strict' && !isMentioned) return;
 
-    if (lower.includes('3d') || lower.includes('模型') || lower.includes('桌') || lower.includes('椅') || isMentioned) {
+    if (lower.includes('3d') || lower.includes('model') || lower.includes('prototype') || isMentioned) {
       if (!config.enable3D) return;
-      const isChair = lower.includes('椅') || lower.includes('chair');
-      const sample3D = isChair
-        ? {
-            title: '人體工學椅原型 (Parametric Chair)',
-            meshType: 'group',
-            components: [
-              { shape: 'box', dimensions: { width: 1.2, height: 0.15, depth: 1.2 }, position: { x: 0, y: 0.8, z: 0 }, material: { color: '#4B5563', roughness: 0.7, metalness: 0.1 } },
-              { shape: 'box', dimensions: { width: 1.2, height: 1.4, depth: 0.12 }, position: { x: 0, y: 1.5, z: -0.55 }, material: { color: '#374151', roughness: 0.6, metalness: 0.1 } },
-              { shape: 'cylinder', dimensions: { radiusTop: 0.08, radiusBottom: 0.08, height: 0.8 }, position: { x: 0, y: 0.4, z: 0 }, material: { color: '#9CA3AF', roughness: 0.3, metalness: 0.8 } }
-            ],
-            annotations: [
-              { label: '座高: 450mm', position: { x: 0.8, y: 0.8, z: 0 } },
-              { label: '椅背: 105°', position: { x: 0.8, y: 1.5, z: -0.5 } }
-            ]
-          }
-        : {
-            title: '原木圓形茶几量體 (Parametric Table)',
-            meshType: 'group',
-            components: [
-              { shape: 'cylinder', dimensions: { radiusTop: 1.2, radiusBottom: 1.2, height: 0.12 }, position: { x: 0, y: 1.0, z: 0 }, material: { color: '#B45309', roughness: 0.8, metalness: 0.05 } },
-              { shape: 'cylinder', dimensions: { radiusTop: 0.06, radiusBottom: 0.06, height: 1.0 }, position: { x: -0.6, y: 0.5, z: -0.4 }, material: { color: '#1F2937', roughness: 0.2, metalness: 0.9 } },
-              { shape: 'cylinder', dimensions: { radiusTop: 0.06, radiusBottom: 0.06, height: 1.0 }, position: { x: 0.6, y: 0.5, z: -0.4 }, material: { color: '#1F2937', roughness: 0.2, metalness: 0.9 } },
-              { shape: 'cylinder', dimensions: { radiusTop: 0.06, radiusBottom: 0.06, height: 1.0 }, position: { x: 0, y: 0.5, z: 0.5 }, material: { color: '#1F2937', roughness: 0.2, metalness: 0.9 } }
-            ],
-            annotations: [
-              { label: '桌面直徑: 1200mm', position: { x: 0, y: 1.2, z: 0 } },
-              { label: '桌高: 520mm', position: { x: 0.8, y: 0.5, z: 0 } }
-            ]
-          };
+      const sample3D = {
+        title: 'Parametric 3D Prototype',
+        meshType: 'group',
+        components: [
+          { shape: 'cylinder', dimensions: { radiusTop: 1.2, radiusBottom: 1.2, height: 0.12 }, position: { x: 0, y: 1.0, z: 0 }, material: { color: '#B45309', roughness: 0.8, metalness: 0.05 } },
+          { shape: 'cylinder', dimensions: { radiusTop: 0.06, radiusBottom: 0.06, height: 1.0 }, position: { x: -0.6, y: 0.5, z: -0.4 }, material: { color: '#1F2937', roughness: 0.2, metalness: 0.9 } },
+          { shape: 'cylinder', dimensions: { radiusTop: 0.06, radiusBottom: 0.06, height: 1.0 }, position: { x: 0.6, y: 0.5, z: -0.4 }, material: { color: '#1F2937', roughness: 0.2, metalness: 0.9 } },
+          { shape: 'cylinder', dimensions: { radiusTop: 0.06, radiusBottom: 0.06, height: 1.0 }, position: { x: 0, y: 0.5, z: 0.5 }, material: { color: '#1F2937', roughness: 0.2, metalness: 0.9 } }
+        ],
+        annotations: [
+          { label: 'Diameter: 1200mm', position: { x: 0, y: 1.2, z: 0 } },
+          { label: 'Height: 520mm', position: { x: 0.8, y: 0.5, z: 0 } }
+        ]
+      };
 
       addAiMessage(
-        '為促進概念具象化，依據剛才的尺寸與體量討論，即時生成以下參數化 3D 幾何原型供全體同步檢視：',
+        'To help visualize the concept, here is a parametric 3D prototype based on the discussion:',
         'parametric_3d',
         sample3D
       );
       return;
     }
 
-    if (lower.includes('意向') || lower.includes('風格') || lower.includes('材質') || lower.includes('moodboard')) {
+    if (lower.includes('mood') || lower.includes('style') || lower.includes('material') || lower.includes('palette')) {
       if (!config.enableMoodboard) return;
       addAiMessage(
-        '為促進概念具象化，提取當前對話關鍵字，彙整以下視覺意向板與色彩材質標註：',
+        'Based on the discussion keywords, here is a visual mood board for reference:',
         'moodboard',
         {
-          title: '視覺意向板 (Visual Mood Board)',
-          keywords: ['現代極簡', '消光黑鋁', '溫潤胡桃木', '漫射柔光'],
+          title: 'Visual Mood Board',
+          keywords: ['Modern Minimal', 'Matte Black Aluminum', 'Warm Walnut Wood', 'Soft Diffused Light'],
           palette: [
-            { hex: '#2D3748', name: '深岩灰' },
-            { hex: '#D97706', name: '琥珀暖木' },
-            { hex: '#E2E8F0', name: '冷白底襯' },
-            { hex: '#94A3B8', name: '霧面鋁鈦' }
+            { hex: '#2D3748', name: 'Dark Slate' },
+            { hex: '#D97706', name: 'Warm Amber' },
+            { hex: '#E2E8F0', name: 'Chalk White' },
+            { hex: '#94A3B8', name: 'Matte Silver' }
           ],
           materials: [
-            { name: '天然黑胡桃實木', feature: '開孔消光漆處理' },
-            { name: '陽極氧化鋁', feature: '超細噴砂低反射' }
+            { name: 'Natural Black Walnut', feature: 'Open-pore matte finish' },
+            { name: 'Anodized Aluminum', feature: 'Ultra-fine sandblasted low-reflection' }
           ],
           slices: [
-            { url: 'https://images.unsplash.com/photo-1618221195710-dd6b41faaea6?auto=format&fit=crop&w=600&q=80', caption: '光影與體量' },
-            { url: 'https://images.unsplash.com/photo-1586023492125-27b2c045efd7?auto=format&fit=crop&w=600&q=80', caption: '有機曲線與質感' }
+            { url: 'https://images.unsplash.com/photo-1618221195710-dd6b41faaea6?auto=format&fit=crop&w=600&q=80', caption: 'Light & Volume' },
+            { url: 'https://images.unsplash.com/photo-1586023492125-27b2c045efd7?auto=format&fit=crop&w=600&q=80', caption: 'Organic Curves & Texture' }
           ]
         }
       );

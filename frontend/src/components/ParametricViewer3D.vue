@@ -175,10 +175,10 @@ onUnmounted(() => {
       <div class="flex items-center gap-2">
         <Box class="w-5 h-5 text-sky-400" />
         <h4 class="font-semibold text-slate-100 text-sm tracking-wide">
-          {{ assetData?.title || 'Code-to-3D 參數化原型' }}
+          {{ assetData?.title || 'Parametric 3D Prototype' }}
         </h4>
         <span class="text-[10px] bg-sky-500/20 text-sky-300 font-mono px-2 py-0.5 rounded-full border border-sky-500/30">
-          即時 Three.js
+          Three.js
         </span>
       </div>
 
@@ -189,7 +189,7 @@ onUnmounted(() => {
           :class="{ 'bg-sky-950 border-sky-500 text-sky-300': isWireframe }"
         >
           <Eye class="w-3.5 h-3.5" />
-          {{ isWireframe ? '實體' : '線框' }}
+          {{ isWireframe ? 'Solid' : 'Wireframe' }}
         </button>
         <button
           @click="autoRotate = !autoRotate"
@@ -197,13 +197,13 @@ onUnmounted(() => {
           :class="{ 'bg-sky-950 border-sky-500 text-sky-300': autoRotate }"
         >
           <RotateCw class="w-3.5 h-3.5" />
-          自轉
+          Auto Rotate
         </button>
         <button
           @click="resetView"
           class="px-2.5 py-1 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-300 transition"
         >
-          重設
+          Reset
         </button>
       </div>
     </div>

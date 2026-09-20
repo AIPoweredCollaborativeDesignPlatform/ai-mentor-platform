@@ -49,14 +49,14 @@ const downloadMarkdown = () => {
           >
             <Check v-if="copied" class="w-3.5 h-3.5 text-emerald-400" />
             <Copy v-else class="w-3.5 h-3.5" />
-            {{ copied ? '已複製' : '複製內文' }}
+            {{ copied ? 'Copied!' : 'Copy Text' }}
           </button>
           <button
             @click="downloadMarkdown"
             class="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white transition shadow"
           >
             <Download class="w-3.5 h-3.5" />
-            下載 .md
+            Download .md
           </button>
           <button
             @click="emit('close')"

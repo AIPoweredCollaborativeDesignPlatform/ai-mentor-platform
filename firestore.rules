@@ -2,52 +2,45 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    // 判斷是否為已驗證的使用者
     function isAuthenticated() {
       return request.auth != null;
     }
     
-    // 檢查使用者是否為該房間主持人
     function isRoomHost(roomId) {
       return isAuthenticated() && 
         get(/databases/$(database)/documents/rooms/$(roomId)).data.hostUid == request.auth.uid;
     }
     
-    // 檢查使用者是否為該房間已核准之成員
     function isApprovedParticipant(roomId) {
       return isAuthenticated() && 
         get(/databases/$(database)/documents/rooms/$(roomId)/participants/$(request.auth.uid)).data.status == "approved";
     }
 
     match /rooms/{roomId} {
-      // 任何已認證使用者皆可建立房間；已核准成員與主持人可讀取房間資訊
       allow create: if isAuthenticated();
       allow read: if isAuthenticated();
-      // 僅主持人可更新房間設定 (例如 Mentor 控制面板參數)
       allow update, delete: if isRoomHost(roomId);
 
-      // 等候室成員審核集合
       match /participants/{participantId} {
-        // 允許使用者建立自己的 pending 申請
         allow create: if isAuthenticated() && 
           request.auth.uid == participantId &&
           request.resource.data.status == "pending";
 
-        // 主持人與申請者本人可讀取狀態
         allow read: if isAuthenticated() && 
           (isRoomHost(roomId) || request.auth.uid == participantId || isApprovedParticipant(roomId));
 
-        // 僅主持人可審核變更狀態 (例如 pending -> approved/rejected)
         allow update: if isRoomHost(roomId);
         allow delete: if isRoomHost(roomId) || request.auth.uid == participantId;
       }
 
-      // 對話訊息串流
       match /messages/{messageId} {
-        // 嚴格限制：僅 status == "approved" 的成員才可讀取歷史與發送訊息
         allow read: if isApprovedParticipant(roomId) || isRoomHost(roomId);
+        // Allow approved participants/host to create messages.
+        // senderUid can be the user's own UID, or 'system'/'ai_mentor' for system-generated messages.
         allow create: if (isApprovedParticipant(roomId) || isRoomHost(roomId)) &&
-          request.resource.data.senderUid == request.auth.uid;
+          (request.resource.data.senderUid == request.auth.uid ||
+           request.resource.data.senderUid == 'system' ||
+           request.resource.data.senderUid == 'ai_mentor');
         allow update, delete: if isRoomHost(roomId) || 
           (isAuthenticated() && resource.data.senderUid == request.auth.uid);
       }

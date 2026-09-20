@@ -15,7 +15,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   // Default guest values
   const storedUid = localStorage.getItem('ai_mentor_uid') || `guest_${Math.random().toString(36).substring(2, 9)}`;
-  const storedName = localStorage.getItem('ai_mentor_name') || '設計探索者';
+  const storedName = localStorage.getItem('ai_mentor_name') || 'Guest';
   const storedAvatar = localStorage.getItem('ai_mentor_avatar') || '🦊';
 
   const uid = ref(storedUid);
@@ -72,38 +72,24 @@ export const useAuthStore = defineStore('auth', () => {
 
   // Real Google Account sign-in / upgrade
   const upgradeWithGoogle = async () => {
-    if (auth) {
-      try {
-        const provider = new GoogleAuthProvider();
-        provider.setCustomParameters({ prompt: 'select_account' });
-        const result = await signInWithPopup(auth, provider);
-        const user = result.user;
-        firebaseUser.value = user;
-        uid.value = user.uid;
-        email.value = user.email || '';
-        displayName.value = user.displayName || 'Google 使用者';
-        isGoogleLinked.value = true;
-
-        localStorage.setItem('ai_mentor_uid', user.uid);
-        localStorage.setItem('ai_mentor_google_linked', 'true');
-        localStorage.setItem('ai_mentor_email', email.value);
-        localStorage.setItem('ai_mentor_name', displayName.value);
-        return { success: true, user };
-      } catch (err: any) {
-        console.error('[Auth] Real Google Sign-in error:', err);
-        throw err;
-      }
-    } else {
-      // Local fallback simulation mode
-      isGoogleLinked.value = true;
-      email.value = 'alex.designer@gmail.com';
-      displayName.value = 'Alex (展示帳號)';
-      avatar.value = '⚡';
-      localStorage.setItem('ai_mentor_google_linked', 'true');
-      localStorage.setItem('ai_mentor_email', email.value);
-      localStorage.setItem('ai_mentor_name', displayName.value);
-      return { success: true };
+    if (!auth) {
+      throw new Error('Firebase Auth is not configured');
     }
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+    const result = await signInWithPopup(auth, provider);
+    const user = result.user;
+    firebaseUser.value = user;
+    uid.value = user.uid;
+    email.value = user.email || '';
+    displayName.value = user.displayName || 'Google User';
+    isGoogleLinked.value = true;
+
+    localStorage.setItem('ai_mentor_uid', user.uid);
+    localStorage.setItem('ai_mentor_google_linked', 'true');
+    localStorage.setItem('ai_mentor_email', email.value);
+    localStorage.setItem('ai_mentor_name', displayName.value);
+    return { success: true, user };
   };
 
   // Real Sign-out

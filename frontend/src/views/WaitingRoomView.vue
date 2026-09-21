@@ -15,22 +15,31 @@ const pin = roomId.value.replace('room_', '');
 let checkInterval: any = null;
 
 const checkStatus = () => {
-  const raw = localStorage.getItem(`ai_room_${pin}`);
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw);
-      const me = parsed.participants?.[authStore.uid];
-      if (me) {
-        if (me.status === 'approved') {
-          roomStore.currentRoom = parsed;
-          roomStore.myStatus = 'approved';
-          router.replace(`/room/${roomId.value}`);
-        } else if (me.status === 'rejected') {
-          roomStore.myStatus = 'rejected';
-        }
+  if (roomStore.currentRoom) {
+    const me = roomStore.currentRoom.participants?.[authStore.uid];
+    if (me) {
+      if (me.status === 'approved') {
+        roomStore.myStatus = 'approved';
+        router.replace(`/room/${roomId.value}`);
+      } else if (me.status === 'rejected') {
+        roomStore.myStatus = 'rejected';
       }
-    } catch (e) {
-      console.error(e);
+    } else {
+      // User is not in participants list, they arrived directly via URL
+      if (!authStore.isConfigured) return; // wait for auth
+      roomStore.applyToJoin(pin);
+    }
+  } else {
+    // try local fallback just in case
+    const raw = localStorage.getItem(`ai_room_${pin}`);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        const me = parsed.participants?.[authStore.uid];
+        if (me?.status === 'approved') {
+          router.replace(`/room/${roomId.value}`);
+        }
+      } catch (e) {}
     }
   }
 };

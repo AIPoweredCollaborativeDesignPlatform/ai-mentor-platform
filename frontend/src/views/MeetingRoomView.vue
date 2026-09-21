@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick } from 'vue';
+import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import { useRoomStore } from '../stores/room';
@@ -61,6 +61,7 @@ const scrollToBottom = () => {
 };
 
 const handleSend = async () => {
+  if (roomStore.currentRoom?.participants[authStore.uid]?.isMuted) return;
   if (!inputMessage.value.trim()) return;
   const text = inputMessage.value;
   inputMessage.value = '';
@@ -72,7 +73,24 @@ const insertQuickTag = (tag: string) => {
   inputMessage.value = inputMessage.value ? `${inputMessage.value} ${tag} ` : `${tag} `;
 };
 
+const handleUnload = () => {
+  roomStore.leaveRoom();
+};
+
+watch(
+  () => roomStore.myStatus,
+  (newStatus) => {
+    if (newStatus === 'kicked') {
+      alert('You have been removed from the meeting by the host.');
+      router.push('/');
+    } else if (newStatus === 'left') {
+      router.push('/');
+    }
+  }
+);
+
 onMounted(() => {
+  window.addEventListener('beforeunload', handleUnload);
   roomStore.startFirestoreListener(roomId.value);
   // Ensure room state is loaded
   if (!roomStore.currentRoom) {
@@ -83,10 +101,15 @@ onMounted(() => {
       roomStore.createRoom();
     }
   }
+  if (roomStore.myStatus !== 'approved' && !roomStore.isHost) {
+    router.push('/');
+    return;
+  }
   scrollToBottom();
 });
 
 onUnmounted(() => {
+  window.removeEventListener('beforeunload', handleUnload);
   roomStore.stopListening();
 });
 </script>
@@ -270,16 +293,19 @@ onUnmounted(() => {
 
         <!-- Input Bar -->
         <div class="flex items-center gap-2">
-          <input
+          <textarea
             v-model="inputMessage"
-            @keydown.enter="handleSend"
-            type="text"
-            placeholder="Type a message, or use @Mentor for AI assistance..."
-            class="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500 transition"
-          />
+            @keydown.enter.prevent.exact="handleSend"
+            @keydown.shift.enter.exact="inputMessage += '\n'"
+            :disabled="roomStore.currentRoom?.participants[authStore.uid]?.isMuted"
+            :placeholder="roomStore.currentRoom?.participants[authStore.uid]?.isMuted ? 'You have been muted by the host.' : 'Type a message (Shift+Enter for new line)...'"
+            class="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500 transition resize-none min-h-[44px] max-h-32 overflow-y-auto"
+            rows="1"
+          ></textarea>
           <button
             @click="handleSend"
-            class="px-3.5 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-xl font-semibold shadow transition flex items-center gap-1.5 shrink-0"
+            :disabled="roomStore.currentRoom?.participants[authStore.uid]?.isMuted"
+            class="px-3.5 py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl font-semibold shadow transition flex items-center gap-1.5 shrink-0"
           >
             <Send class="w-4 h-4" />
             <span class="hidden sm:inline">Send</span>

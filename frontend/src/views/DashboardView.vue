@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
+import { doc, deleteDoc } from 'firebase/firestore';
+import { db } from '../firebase/config';
 import {
   ArrowLeft,
   LayoutDashboard,
@@ -9,7 +11,8 @@ import {
   FileText,
   Clock,
   LogOut,
-  FolderOpen
+  FolderOpen,
+  Trash2
 } from 'lucide-vue-next';
 
 import { ref, onMounted } from 'vue';
@@ -66,6 +69,26 @@ onMounted(() => {
     }
   }
 });
+
+const handleDeleteRoom = async (room: RoomHistoryItem) => {
+  if (!confirm(`Are you sure you want to remove history for "${room.title}"?`)) return;
+  
+  // If host, try to delete from Firestore
+  const rawItem = localStorage.getItem(`ai_room_${room.pin}`);
+
+  // Remove locally
+  localStorage.removeItem(`ai_room_${room.pin}`);
+  historyRooms.value = historyRooms.value.filter(r => r.pin !== room.pin);
+  
+  if (rawItem && db) {
+    try {
+      const parsed = JSON.parse(rawItem);
+      if (parsed.hostUid === authStore.uid) {
+        await deleteDoc(doc(db, 'rooms', room.id));
+      }
+    } catch(e) {}
+  }
+};
 
 const handleLogout = async () => {
   await authStore.logoutGoogle();
@@ -128,7 +151,12 @@ const handleLogout = async () => {
                 <span class="text-[11px] font-mono px-2 py-0.5 rounded-md bg-slate-800 text-sky-400 border border-slate-700">
                   PIN: {{ room.pin }}
                 </span>
-                <span class="text-[11px] text-slate-500">{{ room.date }}</span>
+                <div class="flex items-center gap-2">
+                  <span class="text-[11px] text-slate-500">{{ room.date }}</span>
+                  <button @click.prevent="handleDeleteRoom(room)" class="text-slate-500 hover:text-rose-400 transition" title="Delete room history">
+                    <Trash2 class="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
               <h3 class="font-bold text-slate-100 text-sm mb-1.5 group-hover:text-sky-400 transition">
                 {{ room.title }}

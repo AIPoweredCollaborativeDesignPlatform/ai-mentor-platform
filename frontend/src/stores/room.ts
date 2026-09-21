@@ -339,33 +339,77 @@ export const useRoomStore = defineStore('room', () => {
     await triggerMentorAgent(text);
   };
 
+  // Mute Participant (Host Action)
+  const muteParticipant = async (uid: string, muted: boolean) => {
+    if (!currentRoom.value || !isHost.value) return;
+    if (db) {
+      try {
+        await updateDoc(doc(db, 'rooms', currentRoom.value.roomId, 'participants', uid), {
+          isMuted: muted
+        });
+      } catch (err) {
+        console.error(err);
+      }
+    } else {
+      const p = currentRoom.value.participants[uid];
+      if (p) p.isMuted = muted;
+      saveToStorage(currentRoom.value);
+    }
+  };
+
+  // Kick Participant (Host Action)
+  const kickParticipant = async (uid: string) => {
+    if (!currentRoom.value || !isHost.value) return;
+    if (db) {
+      try {
+        await updateDoc(doc(db, 'rooms', currentRoom.value.roomId, 'participants', uid), {
+          status: 'kicked'
+        });
+      } catch (err) {
+        console.error(err);
+      }
+    } else {
+      const p = currentRoom.value.participants[uid];
+      if (p) p.status = 'kicked';
+      saveToStorage(currentRoom.value);
+    }
+  };
+
+  // Leave Room
+  const leaveRoom = async () => {
+    if (!currentRoom.value) return;
+    if (db) {
+      try {
+        await updateDoc(doc(db, 'rooms', currentRoom.value.roomId, 'participants', authStore.uid), {
+          status: 'left'
+        });
+      } catch (err) {
+        console.error(err);
+      }
+    } else {
+      const p = currentRoom.value.participants[authStore.uid];
+      if (p) p.status = 'left';
+      saveToStorage(currentRoom.value);
+    }
+    stopListening();
+  };
+
   const triggerMentorAgent = async (latestText: string) => {
     if (!currentRoom.value) return;
     isAnalyzing.value = true;
-
+    
+    // Lazy import the AI service to keep bundle clean
+    const { analyzeDialogueWithGemini } = await import('../services/ai');
+    
     try {
-      const res = await fetch('http://localhost:8000/api/mentor/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          roomId: currentRoom.value.roomId,
-          messages: currentRoom.value.messages,
-          mentorConfig: mentorStore.config,
-          forcedTrigger: latestText.includes('@Mentor') || latestText.includes('@mentor')
-        })
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        if (data.shouldIntervene && data.aiMessage) {
-          await addAiMessage(data.aiMessage, data.assetType, data.assetData);
-        }
-      } else {
-        throw new Error('Backend offline');
+      const isForced = latestText.toLowerCase().includes('@mentor');
+      const response = await analyzeDialogueWithGemini(currentRoom.value.messages, mentorStore.config, isForced);
+      
+      if (response.shouldIntervene && response.aiMessage) {
+        await addAiMessage(response.aiMessage, response.assetType, response.assetData);
       }
-    } catch {
-      // Local fallback when backend is unreachable
-      handleLocalMentorResponse(latestText);
+    } catch (e) {
+      console.error('[AI] Agent error:', e);
     } finally {
       isAnalyzing.value = false;
     }
@@ -393,66 +437,6 @@ export const useRoomStore = defineStore('room', () => {
     } else {
       currentRoom.value.messages.push({ id: `ai_${Date.now()}`, ...aiMsg });
       saveToStorage(currentRoom.value);
-    }
-  };
-
-  const handleLocalMentorResponse = (text: string) => {
-    if (!currentRoom.value) return;
-    const lower = text.toLowerCase();
-    const config = mentorStore.config;
-
-    const isMentioned = lower.includes('@mentor');
-    if (config.sensitivity === 'Strict' && !isMentioned) return;
-
-    if (lower.includes('3d') || lower.includes('model') || lower.includes('prototype') || isMentioned) {
-      if (!config.enable3D) return;
-      const sample3D = {
-        title: 'Parametric 3D Prototype',
-        meshType: 'group',
-        components: [
-          { shape: 'cylinder', dimensions: { radiusTop: 1.2, radiusBottom: 1.2, height: 0.12 }, position: { x: 0, y: 1.0, z: 0 }, material: { color: '#B45309', roughness: 0.8, metalness: 0.05 } },
-          { shape: 'cylinder', dimensions: { radiusTop: 0.06, radiusBottom: 0.06, height: 1.0 }, position: { x: -0.6, y: 0.5, z: -0.4 }, material: { color: '#1F2937', roughness: 0.2, metalness: 0.9 } },
-          { shape: 'cylinder', dimensions: { radiusTop: 0.06, radiusBottom: 0.06, height: 1.0 }, position: { x: 0.6, y: 0.5, z: -0.4 }, material: { color: '#1F2937', roughness: 0.2, metalness: 0.9 } },
-          { shape: 'cylinder', dimensions: { radiusTop: 0.06, radiusBottom: 0.06, height: 1.0 }, position: { x: 0, y: 0.5, z: 0.5 }, material: { color: '#1F2937', roughness: 0.2, metalness: 0.9 } }
-        ],
-        annotations: [
-          { label: 'Diameter: 1200mm', position: { x: 0, y: 1.2, z: 0 } },
-          { label: 'Height: 520mm', position: { x: 0.8, y: 0.5, z: 0 } }
-        ]
-      };
-
-      addAiMessage(
-        'To help visualize the concept, here is a parametric 3D prototype based on the discussion:',
-        'parametric_3d',
-        sample3D
-      );
-      return;
-    }
-
-    if (lower.includes('mood') || lower.includes('style') || lower.includes('material') || lower.includes('palette')) {
-      if (!config.enableMoodboard) return;
-      addAiMessage(
-        'Based on the discussion keywords, here is a visual mood board for reference:',
-        'moodboard',
-        {
-          title: 'Visual Mood Board',
-          keywords: ['Modern Minimal', 'Matte Black Aluminum', 'Warm Walnut Wood', 'Soft Diffused Light'],
-          palette: [
-            { hex: '#2D3748', name: 'Dark Slate' },
-            { hex: '#D97706', name: 'Warm Amber' },
-            { hex: '#E2E8F0', name: 'Chalk White' },
-            { hex: '#94A3B8', name: 'Matte Silver' }
-          ],
-          materials: [
-            { name: 'Natural Black Walnut', feature: 'Open-pore matte finish' },
-            { name: 'Anodized Aluminum', feature: 'Ultra-fine sandblasted low-reflection' }
-          ],
-          slices: [
-            { url: 'https://images.unsplash.com/photo-1618221195710-dd6b41faaea6?auto=format&fit=crop&w=600&q=80', caption: 'Light & Volume' },
-            { url: 'https://images.unsplash.com/photo-1586023492125-27b2c045efd7?auto=format&fit=crop&w=600&q=80', caption: 'Organic Curves & Texture' }
-          ]
-        }
-      );
     }
   };
 
@@ -485,6 +469,9 @@ export const useRoomStore = defineStore('room', () => {
     applyToJoin,
     approveParticipant,
     rejectParticipant,
+    muteParticipant,
+    kickParticipant,
+    leaveRoom,
     sendMessage,
     addAiMessage,
     pushToast,

@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "@google/model-viewer": "^4.0.0",
     "firebase": "^11.3.1",
     "lucide-vue-next": "^0.475.0",

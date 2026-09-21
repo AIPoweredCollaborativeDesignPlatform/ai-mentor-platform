@@ -12,7 +12,10 @@ import {
   Palette,
   Search,
   FileCheck2,
-  X
+  X,
+  MicOff,
+  Mic,
+  UserMinus
 } from 'lucide-vue-next';
 
 defineProps<{
@@ -126,18 +129,38 @@ const sensitivities: { id: SensitivityLevel; name: string; desc: string }[] = [
                 <span class="text-xl">{{ p.avatar }}</span>
                 <span class="text-sm text-slate-200 font-medium">{{ p.displayName }}</span>
               </div>
-              <span
-                v-if="p.isHost"
-                class="text-[10px] bg-amber-500/20 text-amber-400 border border-amber-500/30 px-2 py-0.5 rounded-full font-medium"
-              >
-                👑 Host
-              </span>
-              <span
-                v-else
-                class="text-[10px] text-emerald-400 flex items-center gap-1"
-              >
-                ● Online
-              </span>
+              <div class="flex items-center gap-2">
+                <span
+                  v-if="p.isHost"
+                  class="text-[10px] bg-amber-500/20 text-amber-400 border border-amber-500/30 px-2 py-0.5 rounded-full font-medium"
+                >
+                  👑 Host
+                </span>
+                <span
+                  v-else
+                  class="text-[10px] text-emerald-400 flex items-center gap-1"
+                >
+                  ● Online
+                </span>
+
+                <div v-if="!p.isHost" class="flex items-center gap-1">
+                  <button
+                    @click="roomStore.muteParticipant(p.uid, !p.isMuted)"
+                    class="p-1.5 rounded bg-slate-800 hover:bg-slate-700 transition"
+                    :title="p.isMuted ? 'Unmute' : 'Mute'"
+                  >
+                    <MicOff v-if="p.isMuted" class="w-3.5 h-3.5 text-rose-400" />
+                    <Mic v-else class="w-3.5 h-3.5 text-slate-400" />
+                  </button>
+                  <button
+                    @click="roomStore.kickParticipant(p.uid)"
+                    class="p-1.5 rounded bg-slate-800 hover:bg-rose-900/50 transition"
+                    title="Remove from meeting"
+                  >
+                    <UserMinus class="w-3.5 h-3.5 text-rose-400" />
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </section>

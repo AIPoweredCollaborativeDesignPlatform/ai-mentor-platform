@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue';
-import '@google/model-viewer';
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue';
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
   Layers,
   Sparkles,
@@ -10,7 +12,8 @@ import {
   RotateCcw,
   Palette,
   Loader2,
-  RefreshCw
+  RefreshCw,
+  Eye
 } from 'lucide-vue-next';
 import type { MessageItem } from '../types';
 import { useRoomStore } from '../stores/room';
@@ -25,38 +28,23 @@ const emit = defineEmits<{
 }>();
 
 const roomStore = useRoomStore();
-const modelViewerRef = ref<any>(null);
+const canvasContainerRef = ref<HTMLDivElement | null>(null);
 const isLoading = ref(true);
 const isModelInteractive = ref(false);
 const isRehosting = ref(false);
 const rehostError = ref('');
+const loadError = ref('');
 const showShiftPrompt = ref(false);
 let shiftPromptTimeout: any = null;
 
-const handleWheel = (e: WheelEvent) => {
-  // If the user is scrolling the wheel without holding Shift, block zooming and show prompt
-  if (isModelInteractive.value && !e.shiftKey) {
-    e.preventDefault();
-    e.stopPropagation();
-    
-    showShiftPrompt.value = true;
-    if (shiftPromptTimeout) clearTimeout(shiftPromptTimeout);
-    shiftPromptTimeout = setTimeout(() => {
-      showShiftPrompt.value = false;
-    }, 1500);
-  }
-};
-
-// If assetData already tells us it's interactive (was stored as Firebase URL), skip loading state
-watch(
-  () => props.assetData?.isInteractive,
-  (val) => {
-    if (val) {
-      // Pre-mark as interactive; model-viewer @load will confirm
-    }
-  },
-  { immediate: true }
-);
+// Three.js instances
+let scene: THREE.Scene | null = null;
+let camera: THREE.PerspectiveCamera | null = null;
+let renderer: THREE.WebGLRenderer | null = null;
+let controls: OrbitControls | null = null;
+let modelGroup: THREE.Group | null = null;
+let animationFrameId: number | null = null;
+let resizeObserver: ResizeObserver | null = null;
 
 const recommendedFilename = computed(() => {
   let baseName = (props.assetData?.title || 'AI_3D_Model')
@@ -67,60 +55,214 @@ const recommendedFilename = computed(() => {
   return `${baseName}.glb`;
 });
 
-const centerAndFrameModel = () => {
-  if (!modelViewerRef.value) return;
-  const mv = modelViewerRef.value;
-  try {
-    if (typeof mv.updateFraming === 'function') {
-      mv.updateFraming();
-    }
-    if (typeof mv.getBoundingBoxCenter === 'function') {
-      const center = mv.getBoundingBoxCenter();
-      if (center && typeof center.x === 'number' && typeof center.y === 'number' && typeof center.z === 'number') {
-        mv.cameraTarget = `${center.x}m ${center.y}m ${center.z}m`;
-      }
-    }
-    mv.cameraOrbit = 'auto auto 105%';
-    mv.fieldOfView = 'auto';
-    if (typeof mv.jumpCameraToGoal === 'function') {
-      mv.jumpCameraToGoal();
-    }
-  } catch (err) {
-    console.warn('[ModelViewer] Auto centering failed:', err);
-  }
-};
+// Setup Three.js Scene
+const initThreeScene = () => {
+  if (!canvasContainerRef.value) return;
 
-const handleLoad = () => {
-  isLoading.value = false;
-  isModelInteractive.value = true;
-  nextTick(() => {
-    centerAndFrameModel();
-    // Re-verify after small render frame to ensure tight bounds are populated
-    setTimeout(centerAndFrameModel, 100);
+  const container = canvasContainerRef.value;
+  const width = container.clientWidth || 400;
+  const height = container.clientHeight || 320;
+
+  // Scene
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0b1120); // Dark sleek background
+
+  // Camera
+  camera = new THREE.PerspectiveCamera(45, width / height, 0.05, 500);
+  camera.position.set(0, 0, 3.6);
+
+  // Renderer
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+  renderer.setSize(width, height);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.2;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+  container.replaceChildren(renderer.domElement);
+
+  // OrbitControls with full 360° global rotation
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.enableZoom = false; // We handle zoom manually with Shift key
+  controls.enablePan = true;
+  controls.screenSpacePanning = true;
+  controls.autoRotate = true;
+  controls.autoRotateSpeed = 1.5;
+  controls.minDistance = 0.4;
+  controls.maxDistance = 15;
+  controls.minPolarAngle = 0; // Full 360° global vertical rotation
+  controls.maxPolarAngle = Math.PI;
+  controls.target.set(0, 0, 0);
+
+  // Rich Lighting Setup
+  const ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
+  scene.add(ambientLight);
+
+  const keyLight = new THREE.DirectionalLight(0xffffff, 2.0);
+  keyLight.position.set(5, 8, 5);
+  scene.add(keyLight);
+
+  const fillLight = new THREE.DirectionalLight(0x818cf8, 1.0);
+  fillLight.position.set(-5, -2, -5);
+  scene.add(fillLight);
+
+  const topLight = new THREE.DirectionalLight(0x38bdf8, 1.2);
+  topLight.position.set(0, 10, 0);
+  scene.add(topLight);
+
+  // Model Group Holder
+  modelGroup = new THREE.Group();
+  scene.add(modelGroup);
+
+  // Render Loop
+  const animate = () => {
+    animationFrameId = requestAnimationFrame(animate);
+    if (controls) controls.update();
+    if (renderer && scene && camera) {
+      renderer.render(scene, camera);
+    }
+  };
+  animate();
+
+  // Resize Observer
+  resizeObserver = new ResizeObserver(() => {
+    if (!container || !camera || !renderer) return;
+    const newWidth = container.clientWidth;
+    const newHeight = container.clientHeight;
+    if (newWidth > 0 && newHeight > 0) {
+      camera.aspect = newWidth / newHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(newWidth, newHeight);
+    }
   });
+  resizeObserver.observe(container);
 };
 
-const handleError = (e: any) => {
-  console.warn('[ModelViewer] Direct WebGL load prevented by browser security policy. Displaying high-res 3D preview render.', e);
-  isLoading.value = false;
-  isModelInteractive.value = false;
+// Load GLB Model into Three.js Scene
+const loadGlbModel = (rawUrl: string) => {
+  if (!rawUrl) return;
+  isLoading.value = true;
+  loadError.value = '';
+
+  const proxyUrl = `/api/proxy?url=${encodeURIComponent(rawUrl)}`;
+  const loader = new GLTFLoader();
+
+  loader.load(
+    proxyUrl,
+    (gltf) => {
+      if (!modelGroup || !scene) return;
+
+      // Clear previous models
+      while (modelGroup.children.length > 0) {
+        modelGroup.remove(modelGroup.children[0]);
+      }
+
+      const root = gltf.scene;
+
+      // Enable shadows and proper materials
+      root.traverse((child: any) => {
+        if (child.isMesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+          if (child.material) {
+            child.material.side = THREE.DoubleSide; // Render both sides cleanly
+          }
+        }
+      });
+
+      // Calculate EXACT Bounding Box and Center
+      const box = new THREE.Box3().setFromObject(root);
+      const center = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
+
+      // Center geometry so (0,0,0) is true geometric centroid
+      root.position.x = -center.x;
+      root.position.y = -center.y;
+      root.position.z = -center.z;
+
+      modelGroup.add(root);
+
+      // Auto-scale model so it fits the viewport perfectly
+      const maxDim = Math.max(size.x, size.y, size.z);
+      if (maxDim > 0) {
+        const targetScale = 2.0 / maxDim;
+        modelGroup.scale.set(targetScale, targetScale, targetScale);
+      } else {
+        modelGroup.scale.set(1, 1, 1);
+      }
+
+      // Reset camera view
+      if (camera && controls) {
+        camera.position.set(0, 0.4, 3.4);
+        controls.target.set(0, 0, 0);
+        controls.update();
+      }
+
+      isLoading.value = false;
+      isModelInteractive.value = true;
+    },
+    undefined,
+    (err) => {
+      console.warn('[ModelViewer] Three.js GLTFLoader failed:', err);
+      isLoading.value = false;
+      isModelInteractive.value = false;
+      loadError.value = 'Direct 3D load failed. Displaying 2D render preview.';
+    }
+  );
 };
 
-// Zoom In / Zoom Out controls (increased step for more noticeable zoom)
-const zoomIn = () => {
-  if (modelViewerRef.value?.zoom) {
-    modelViewerRef.value.zoom(3);
+// Handle Mouse Wheel for Shift + Zoom
+const handleWheel = (e: WheelEvent) => {
+  if (!isModelInteractive.value || !camera || !controls) return;
+
+  if (!e.shiftKey) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    showShiftPrompt.value = true;
+    if (shiftPromptTimeout) clearTimeout(shiftPromptTimeout);
+    shiftPromptTimeout = setTimeout(() => {
+      showShiftPrompt.value = false;
+    }, 1500);
+    return;
   }
+
+  // Shift is pressed -> Zoom in / out smoothly
+  e.preventDefault();
+  const zoomFactor = e.deltaY < 0 ? 0.9 : 1.1;
+  camera.position.multiplyScalar(zoomFactor);
+  // Restrict zoom limits
+  const dist = camera.position.length();
+  if (dist < 0.5) camera.position.setLength(0.5);
+  if (dist > 12) camera.position.setLength(12);
+  controls.update();
+};
+
+// Zoom Controls (+ / -)
+const zoomIn = () => {
+  if (!camera || !controls) return;
+  camera.position.multiplyScalar(0.75); // 25% zoom in
+  if (camera.position.length() < 0.5) camera.position.setLength(0.5);
+  controls.update();
 };
 
 const zoomOut = () => {
-  if (modelViewerRef.value?.zoom) {
-    modelViewerRef.value.zoom(-3);
-  }
+  if (!camera || !controls) return;
+  camera.position.multiplyScalar(1.35); // 35% zoom out
+  if (camera.position.length() > 12) camera.position.setLength(12);
+  controls.update();
 };
 
+// Reset Camera Angle
 const resetView = () => {
-  centerAndFrameModel();
+  if (!camera || !controls || !modelGroup) return;
+  camera.position.set(0, 0.4, 3.4);
+  controls.target.set(0, 0, 0);
+  controls.update();
 };
 
 // Download GLB model file with proper filename via Proxy Content-Disposition
@@ -129,10 +271,8 @@ const downloadModel = async () => {
   if (!url) return;
 
   const filename = recommendedFilename.value;
-
-  // Route through our proxy which sets Content-Disposition: attachment; filename="..."
   const downloadUrl = `/api/proxy?url=${encodeURIComponent(url)}&filename=${encodeURIComponent(filename)}`;
-  
+
   const a = document.createElement('a');
   a.href = downloadUrl;
   a.download = filename;
@@ -165,17 +305,8 @@ const reHostModel = async () => {
       rehostError.value = status;
     });
     if (proxyRes.success && proxyRes.firebaseUrl) {
-      if (proxyRes.isPermanent) {
-        roomStore.pushToast('Interactive 3D Enabled', 'Model permanently saved to cloud, you can now rotate and zoom.', 'success');
-      } else {
-        roomStore.pushToast('Interactive 3D Enabled', 'Model loaded (session only). You will need to re-enable it if you refresh.', 'info');
-      }
-      
-      if (modelViewerRef.value) {
-        modelViewerRef.value.src = proxyRes.firebaseUrl;
-        modelViewerRef.value.dismissPoster?.();
-      }
-      isModelInteractive.value = true;
+      roomStore.pushToast('Interactive 3D Enabled', 'Model ready for 360° global rotation and zoom.', 'success');
+      loadGlbModel(proxyRes.firebaseUrl);
     } else {
       rehostError.value = proxyRes.error || 'Failed to load, check if model link is still valid.';
     }
@@ -197,6 +328,40 @@ const submitRefine = () => {
   }
   isRefineModalOpen.value = false;
 };
+
+// Lifecycle Hooks
+onMounted(() => {
+  nextTick(() => {
+    initThreeScene();
+    if (props.assetData?.modelUrl) {
+      loadGlbModel(props.assetData.modelUrl);
+    }
+  });
+});
+
+watch(
+  () => props.assetData?.modelUrl,
+  (newUrl) => {
+    if (newUrl) {
+      loadGlbModel(newUrl);
+    }
+  }
+);
+
+onUnmounted(() => {
+  if (animationFrameId !== null) {
+    cancelAnimationFrame(animationFrameId);
+  }
+  if (resizeObserver) {
+    resizeObserver.disconnect();
+  }
+  if (renderer) {
+    renderer.dispose();
+  }
+  if (controls) {
+    controls.dispose();
+  }
+});
 </script>
 
 <template>
@@ -208,7 +373,7 @@ const submitRefine = () => {
         <h4 class="font-semibold text-slate-100 text-sm tracking-wide truncate">
           {{ assetData?.title || '3D Neural Mesh' }}
         </h4>
-        <span class="text-[9px] text-slate-500 font-mono border border-slate-700/50 rounded px-1.5 py-0.5 ml-1 shrink-0">v1.6.7</span>
+        <span class="text-[9px] text-slate-500 font-mono border border-slate-700/50 rounded px-1.5 py-0.5 ml-1 shrink-0">v1.6.8</span>
         <span
           v-if="assetData?.isRefined"
           class="text-[10px] bg-emerald-500/20 text-emerald-300 font-mono px-2 py-0.5 rounded-full border border-emerald-500/30 flex items-center gap-1 shrink-0"
@@ -227,9 +392,9 @@ const submitRefine = () => {
       </span>
     </div>
 
-    <!-- Model Viewer Canvas / High-Res Render Hero -->
+    <!-- 3D Canvas Container -->
     <div
-      class="w-full rounded-xl overflow-hidden bg-slate-900 border border-slate-800 relative group select-none h-72 sm:h-96"
+      class="w-full rounded-xl overflow-hidden bg-slate-950 border border-slate-800 relative group select-none h-72 sm:h-96"
       style="width: 100%; display: block;"
       @wheel.capture="handleWheel"
     >
@@ -246,7 +411,7 @@ const submitRefine = () => {
           v-if="showShiftPrompt"
           class="absolute inset-0 z-30 flex items-center justify-center pointer-events-none"
         >
-          <div class="bg-slate-900/80 backdrop-blur-sm text-white px-4 py-2 rounded-full border border-slate-600/50 shadow-2xl flex items-center gap-2">
+          <div class="bg-slate-900/85 backdrop-blur-sm text-white px-4 py-2 rounded-full border border-slate-600/50 shadow-2xl flex items-center gap-2">
             <span class="text-xs font-semibold">Press <kbd class="bg-slate-700 px-1.5 py-0.5 rounded text-indigo-300">Shift</kbd> + Scroll to zoom</span>
           </div>
         </div>
@@ -258,30 +423,18 @@ const submitRefine = () => {
         class="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-950/80 backdrop-blur-xs text-slate-300 pointer-events-none"
       >
         <Loader2 class="w-8 h-8 text-indigo-400 animate-spin mb-2" />
-        <p class="text-xs font-medium">Loading 3D Preview...</p>
+        <p class="text-xs font-medium">Loading 3D Model...</p>
       </div>
 
-      <!-- Native <model-viewer> element with natural centering & tight bounds -->
-      <model-viewer
-        ref="modelViewerRef"
-        :src="assetData?.modelUrl"
-        :poster="assetData?.posterUrl"
-        alt="3D GLB Model"
-        auto-rotate
-        camera-controls
-        touch-action="pan-y"
-        bounds="tight"
-        shadow-intensity="1.5"
-        exposure="1.1"
-        @load="handleLoad"
-        @error="handleError"
-        class="w-full h-full block"
-      >
-      </model-viewer>
-
-      <!-- Fallback Poster (Outside model-viewer to ensure it shows on error) -->
+      <!-- Pure Three.js WebGL Canvas Mount Node -->
       <div
-        v-if="!isModelInteractive && assetData?.posterUrl"
+        ref="canvasContainerRef"
+        class="w-full h-full block cursor-grab active:cursor-grabbing"
+      ></div>
+
+      <!-- Fallback Poster (If WebGL fails or disabled) -->
+      <div
+        v-if="!isModelInteractive && assetData?.posterUrl && !isLoading"
         class="absolute inset-0 flex flex-col items-center justify-center bg-slate-950 w-full h-full z-10 pointer-events-auto"
       >
         <img

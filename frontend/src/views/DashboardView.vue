@@ -403,7 +403,7 @@ const handleLogout = async () => {
 
     <!-- Version badge in normal document flow -->
     <div class="mt-12 text-center text-[10px] text-slate-600 font-mono select-none">
-      v1.6.7 · 2026-09-21 22:25
+      v1.6.8 · 2026-09-21 22:30
     </div>
   </div>
 </template>

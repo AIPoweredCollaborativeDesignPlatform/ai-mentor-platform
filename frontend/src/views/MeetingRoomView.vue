@@ -582,7 +582,7 @@ onUnmounted(() => {
           <div class="text-[10px] sm:text-[11px] text-slate-400 flex items-center gap-1.5 sm:gap-2">
             <span>{{ roomStore.approvedParticipants.length }} 人</span>
             <span v-if="roomStore.isHost" class="text-amber-400 font-medium">● Host</span>
-            <span class="text-[10px] text-slate-500 font-mono hidden sm:inline">v1.6.7</span>
+            <span class="text-[10px] text-slate-500 font-mono hidden sm:inline">v1.6.8</span>
           </div>
         </div>
       </div>

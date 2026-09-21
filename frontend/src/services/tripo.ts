@@ -12,14 +12,21 @@ export interface TripoTaskResult {
 }
 
 export const getStoredTripoApiKey = (): string => {
-  return localStorage.getItem('ai_tripo_api_key') || '';
+  return (
+    localStorage.getItem('ai_tripo_api_key') ||
+    (window as any).__SHARED_TRIPO_KEY__ ||
+    import.meta.env.VITE_TRIPO_API_KEY ||
+    ''
+  );
 };
 
 export const setStoredTripoApiKey = (key: string): void => {
   if (key) {
     localStorage.setItem('ai_tripo_api_key', key.trim());
+    (window as any).__SHARED_TRIPO_KEY__ = key.trim();
   } else {
     localStorage.removeItem('ai_tripo_api_key');
+    delete (window as any).__SHARED_TRIPO_KEY__;
   }
 };
 

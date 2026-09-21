@@ -48,7 +48,6 @@ export const useRoomStore = defineStore('room', () => {
 
   let typingTimeout: any = null;
   let cooldownTimer: any = null;
-
   const isOnline = ref(typeof navigator !== 'undefined' ? navigator.onLine : true);
   if (typeof window !== 'undefined') {
     window.addEventListener('online', () => { isOnline.value = true; });
@@ -57,6 +56,25 @@ export const useRoomStore = defineStore('room', () => {
 
   const authStore = useAuthStore();
   const mentorStore = useMentorStore();
+
+  let currentAiAbortController: AbortController | null = null;
+
+  const abortCurrentAiGeneration = () => {
+    if (currentAiAbortController) {
+      currentAiAbortController.abort();
+      currentAiAbortController = null;
+    }
+    isAnalyzing.value = false;
+    isGenerating3D.value = false;
+    aiStatus.value = 'idle';
+    aiStatusDetail.value = `Ready (${mentorStore.config.modelTier === 'pro' ? 'Pro' : 'Flash'})`;
+    generating3DStatus.value = '';
+    if (db && currentRoom.value) {
+      deleteDoc(doc(db, 'rooms', currentRoom.value.roomId, 'typing', 'ai_mentor')).catch(() => {});
+      deleteDoc(doc(db, 'rooms', currentRoom.value.roomId, 'typing', 'ai_mentor_3d')).catch(() => {});
+    }
+    pushToast('AI Stopped', 'AI Mentor generation has been stopped.', 'info');
+  };
 
   let unsubs: Unsubscribe[] = [];
   let heartbeatTimer: any = null;
@@ -882,24 +900,32 @@ export const useRoomStore = defineStore('room', () => {
 
     const tierName = mentorStore.config.modelTier === 'pro' ? 'Pro' : 'Flash';
     isAnalyzing.value = true;
+    currentAiAbortController = new AbortController();
+
     if (isForced) {
-      isAnalyzing.value = true;
       aiStatus.value = 'analyzing';
       aiStatusDetail.value = `Analyzing with Gemini ${tierName}...`;
-      if (db && currentRoom.value) {
-        setDoc(doc(db, 'rooms', currentRoom.value.roomId, 'typing', 'ai_mentor'), {
-          uid: 'ai_mentor',
-          displayName: 'AI Mentor',
-          avatar: '✨',
-          timestamp: Date.now()
-        }).catch(() => {});
-      }
+    }
+
+    if (db && currentRoom.value) {
+      setDoc(doc(db, 'rooms', currentRoom.value.roomId, 'typing', 'ai_mentor'), {
+        uid: 'ai_mentor',
+        displayName: 'AI Mentor',
+        avatar: '✨',
+        statusDetail: `Brainstorming with Gemini ${tierName}...`,
+        timestamp: Date.now()
+      }).catch(() => {});
     }
 
     const { analyzeDialogueWithGemini } = await import('../services/ai');
 
     try {
-      const response = await analyzeDialogueWithGemini(currentRoom.value.messages, mentorStore.config, isForced);
+      const response = await analyzeDialogueWithGemini(
+        currentRoom.value.messages,
+        mentorStore.config,
+        isForced,
+        currentAiAbortController.signal
+      );
       if (response.shouldIntervene && response.aiMessage) {
         // Check if Meshy.ai or Tripo3D API key is configured for photorealistic curved 3D models
         const activeEngine = localStorage.getItem('ai_3d_engine') || 'meshy';
@@ -1287,6 +1313,7 @@ export const useRoomStore = defineStore('room', () => {
     removeToast,
     startFirestoreListener,
     stopListening,
+    abortCurrentAiGeneration,
     syncMentorConfig
   };
 });

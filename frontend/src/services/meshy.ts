@@ -13,14 +13,21 @@ export interface MeshyTaskResult {
 }
 
 export const getStoredMeshyApiKey = (): string => {
-  return localStorage.getItem('ai_meshy_api_key') || '';
+  return (
+    localStorage.getItem('ai_meshy_api_key') ||
+    (window as any).__SHARED_MESHY_KEY__ ||
+    import.meta.env.VITE_MESHY_API_KEY ||
+    ''
+  );
 };
 
 export const setStoredMeshyApiKey = (key: string): void => {
   if (key) {
     localStorage.setItem('ai_meshy_api_key', key.trim());
+    (window as any).__SHARED_MESHY_KEY__ = key.trim();
   } else {
     localStorage.removeItem('ai_meshy_api_key');
+    delete (window as any).__SHARED_MESHY_KEY__;
   }
 };
 

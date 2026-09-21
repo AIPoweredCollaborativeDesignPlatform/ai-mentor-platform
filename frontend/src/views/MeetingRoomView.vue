@@ -25,7 +25,8 @@ import {
   Cpu,
   LogIn,
   Eye,
-  WifiOff
+  WifiOff,
+  Loader2
 } from 'lucide-vue-next';
 
 import ParametricViewer3D from '../components/ParametricViewer3D.vue';
@@ -36,12 +37,20 @@ import DocumentModal from '../components/DocumentModal.vue';
 import HostControlDrawer from '../components/HostControlDrawer.vue';
 import AlertModal from '../components/AlertModal.vue';
 import PdfViewerModal from '../components/PdfViewerModal.vue';
+import WhiteboardModal from '../components/WhiteboardModal.vue';
 import { currentLocale, setLocale, t, type SupportedLocale } from '../i18n';
 
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
 const roomStore = useRoomStore();
+
+const isWhiteboardOpen = ref(false);
+
+const handleShareWhiteboard = async (file: File) => {
+  await stageFile(file);
+  await handleSend();
+};
 
 const roomId = ref(route.params.roomId as string);
 const pin = roomId.value.replace('room_', '');
@@ -595,7 +604,7 @@ onUnmounted(() => {
               {{ roomStore.onlineParticipants.length }} / {{ roomStore.approvedParticipants.length }} 在線
             </span>
             <span v-if="roomStore.isHost" class="text-amber-400 font-medium">● Host</span>
-            <span class="text-[10px] text-slate-500 font-mono hidden sm:inline">v1.6.9</span>
+            <span class="text-[10px] text-slate-500 font-mono hidden sm:inline">v1.7.0</span>
           </div>
         </div>
       </div>
@@ -894,20 +903,27 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- AI Mentor Analyzing / Thinking Bubble -->
+      <!-- AI Mentor Analyzing / Thinking Bubble (Global & Real-time) -->
       <div
-        v-if="roomStore.isAnalyzing"
-        class="flex items-center gap-2.5 px-3.5 py-2 rounded-2xl bg-slate-900/90 border border-sky-500/40 text-xs text-slate-200 w-fit animate-fade-in shadow-sm my-2 ml-1"
+        v-if="roomStore.isAnalyzing || roomStore.typingUsers.some(u => u.uid === 'ai_mentor' || u.uid === 'ai_mentor_3d')"
+        class="flex items-center gap-3 px-3.5 py-2 rounded-2xl bg-slate-900/90 border border-sky-500/40 text-xs text-slate-200 w-fit animate-fade-in shadow-xl my-2 ml-1"
       >
-        <span class="text-base leading-none">✨</span>
+        <span class="text-base leading-none animate-pulse">✨</span>
         <span class="font-medium text-sky-300">
-          {{ roomStore.aiStatusDetail || 'AI Mentor is analyzing...' }}
+          {{ roomStore.aiStatusDetail || 'AI Mentor is analyzing design...' }}
         </span>
-        <span class="flex gap-1 items-center ml-1">
+        <span class="flex gap-1 items-center ml-0.5">
           <span class="w-1.5 h-1.5 rounded-full bg-sky-400 animate-bounce" style="animation-delay: 0ms"></span>
           <span class="w-1.5 h-1.5 rounded-full bg-sky-400 animate-bounce" style="animation-delay: 150ms"></span>
           <span class="w-1.5 h-1.5 rounded-full bg-sky-400 animate-bounce" style="animation-delay: 300ms"></span>
         </span>
+        <button
+          @click="roomStore.abortCurrentAiGeneration()"
+          class="ml-2 px-2 py-0.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 hover:text-white text-[11px] font-medium transition cursor-pointer flex items-center gap-1"
+          title="Interrupt AI Generation"
+        >
+          <X class="w-3 h-3" /> Stop
+        </button>
       </div>
 
       <!-- Live In-Chat Human Typing Bubble -->
@@ -931,17 +947,24 @@ onUnmounted(() => {
       <!-- 3D Generation Progress Bubble -->
       <div
         v-if="roomStore.isGenerating3D"
-        class="flex items-center gap-2.5 px-3.5 py-2 rounded-2xl bg-indigo-900/50 border border-indigo-500/50 text-xs text-indigo-300 w-fit animate-fade-in shadow-sm my-2 ml-1"
+        class="flex items-center gap-3 px-3.5 py-2 rounded-2xl bg-indigo-900/60 border border-indigo-500/50 text-xs text-indigo-200 w-fit animate-fade-in shadow-xl my-2 ml-1"
       >
-        <span class="text-base leading-none">🎨</span>
-        <span class="font-medium text-indigo-200">
+        <span class="text-base leading-none animate-pulse">🎨</span>
+        <span class="font-medium text-indigo-100">
           {{ roomStore.generating3DStatus || 'Generating 3D Model...' }}
         </span>
-        <span class="flex gap-1 items-center ml-1">
+        <span class="flex gap-1 items-center ml-0.5">
           <span class="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse"></span>
           <span class="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" style="animation-delay: 150ms"></span>
           <span class="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" style="animation-delay: 300ms"></span>
         </span>
+        <button
+          @click="roomStore.abortCurrentAiGeneration()"
+          class="ml-2 px-2 py-0.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 hover:text-white text-[11px] font-medium transition cursor-pointer flex items-center gap-1"
+          title="Cancel 3D Generation"
+        >
+          <X class="w-3 h-3" /> Stop
+        </button>
       </div>
       </div>
       
@@ -1031,7 +1054,7 @@ onUnmounted(() => {
           </button>
         </div>
 
-        <!-- Input Bar with Paperclip & Auto-expanding Textarea -->
+        <!-- Input Bar with Paperclip, Whiteboard & Auto-expanding Textarea -->
         <div class="flex items-center gap-2">
           <!-- Hidden File Input -->
           <input
@@ -1052,6 +1075,16 @@ onUnmounted(() => {
             <Paperclip class="w-4 h-4" :class="{ 'animate-spin': isUploadingFile }" />
           </button>
 
+          <!-- Whiteboard & Sketchpad Button -->
+          <button
+            @click="isWhiteboardOpen = true"
+            :disabled="isMeetingClosed || roomStore.currentRoom?.participants[authStore.uid]?.isMuted"
+            class="p-2.5 rounded-xl border border-indigo-500/40 bg-indigo-950/40 hover:bg-indigo-900/60 text-indigo-300 hover:text-white transition disabled:opacity-40 disabled:cursor-not-allowed shrink-0 min-h-[44px] min-w-[44px] flex items-center justify-center cursor-pointer"
+            title="Open Collaborative Design Whiteboard & Annotate"
+          >
+            <Palette class="w-4 h-4 text-indigo-400" />
+          </button>
+
           <!-- Textarea Input with Clipboard Paste -->
           <textarea
             ref="textareaRef"
@@ -1064,18 +1097,28 @@ onUnmounted(() => {
               ? 'This meeting has been closed. Chat is in read-only mode.'
               : roomStore.currentRoom?.participants[authStore.uid]?.isMuted
                 ? 'You have been muted by the host.'
-                : 'Type a message...'"
+                : 'Type a message (e.g. @Mentor)...'"
             class="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-base sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500 transition resize-none min-h-[44px] max-h-32 overflow-y-auto disabled:opacity-50"
             rows="1"
           ></textarea>
 
+          <!-- Send Button with Cooldown Lock and Throttle -->
           <button
             @click="handleSend"
-            :disabled="isMeetingClosed || roomStore.currentRoom?.participants[authStore.uid]?.isMuted"
+            :disabled="isMeetingClosed || roomStore.currentRoom?.participants[authStore.uid]?.isMuted || (inputMessage.toLowerCase().includes('@mentor') && (roomStore.aiCooldownRemaining > 0 || roomStore.isAnalyzing))"
             class="px-3.5 py-2.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl font-semibold shadow transition flex items-center justify-center gap-1.5 shrink-0 min-h-[44px] min-w-[44px] cursor-pointer"
+            :title="inputMessage.toLowerCase().includes('@mentor') && roomStore.aiCooldownRemaining > 0 ? `AI Cooling down (${roomStore.aiCooldownRemaining}s remaining)` : 'Send message'"
           >
-            <Send class="w-4 h-4" />
-            <span class="hidden sm:inline">Send</span>
+            <template v-if="inputMessage.toLowerCase().includes('@mentor') && roomStore.aiCooldownRemaining > 0">
+              <span class="text-xs font-mono text-amber-200">{{ roomStore.aiCooldownRemaining }}s</span>
+            </template>
+            <template v-else-if="inputMessage.toLowerCase().includes('@mentor') && roomStore.isAnalyzing">
+              <Loader2 class="w-4 h-4 animate-spin text-sky-200" />
+            </template>
+            <template v-else>
+              <Send class="w-4 h-4" />
+              <span class="hidden sm:inline">Send</span>
+            </template>
           </button>
         </div>
       </div>
@@ -1085,6 +1128,13 @@ onUnmounted(() => {
     <HostControlDrawer
       :isOpen="isDrawerOpen"
       @close="isDrawerOpen = false"
+    />
+
+    <!-- Design Whiteboard Modal -->
+    <WhiteboardModal
+      v-if="isWhiteboardOpen"
+      @close="isWhiteboardOpen = false"
+      @share="handleShareWhiteboard"
     />
 
     <!-- Document Preview Modal -->

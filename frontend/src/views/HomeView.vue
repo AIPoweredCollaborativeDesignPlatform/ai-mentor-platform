@@ -50,18 +50,24 @@ const handleCreateRoom = async () => {
 
 const handleJoinRoom = async () => {
   handleSaveProfile();
-  if (pinInput.value.trim().length !== 6) {
+  const pin = pinInput.value.trim();
+  if (pin.length !== 6) {
     errorMsg.value = 'Please enter a valid 6-digit room PIN';
     return;
   }
   errorMsg.value = '';
-  const pin = pinInput.value.trim();
   isLoading.value = true;
   try {
+    const roomCheck = await roomStore.checkRoomExists(pin);
+    if (!roomCheck.exists) {
+      errorMsg.value = `Meeting room "${pin}" does not exist. Please check the PIN.`;
+      isLoading.value = false;
+      return;
+    }
     await roomStore.applyToJoin(pin);
     router.push(`/waiting/room_${pin}`);
-  } catch (err) {
-    console.error(err);
+  } catch (err: any) {
+    errorMsg.value = err.message || 'Failed to join room';
   } finally {
     isLoading.value = false;
   }

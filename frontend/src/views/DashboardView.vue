@@ -12,7 +12,10 @@ import {
   Clock,
   LogOut,
   FolderOpen,
-  Trash2
+  Trash2,
+  SlidersHorizontal,
+  Check,
+  CheckCheck
 } from 'lucide-vue-next';
 
 import { ref, onMounted } from 'vue';
@@ -33,8 +36,10 @@ interface RoomHistoryItem {
 const historyRooms = ref<RoomHistoryItem[]>([]);
 const generatedAssets = ref<{ type: string; title: string; date: string; roomPin: string }[]>([]);
 
+const isManageMode = ref(false);
 const selectedRooms = ref(new Set<string>());
 const showDeleteModal = ref(false);
+const trashNotification = ref('');
 
 const toggleSelect = (pin: string) => {
   const updated = new Set(selectedRooms.value);
@@ -46,9 +51,17 @@ const toggleSelect = (pin: string) => {
   selectedRooms.value = updated;
 };
 
-const promptDeleteSingle = (pin: string) => {
-  selectedRooms.value = new Set([pin]);
-  showDeleteModal.value = true;
+const toggleSelectAll = () => {
+  if (selectedRooms.value.size === historyRooms.value.length) {
+    selectedRooms.value = new Set();
+  } else {
+    selectedRooms.value = new Set(historyRooms.value.map(r => r.pin));
+  }
+};
+
+const cancelManageMode = () => {
+  isManageMode.value = false;
+  selectedRooms.value = new Set();
 };
 
 onMounted(() => {
@@ -93,6 +106,7 @@ onMounted(() => {
 
 const confirmDelete = async () => {
   const pinsToDelete = Array.from(selectedRooms.value);
+  const count = pinsToDelete.length;
 
   for (const pin of pinsToDelete) {
     const rawItem = localStorage.getItem(`ai_room_${pin}`);
@@ -115,6 +129,13 @@ const confirmDelete = async () => {
   historyRooms.value = historyRooms.value.filter(r => !selectedRooms.value.has(r.pin));
   selectedRooms.value = new Set();
   showDeleteModal.value = false;
+  isManageMode.value = false;
+
+  // Show transient toast
+  trashNotification.value = `Moved ${count} meeting${count > 1 ? 's' : ''} to Trash`;
+  setTimeout(() => {
+    trashNotification.value = '';
+  }, 4000);
 };
 
 const handleLogout = async () => {
@@ -125,6 +146,15 @@ const handleLogout = async () => {
 
 <template>
   <div class="min-h-screen bg-slate-950 text-slate-100 p-4 sm:p-6 pb-24">
+    <!-- Transient Trash Notification Banner -->
+    <div
+      v-if="trashNotification"
+      class="fixed top-5 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl bg-slate-900 border border-slate-700 shadow-2xl text-xs text-slate-200 flex items-center gap-2 animate-fade-in"
+    >
+      <Trash2 class="w-4 h-4 text-rose-400" />
+      <span>{{ trashNotification }}</span>
+    </div>
+
     <div class="max-w-5xl mx-auto">
       <!-- Top Bar -->
       <div class="flex items-center justify-between pb-4 mb-6 border-b border-slate-800">
@@ -157,12 +187,53 @@ const handleLogout = async () => {
       <!-- History Rooms -->
       <section class="mb-8">
         <div class="flex items-center justify-between mb-3">
-          <h2 class="text-base font-bold text-slate-100 flex items-center gap-2">
-            <Clock class="w-4 h-4 text-sky-400" /> Meeting History
-          </h2>
-          <span v-if="historyRooms.length > 0" class="text-xs text-slate-500">
-            {{ historyRooms.length }} {{ historyRooms.length === 1 ? 'meeting' : 'meetings' }}
-          </span>
+          <div class="flex items-center gap-2">
+            <h2 class="text-base font-bold text-slate-100 flex items-center gap-2">
+              <Clock class="w-4 h-4 text-sky-400" /> Meeting History
+            </h2>
+            <span v-if="historyRooms.length > 0" class="text-xs text-slate-500">
+              ({{ historyRooms.length }})
+            </span>
+          </div>
+
+          <!-- Actions on right of header -->
+          <div v-if="historyRooms.length > 0" class="flex items-center gap-2">
+            <!-- If in manage mode -->
+            <template v-if="isManageMode">
+              <button
+                @click="toggleSelectAll"
+                class="text-xs px-2.5 py-1.5 rounded-lg border border-slate-700 bg-slate-800 text-slate-300 hover:text-white transition flex items-center gap-1"
+              >
+                <CheckCheck class="w-3.5 h-3.5 text-sky-400" />
+                <span>{{ selectedRooms.size === historyRooms.length ? 'Deselect All' : 'Select All' }}</span>
+              </button>
+              <button
+                @click="showDeleteModal = true"
+                :disabled="selectedRooms.size === 0"
+                class="text-xs px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium transition flex items-center gap-1.5 shadow"
+              >
+                <Trash2 class="w-3.5 h-3.5" />
+                <span>Move to Trash ({{ selectedRooms.size }})</span>
+              </button>
+              <button
+                @click="cancelManageMode"
+                class="text-xs px-2.5 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition"
+              >
+                Done
+              </button>
+            </template>
+
+            <!-- If not in manage mode -->
+            <template v-else>
+              <button
+                @click="isManageMode = true"
+                class="text-xs px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white transition flex items-center gap-1.5"
+              >
+                <SlidersHorizontal class="w-3.5 h-3.5 text-sky-400" />
+                <span>Manage</span>
+              </button>
+            </template>
+          </div>
         </div>
 
         <!-- Empty State -->
@@ -176,33 +247,34 @@ const handleLogout = async () => {
           <div
             v-for="room in historyRooms"
             :key="room.id"
+            @click="isManageMode ? toggleSelect(room.pin) : null"
             class="p-4 rounded-xl bg-slate-900/80 border transition flex flex-col justify-between group shadow"
-            :class="selectedRooms.has(room.pin) ? 'border-sky-500/60 ring-1 ring-sky-500/30' : 'border-slate-800 hover:border-slate-700'"
+            :class="[
+              isManageMode ? 'cursor-pointer' : '',
+              selectedRooms.has(room.pin)
+                ? 'border-sky-500/80 ring-1 ring-sky-500/40 bg-slate-900'
+                : 'border-slate-800 hover:border-slate-700'
+            ]"
           >
             <div>
               <div class="flex items-center justify-between mb-2">
                 <div class="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    :checked="selectedRooms.has(room.pin)"
-                    @change="toggleSelect(room.pin)"
-                    class="w-4 h-4 rounded border-slate-700 bg-slate-800 text-sky-500 focus:ring-sky-500 focus:ring-offset-slate-900 cursor-pointer accent-sky-500"
-                  />
+                  <!-- Custom Checkbox (Only visible in manage mode) -->
+                  <div
+                    v-if="isManageMode"
+                    class="w-4 h-4 rounded border flex items-center justify-center transition shrink-0"
+                    :class="selectedRooms.has(room.pin) ? 'bg-sky-500 border-sky-400 text-white shadow-xs' : 'border-slate-600 bg-slate-950'"
+                  >
+                    <Check v-if="selectedRooms.has(room.pin)" class="w-3 h-3 stroke-[3]" />
+                  </div>
+
                   <span class="text-[11px] font-mono px-2 py-0.5 rounded-md bg-slate-800 text-sky-400 border border-slate-700">
                     PIN: {{ room.pin }}
                   </span>
                 </div>
-                <div class="flex items-center gap-2">
-                  <span class="text-[11px] text-slate-500">{{ room.date }}</span>
-                  <button
-                    @click.prevent="promptDeleteSingle(room.pin)"
-                    class="text-slate-500 hover:text-rose-400 transition"
-                    title="Delete room history"
-                  >
-                    <Trash2 class="w-3.5 h-3.5" />
-                  </button>
-                </div>
+                <span class="text-[11px] text-slate-500">{{ room.date }}</span>
               </div>
+
               <h3 class="font-bold text-slate-100 text-sm mb-1.5 group-hover:text-sky-400 transition">
                 {{ room.title }}
               </h3>
@@ -211,7 +283,9 @@ const handleLogout = async () => {
               </p>
             </div>
 
+            <!-- Open Button (Only in non-manage mode) -->
             <router-link
+              v-if="!isManageMode"
               :to="`/room/${room.id}`"
               class="mt-3 w-full text-center py-1.5 rounded-lg bg-slate-800 hover:bg-sky-600 hover:text-white text-slate-300 text-xs font-semibold transition"
             >
@@ -255,34 +329,10 @@ const handleLogout = async () => {
       </section>
     </div>
 
-    <!-- Action Bar for Selected Rooms -->
-    <div
-      v-if="selectedRooms.size > 0"
-      class="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 bg-slate-900/95 backdrop-blur-md border border-slate-700 shadow-2xl px-5 py-3 rounded-2xl flex items-center gap-4 text-sm"
-    >
-      <span class="text-slate-300 font-medium">
-        <span class="text-sky-400 font-bold">{{ selectedRooms.size }}</span> Selected
-      </span>
-      <div class="h-4 w-px bg-slate-700"></div>
-      <button
-        @click="showDeleteModal = true"
-        class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-medium text-xs transition shadow-sm"
-      >
-        <Trash2 class="w-3.5 h-3.5" />
-        Delete {{ selectedRooms.size }} Selected
-      </button>
-      <button
-        @click="selectedRooms = new Set()"
-        class="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition border border-slate-700"
-      >
-        Cancel
-      </button>
-    </div>
-
-    <!-- Custom Modal Confirmation Dialog -->
+    <!-- Custom Modal Confirmation Dialog for Trash -->
     <div
       v-if="showDeleteModal"
-      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm"
+      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-xs"
       @click.self="showDeleteModal = false"
     >
       <div class="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl text-slate-100">
@@ -291,20 +341,20 @@ const handleLogout = async () => {
             <Trash2 class="w-5 h-5" />
           </div>
           <div>
-            <h3 class="text-base font-bold text-white">Confirm Deletion</h3>
-            <p class="text-xs text-slate-400">This action cannot be undone.</p>
+            <h3 class="text-base font-bold text-white">Move to Trash?</h3>
+            <p class="text-xs text-slate-400">This will remove the selected meetings from your dashboard.</p>
           </div>
         </div>
 
         <p class="text-sm text-slate-300 mb-6">
-          Are you sure you want to delete
+          Are you sure you want to move
           <span class="font-semibold text-white">
-            {{ selectedRooms.size === 1 ? '1 room' : `${selectedRooms.size} selected rooms` }}
+            {{ selectedRooms.size === 1 ? '1 meeting' : `${selectedRooms.size} meetings` }}
           </span>
-          from your history?
+          to trash?
         </p>
 
-        <div class="flex items-center justify-end gap-3">
+        <div class="flex items-center justify-end gap-2.5">
           <button
             @click="showDeleteModal = false"
             class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition border border-slate-700"
@@ -315,7 +365,7 @@ const handleLogout = async () => {
             @click="confirmDelete"
             class="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold transition shadow-md"
           >
-            Confirm Delete
+            Move to Trash
           </button>
         </div>
       </div>

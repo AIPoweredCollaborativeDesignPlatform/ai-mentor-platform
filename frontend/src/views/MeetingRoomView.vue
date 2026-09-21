@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue';
+import { ref, watch, onMounted, onUnmounted, nextTick, computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import { useRoomStore } from '../stores/room';
@@ -12,7 +12,9 @@ import {
   ArrowLeft,
   Box,
   Palette,
-  FileText
+  FileText,
+  Edit3,
+  X
 } from 'lucide-vue-next';
 
 import ParametricViewer3D from '../components/ParametricViewer3D.vue';
@@ -34,7 +36,18 @@ const isDrawerOpen = ref(false);
 const inputMessage = ref('');
 const copiedUrl = ref(false);
 const chatContainerRef = ref<HTMLDivElement | null>(null);
+const textareaRef = ref<HTMLTextAreaElement | null>(null);
 const showScrollFab = ref(false);
+
+const isVerifyingAccess = ref(true);
+const isScrolling = ref(false);
+let scrollbarTimer: any = null;
+
+// Profile Edit Modal
+const isEditProfileOpen = ref(false);
+const editName = ref(authStore.displayName);
+const editAvatar = ref(authStore.avatar);
+const avatarChoices = ['🦊', '🦉', '🎨', '🚀', '🔮', '📐', '🤖', '⚡', '🦅', '🐬'];
 
 // Alert Modal state
 const alertModal = ref({
@@ -74,10 +87,28 @@ const scrollToBottom = () => {
 const handleScroll = () => {
   if (chatContainerRef.value) {
     const { scrollTop, scrollHeight, clientHeight } = chatContainerRef.value;
-    // Show FAB if scrolled up more than 100px from bottom
     showScrollFab.value = scrollHeight - (scrollTop + clientHeight) > 100;
   }
+  isScrolling.value = true;
+  clearTimeout(scrollbarTimer);
+  scrollbarTimer = setTimeout(() => {
+    isScrolling.value = false;
+  }, 3000);
 };
+
+const adjustTextarea = () => {
+  nextTick(() => {
+    if (textareaRef.value) {
+      textareaRef.value.style.height = 'auto';
+      const newHeight = Math.min(textareaRef.value.scrollHeight, 128);
+      textareaRef.value.style.height = `${Math.max(newHeight, 44)}px`;
+    }
+  });
+};
+
+watch(inputMessage, () => {
+  adjustTextarea();
+});
 
 const handleSend = async () => {
   const me = roomStore.currentRoom?.participants?.[authStore.uid];
@@ -86,28 +117,42 @@ const handleSend = async () => {
   if (!inputMessage.value.trim()) return;
   const text = inputMessage.value;
   inputMessage.value = '';
-  // Reset textarea height
-  const ta = document.querySelector('textarea');
-  if (ta) ta.style.height = 'auto';
+  
+  if (textareaRef.value) {
+    textareaRef.value.style.height = '44px';
+  }
 
   await roomStore.sendMessage(text);
   scrollToBottom();
 };
 
-const adjustTextarea = (e: Event) => {
-  const target = e.target as HTMLTextAreaElement;
-  target.style.height = 'auto';
-  target.style.height = Math.min(target.scrollHeight, 128) + 'px'; // Max 32rem
-};
-
 const insertQuickTag = (tag: string) => {
   inputMessage.value = inputMessage.value ? `${inputMessage.value} ${tag} ` : `${tag} `;
+  adjustTextarea();
 };
 
 const handleUnload = () => {
   roomStore.leaveRoom();
 };
 
+const handleSaveProfile = () => {
+  if (editName.value.trim()) {
+    roomStore.updateParticipantProfile(editName.value.trim(), editAvatar.value);
+  }
+  isEditProfileOpen.value = false;
+};
+
+// Watch for muted state to trigger Toast
+watch(
+  () => roomStore.currentRoom?.participants?.[authStore.uid]?.isMuted,
+  (newVal, oldVal) => {
+    if (newVal === true && oldVal === false) {
+      roomStore.pushToast('Microphone Muted', 'You have been muted by the host.', 'warning');
+    }
+  }
+);
+
+// Watch for kicked state
 watch(() => roomStore.myStatus, (newStatus) => {
   if (newStatus === 'kicked') {
     alertModal.value = {
@@ -117,11 +162,25 @@ watch(() => roomStore.myStatus, (newStatus) => {
       type: 'warning',
       onConfirm: () => {
         alertModal.value.isOpen = false;
-        router.replace('/');
+        router.replace(`/waiting/room_${pin}`);
       }
     };
-  } else if (newStatus === 'left') {
-    router.replace('/');
+  }
+});
+
+// Watch for meeting ended by host
+watch(() => roomStore.currentRoom?.roomStatus, (status) => {
+  if (status === 'ended') {
+    alertModal.value = {
+      isOpen: true,
+      title: 'Meeting Ended',
+      message: 'The host has ended this meeting for everyone.',
+      type: 'info',
+      onConfirm: () => {
+        alertModal.value.isOpen = false;
+        router.replace('/dashboard');
+      }
+    };
   }
 });
 
@@ -129,39 +188,60 @@ watch(() => roomStore.currentRoom?.messages, () => {
   scrollToBottom();
 }, { deep: true });
 
-onMounted(() => {
+onMounted(async () => {
   window.addEventListener('beforeunload', handleUnload);
-  roomStore.startFirestoreListener(roomId.value);
-  // Ensure room state is loaded
-  if (!roomStore.currentRoom) {
-    const loaded = localStorage.getItem(`ai_room_${pin}`);
-    if (loaded) {
-      roomStore.currentRoom = JSON.parse(loaded);
-    } else {
-      roomStore.createRoom();
-    }
-  }
-  if (roomStore.myStatus !== 'approved' && !roomStore.isHost) {
-    router.push('/');
+
+  // 1. Verify meeting exists
+  const check = await roomStore.checkRoomExists(pin);
+  if (!check.exists) {
+    roomStore.pushToast('Meeting Not Found', `Meeting room ${pin} does not exist.`, 'error');
+    router.replace('/');
     return;
   }
-  scrollToBottom();
+
+  // 2. Start listener
+  roomStore.startFirestoreListener(roomId.value);
+
+  // 3. Security Access Verification
+  // Wait slightly for Firestore snapshot sync
+  setTimeout(() => {
+    const isHost = roomStore.currentRoom?.hostUid === authStore.uid;
+    const me = roomStore.currentRoom?.participants?.[authStore.uid];
+
+    if (!isHost && me?.status !== 'approved') {
+      // Direct access denied! Redirect to waiting room
+      roomStore.stopListening();
+      router.replace(`/waiting/room_${pin}`);
+      return;
+    }
+
+    isVerifyingAccess.value = false;
+    scrollToBottom();
+  }, 600);
 });
 
 onUnmounted(() => {
   window.removeEventListener('beforeunload', handleUnload);
+  clearTimeout(scrollbarTimer);
   roomStore.stopListening();
 });
 </script>
 
 <template>
-  <div class="h-screen flex flex-col bg-slate-950 text-slate-100 overflow-hidden">
+  <!-- Access verification loading screen -->
+  <div v-if="isVerifyingAccess" class="h-screen flex flex-col items-center justify-center bg-slate-950 text-slate-400">
+    <div class="w-10 h-10 border-2 border-sky-500 border-t-transparent rounded-full animate-spin mb-3"></div>
+    <p class="text-xs">Verifying credentials & permissions...</p>
+  </div>
+
+  <div v-else class="h-screen flex flex-col bg-slate-950 text-slate-100 overflow-hidden">
     <!-- Top Navigation Bar -->
     <header class="h-14 border-b border-slate-800 bg-slate-900/80 backdrop-blur-md px-3 sm:px-5 flex items-center justify-between z-10 shrink-0">
       <div class="flex items-center gap-2 min-w-0">
         <router-link
-          to="/"
+          to="/dashboard"
           class="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition shrink-0"
+          title="Back to Dashboard"
         >
           <ArrowLeft class="w-4 h-4" />
         </router-link>
@@ -176,7 +256,7 @@ onUnmounted(() => {
             </span>
           </div>
           <div class="text-[11px] text-slate-400 flex items-center gap-2">
-            <span>Online: {{ roomStore.approvedParticipants.length }}</span>
+            <span>Members: {{ roomStore.approvedParticipants.length }}</span>
             <span v-if="roomStore.isHost" class="text-amber-400 font-medium">● Host</span>
           </div>
         </div>
@@ -184,6 +264,17 @@ onUnmounted(() => {
 
       <!-- Action Buttons -->
       <div class="flex items-center gap-1.5 shrink-0">
+        <!-- User Profile Pill (Click to edit) -->
+        <button
+          @click="isEditProfileOpen = true"
+          class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-700 text-slate-200 transition text-xs"
+          title="Change name or avatar"
+        >
+          <span>{{ authStore.avatar }}</span>
+          <span class="hidden md:inline font-medium truncate max-w-[80px]">{{ authStore.displayName }}</span>
+          <Edit3 class="w-3 h-3 text-slate-400" />
+        </button>
+
         <button
           @click="copyInviteLink"
           class="inline-flex items-center gap-1 text-[11px] px-2.5 py-1.5 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-200 transition"
@@ -193,13 +284,13 @@ onUnmounted(() => {
           <span class="hidden sm:inline">{{ copiedUrl ? 'Copied!' : 'Copy Invite' }}</span>
         </button>
 
-        <!-- Host Drawer Toggle Button -->
+        <!-- Controls Drawer Button -->
         <button
           @click="isDrawerOpen = true"
           class="relative inline-flex items-center gap-1 text-[11px] px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold shadow transition"
         >
           <Sliders class="w-3.5 h-3.5" />
-          <span class="hidden sm:inline">Controls</span>
+          <span class="hidden sm:inline">Settings</span>
           <!-- Pending Badge -->
           <span
             v-if="roomStore.pendingParticipants.length > 0"
@@ -211,90 +302,102 @@ onUnmounted(() => {
       </div>
     </header>
 
-    <!-- Chat Stream Area -->
+    <!-- Chat Stream Area with 3-second fading scrollbar -->
     <main
       ref="chatContainerRef"
       @scroll="handleScroll"
-      class="flex-1 overflow-y-auto p-3 sm:p-5 space-y-3 max-w-4xl w-full mx-auto relative"
+      class="flex-1 overflow-y-auto p-3 sm:p-5 space-y-3 max-w-4xl w-full mx-auto relative custom-scrollbar"
+      :class="{ 'is-scrolling': isScrolling }"
     >
       <div
         v-for="msg in roomStore.currentRoom?.messages"
         :key="msg.id"
-        class="flex gap-2.5"
-        :class="msg.senderUid === authStore.uid ? 'flex-row-reverse' : ''"
       >
-        <!-- Avatar -->
-        <div
-          class="w-8 h-8 rounded-xl flex items-center justify-center text-base shrink-0 select-none shadow"
-          :class="{
-            'bg-sky-500/20 border border-sky-400/40': msg.senderUid === 'ai_mentor',
-            'bg-slate-800 border border-slate-700': msg.senderUid !== 'ai_mentor' && msg.senderUid !== 'system',
-            'bg-indigo-500/20 text-indigo-300': msg.senderUid === 'system'
-          }"
-        >
-          {{ msg.senderAvatar }}
+        <!-- Centered Subtle System Status Pill -->
+        <div v-if="msg.senderUid === 'system'" class="flex justify-center my-2.5">
+          <div class="px-3.5 py-1 rounded-full bg-slate-900/70 border border-slate-800/80 text-[11px] text-slate-400 font-medium shadow-xs text-center max-w-md">
+            {{ msg.content }}
+          </div>
         </div>
 
-        <!-- Message Body -->
+        <!-- Normal User or AI Chat Bubble -->
         <div
-          class="max-w-2xl flex flex-col min-w-0"
-          :class="msg.senderUid === authStore.uid ? 'items-end' : 'items-start'"
+          v-else
+          class="flex gap-2.5"
+          :class="msg.senderUid === authStore.uid ? 'flex-row-reverse' : ''"
         >
-          <!-- Sender info -->
-          <div class="flex items-center gap-1.5 mb-0.5 text-[11px] text-slate-400">
-            <span class="font-medium text-slate-300 truncate">{{ msg.senderName }}</span>
-            <span
-              v-if="msg.senderUid === 'ai_mentor'"
-              class="text-[10px] bg-sky-500/20 text-sky-300 border border-sky-500/30 px-1.5 py-0.2 rounded-md font-mono"
-            >
-              AI Mentor
-            </span>
-          </div>
-
-          <!-- Bubble Content -->
+          <!-- Avatar -->
           <div
-            class="px-3.5 py-2 rounded-2xl text-sm leading-relaxed shadow whitespace-pre-wrap break-words min-w-0 max-w-full"
+            class="w-8 h-8 rounded-xl flex items-center justify-center text-base shrink-0 select-none shadow"
             :class="{
-              'bg-sky-600 text-white rounded-tr-xs': msg.senderUid === authStore.uid,
-              'bg-slate-900 border border-slate-800 text-slate-200 rounded-tl-xs': msg.senderUid !== authStore.uid && msg.senderUid !== 'ai_mentor',
-              'bg-slate-900 border border-sky-500/40 text-sky-100 rounded-tl-xs shadow-sky-950/30': msg.senderUid === 'ai_mentor'
+              'bg-sky-500/20 border border-sky-400/40': msg.senderUid === 'ai_mentor',
+              'bg-slate-800 border border-slate-700': msg.senderUid !== 'ai_mentor'
             }"
           >
-            {{ msg.content }}
+            {{ msg.senderAvatar }}
+          </div>
 
-            <!-- Embedded 3D Parametric Viewer -->
-            <ParametricViewer3D
-              v-if="msg.type === 'ai_asset' && msg.assetType === 'parametric_3d'"
-              :assetData="msg.assetPayload"
-            />
-
-            <!-- Embedded GLB Model Viewer -->
-            <ModelViewerGLB
-              v-if="msg.type === 'ai_asset' && msg.assetType === 'mesh_3d'"
-              :assetData="msg.assetPayload"
-            />
-
-            <!-- Embedded Visual Moodboard -->
-            <MoodBoardViewer
-              v-if="msg.type === 'ai_asset' && msg.assetType === 'moodboard'"
-              :assetData="msg.assetPayload"
-            />
-
-            <!-- Embedded Document Trigger -->
-            <div
-              v-if="msg.type === 'ai_asset' && (msg.assetType === 'summary' || msg.assetType === 'contract')"
-              class="mt-3 p-3 bg-slate-950/80 border border-slate-700 rounded-xl flex items-center justify-between"
-            >
-              <div class="flex items-center gap-2">
-                <FileText class="w-5 h-5 text-sky-400 shrink-0" />
-                <span class="text-xs font-semibold text-slate-200 truncate">{{ msg.assetPayload?.title }}</span>
-              </div>
-              <button
-                @click="openDocument(msg.assetPayload?.title, msg.assetPayload?.content)"
-                class="px-3 py-1 bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium rounded-lg transition shrink-0 ml-2"
+          <!-- Message Body -->
+          <div
+            class="max-w-2xl flex flex-col min-w-0"
+            :class="msg.senderUid === authStore.uid ? 'items-end' : 'items-start'"
+          >
+            <!-- Sender info -->
+            <div class="flex items-center gap-1.5 mb-0.5 text-[11px] text-slate-400">
+              <span class="font-medium text-slate-300 truncate">{{ msg.senderName }}</span>
+              <span
+                v-if="msg.senderUid === 'ai_mentor'"
+                class="text-[10px] bg-sky-500/20 text-sky-300 border border-sky-500/30 px-1.5 py-0.2 rounded-md font-mono"
               >
-                View Document
-              </button>
+                AI Mentor
+              </span>
+            </div>
+
+            <!-- Bubble Content -->
+            <div
+              class="px-3.5 py-2 rounded-2xl text-sm leading-relaxed shadow whitespace-pre-wrap break-words min-w-0 max-w-full"
+              :class="{
+                'bg-sky-600 text-white rounded-tr-xs': msg.senderUid === authStore.uid,
+                'bg-slate-900 border border-slate-800 text-slate-200 rounded-tl-xs': msg.senderUid !== authStore.uid && msg.senderUid !== 'ai_mentor',
+                'bg-slate-900 border border-sky-500/40 text-sky-100 rounded-tl-xs shadow-sky-950/30': msg.senderUid === 'ai_mentor'
+              }"
+            >
+              {{ msg.content }}
+
+              <!-- Embedded 3D Parametric Viewer -->
+              <ParametricViewer3D
+                v-if="msg.type === 'ai_asset' && msg.assetType === 'parametric_3d'"
+                :assetData="msg.assetPayload"
+              />
+
+              <!-- Embedded GLB Model Viewer -->
+              <ModelViewerGLB
+                v-if="msg.type === 'ai_asset' && msg.assetType === 'mesh_3d'"
+                :assetData="msg.assetPayload"
+              />
+
+              <!-- Embedded Visual Moodboard -->
+              <MoodBoardViewer
+                v-if="msg.type === 'ai_asset' && msg.assetType === 'moodboard'"
+                :assetData="msg.assetPayload"
+              />
+
+              <!-- Embedded Document Trigger -->
+              <div
+                v-if="msg.type === 'ai_asset' && (msg.assetType === 'summary' || msg.assetType === 'contract')"
+                class="mt-3 p-3 bg-slate-950/80 border border-slate-700 rounded-xl flex items-center justify-between"
+              >
+                <div class="flex items-center gap-2">
+                  <FileText class="w-5 h-5 text-sky-400 shrink-0" />
+                  <span class="text-xs font-semibold text-slate-200 truncate">{{ msg.assetPayload?.title }}</span>
+                </div>
+                <button
+                  @click="openDocument(msg.assetPayload?.title, msg.assetPayload?.content)"
+                  class="px-3 py-1 bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium rounded-lg transition shrink-0 ml-2"
+                >
+                  View Document
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -341,12 +444,13 @@ onUnmounted(() => {
           </button>
         </div>
 
-        <!-- Input Bar -->
+        <!-- Input Bar with auto-expanding textarea -->
         <div class="flex items-center gap-2">
           <textarea
+            ref="textareaRef"
             v-model="inputMessage"
-            @keydown.enter.prevent.exact="handleSend"
-            @keydown.shift.enter.exact="inputMessage += '\n'"
+            @input="adjustTextarea"
+            @keydown.enter.exact.prevent="handleSend"
             :disabled="roomStore.currentRoom?.participants[authStore.uid]?.isMuted"
             :placeholder="roomStore.currentRoom?.participants[authStore.uid]?.isMuted ? 'You have been muted by the host.' : 'Type a message (Shift+Enter for new line)...'"
             class="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500 transition resize-none min-h-[44px] max-h-32 overflow-y-auto"
@@ -378,6 +482,7 @@ onUnmounted(() => {
       @close="isDocModalOpen = false"
     />
 
+    <!-- Alert Modal for Kicks & System Notifications -->
     <AlertModal
       :isOpen="alertModal.isOpen"
       :title="alertModal.title"
@@ -385,5 +490,87 @@ onUnmounted(() => {
       :type="alertModal.type"
       @confirm="alertModal.onConfirm"
     />
+
+    <!-- Profile Edit Modal -->
+    <div v-if="isEditProfileOpen" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs">
+      <div class="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-6 shadow-2xl">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-base font-bold text-white">Update Profile</h3>
+          <button @click="isEditProfileOpen = false" class="text-slate-400 hover:text-white">
+            <X class="w-4 h-4" />
+          </button>
+        </div>
+
+        <div class="space-y-3 mb-5">
+          <div class="flex items-center gap-3">
+            <span class="text-3xl p-1.5 bg-slate-800 rounded-xl border border-slate-700">{{ editAvatar }}</span>
+            <input
+              v-model="editName"
+              type="text"
+              maxlength="20"
+              class="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500"
+              placeholder="Your name"
+            />
+          </div>
+
+          <div class="flex flex-wrap gap-2 pt-1">
+            <button
+              v-for="av in avatarChoices"
+              :key="av"
+              @click="editAvatar = av"
+              class="w-8 h-8 rounded-lg text-base flex items-center justify-center transition border"
+              :class="editAvatar === av ? 'bg-sky-500/20 border-sky-400' : 'bg-slate-950 border-slate-800 hover:border-slate-700'"
+            >
+              {{ av }}
+            </button>
+          </div>
+        </div>
+
+        <div class="flex justify-end gap-2">
+          <button
+            @click="isEditProfileOpen = false"
+            class="px-4 py-2 rounded-xl text-xs text-slate-400 hover:text-white transition"
+          >
+            Cancel
+          </button>
+          <button
+            @click="handleSaveProfile"
+            class="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-xl text-xs font-semibold shadow transition"
+          >
+            Save Changes
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
+
+<style scoped>
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.12) transparent;
+  transition: scrollbar-color 0.4s ease;
+}
+
+.custom-scrollbar.is-scrolling {
+  scrollbar-color: rgba(148, 163, 184, 0.55) transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.12);
+  border-radius: 9999px;
+  transition: background 0.4s ease;
+}
+
+.custom-scrollbar.is-scrolling::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.55);
+}
+</style>

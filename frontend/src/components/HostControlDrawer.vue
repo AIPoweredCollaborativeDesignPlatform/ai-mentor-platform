@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useRouter } from 'vue-router';
 import { useRoomStore } from '../stores/room';
 import { useMentorStore } from '../stores/mentor';
 import type { SensitivityLevel } from '../types';
@@ -15,10 +16,12 @@ import {
   X,
   MicOff,
   Mic,
-  UserMinus
+  UserMinus,
+  LogOut,
+  Power
 } from 'lucide-vue-next';
 
-import { onMounted, onUnmounted } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 
 const props = defineProps<{
   isOpen: boolean;
@@ -27,6 +30,24 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'close'): void;
 }>();
+
+const router = useRouter();
+const showLeaveModal = ref(false);
+const showEndAllModal = ref(false);
+
+const handleLeaveMeeting = async () => {
+  await roomStore.leaveRoom();
+  showLeaveModal.value = false;
+  emit('close');
+  router.push('/dashboard');
+};
+
+const handleEndMeetingForAll = async () => {
+  await roomStore.endMeetingForAll();
+  showEndAllModal.value = false;
+  emit('close');
+  router.push('/dashboard');
+};
 
 const handleKeydown = (e: KeyboardEvent) => {
   if (e.key === 'Escape' && props.isOpen) {
@@ -151,15 +172,17 @@ const sensitivities: { id: SensitivityLevel; name: string; desc: string }[] = [
               <div class="flex items-center gap-2">
                 <span
                   v-if="p.isHost"
-                  class="text-[10px] bg-amber-500/20 text-amber-400 border border-amber-500/30 px-2 py-0.5 rounded-full font-medium"
+                  class="text-[10px] px-2 py-0.5 rounded-full font-medium"
+                  :class="p.isOnline !== false ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'bg-slate-800 text-slate-400 border border-slate-700'"
                 >
-                  👑 Host
+                  👑 Host {{ p.isOnline !== false ? '' : '(Offline)' }}
                 </span>
                 <span
                   v-else
-                  class="text-[10px] text-emerald-400 flex items-center gap-1"
+                  class="text-[10px] flex items-center gap-1 font-medium"
+                  :class="p.isOnline !== false ? 'text-emerald-400' : 'text-slate-500'"
                 >
-                  ● Online
+                  {{ p.isOnline !== false ? '● Online' : '○ Offline' }}
                 </span>
 
                 <div v-if="!p.isHost" class="flex items-center gap-1">
@@ -302,6 +325,82 @@ const sensitivities: { id: SensitivityLevel; name: string; desc: string }[] = [
             </div>
           </div>
         </section>
+
+        <hr class="border-slate-800" />
+
+        <!-- 5. Meeting Session Actions -->
+        <section class="space-y-2 pb-6">
+          <h4 class="font-semibold text-sm text-slate-100 mb-2">Meeting Actions</h4>
+
+          <!-- Leave Meeting -->
+          <button
+            @click="showLeaveModal = true"
+            class="w-full py-2.5 px-3 rounded-xl border border-slate-700 bg-slate-950/60 hover:bg-slate-800 text-slate-300 hover:text-white text-xs font-semibold transition flex items-center justify-center gap-2"
+          >
+            <LogOut class="w-4 h-4 text-amber-400" />
+            <span>{{ roomStore.isHost ? 'Leave Meeting (Keep Active for Others)' : 'Leave Meeting' }}</span>
+          </button>
+
+          <!-- End Meeting for All (Host only) -->
+          <button
+            v-if="roomStore.isHost"
+            @click="showEndAllModal = true"
+            class="w-full py-2.5 px-3 rounded-xl border border-rose-900/60 bg-rose-950/30 hover:bg-rose-900/50 text-rose-300 hover:text-rose-100 text-xs font-semibold transition flex items-center justify-center gap-2"
+          >
+            <Power class="w-4 h-4 text-rose-400" />
+            <span>End Meeting for Everyone</span>
+          </button>
+        </section>
+      </div>
+    </div>
+
+    <!-- Confirm Leave Modal -->
+    <div v-if="showLeaveModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs">
+      <div class="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-6 shadow-2xl text-center">
+        <h3 class="text-base font-bold text-white mb-2">Leave Meeting?</h3>
+        <p class="text-xs text-slate-400 mb-5 leading-relaxed">
+          {{ roomStore.isHost
+            ? 'You will leave the meeting, but other members can continue chatting. You can rejoin anytime from your Dashboard.'
+            : 'Are you sure you want to leave this meeting? You can rejoin later.' }}
+        </p>
+        <div class="flex gap-2">
+          <button
+            @click="showLeaveModal = false"
+            class="flex-1 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition"
+          >
+            Cancel
+          </button>
+          <button
+            @click="handleLeaveMeeting"
+            class="flex-1 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold transition shadow"
+          >
+            Confirm Leave
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Confirm End for All Modal -->
+    <div v-if="showEndAllModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs">
+      <div class="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-6 shadow-2xl text-center">
+        <h3 class="text-base font-bold text-rose-400 mb-2">End Meeting for Everyone?</h3>
+        <p class="text-xs text-slate-400 mb-5 leading-relaxed">
+          This will close the meeting and disconnect all active participants. This action cannot be undone.
+        </p>
+        <div class="flex gap-2">
+          <button
+            @click="showEndAllModal = false"
+            class="flex-1 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition"
+          >
+            Cancel
+          </button>
+          <button
+            @click="handleEndMeetingForAll"
+            class="flex-1 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold transition shadow"
+          >
+            End for All
+          </button>
+        </div>
       </div>
     </div>
   </div>

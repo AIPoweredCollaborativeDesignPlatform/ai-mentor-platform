@@ -7,6 +7,7 @@ export interface Participant {
   status: ParticipantStatus;
   isHost?: boolean;
   isMuted?: boolean;
+  isOnline?: boolean;
   joinedAt?: number;
 }
 
@@ -22,8 +23,9 @@ export interface MentorConfig {
 
 export interface ToastMessage {
   id: string;
-  message: string;
-  type: 'info' | 'success' | 'error';
+  title: string;
+  description: string;
+  type: 'info' | 'success' | 'warning' | 'error';
   actions?: {
     label: string;
     onClick: () => void;
@@ -49,6 +51,7 @@ export interface RoomData {
   roomName?: string;
   hostUid: string;
   createdAt: number;
+  roomStatus?: 'active' | 'ended';
   mentorConfig: MentorConfig;
   participants: Record<string, Participant>;
   messages: MessageItem[];

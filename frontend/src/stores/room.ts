@@ -6,6 +6,7 @@ import { useMentorStore } from './mentor';
 import { db, isFirebaseConfigured } from '../firebase/config';
 import {
   doc,
+  getDoc,
   setDoc,
   updateDoc,
   addDoc,
@@ -26,7 +27,7 @@ export interface ToastMessage {
 
 export const useRoomStore = defineStore('room', () => {
   const currentRoom = ref<RoomData | null>(null);
-  const myStatus = ref<ParticipantStatus>('approved');
+  const myStatus = ref<ParticipantStatus>('pending');
   const toasts = ref<ToastMessage[]>([]);
   const isAnalyzing = ref(false);
 
@@ -77,6 +78,29 @@ export const useRoomStore = defineStore('room', () => {
     unsubs = [];
   };
 
+  const checkRoomExists = async (pin: string): Promise<{ exists: boolean; roomName?: string }> => {
+    const roomId = `room_${pin}`;
+    if (db) {
+      try {
+        const snap = await getDoc(doc(db, 'rooms', roomId));
+        if (snap.exists()) {
+          const data = snap.data() as RoomData;
+          return { exists: true, roomName: data.roomName };
+        }
+      } catch (e) {
+        console.warn('checkRoomExists firestore check failed:', e);
+      }
+    }
+    const local = localStorage.getItem(`ai_room_${pin}`);
+    if (local) {
+      try {
+        const data = JSON.parse(local);
+        return { exists: true, roomName: data.roomName };
+      } catch {}
+    }
+    return { exists: false };
+  };
+
   // Real-time Firestore Listener for Room, Participants, and Messages
   const startFirestoreListener = (roomId: string) => {
     if (!db) return;
@@ -98,6 +122,7 @@ export const useRoomStore = defineStore('room', () => {
           currentRoom.value.pin = data.pin;
           currentRoom.value.roomName = data.roomName;
           currentRoom.value.mentorConfig = data.mentorConfig;
+          currentRoom.value.roomStatus = data.roomStatus;
         }
         if (data.mentorConfig) {
           mentorStore.config = data.mentorConfig;
@@ -138,6 +163,13 @@ export const useRoomStore = defineStore('room', () => {
     });
     unsubs.push(unsubPart);
 
+    // Mark current participant online
+    if (authStore.uid) {
+      updateDoc(doc(db, 'rooms', roomId, 'participants', authStore.uid), {
+        isOnline: true
+      }).catch(() => {});
+    }
+
     // 3. Messages Collection listener (real-time stream)
     const msgCol = query(collection(db, 'rooms', roomId, 'messages'), orderBy('timestamp', 'asc'));
     const unsubMsg = onSnapshot(msgCol, (snapshot) => {
@@ -161,6 +193,7 @@ export const useRoomStore = defineStore('room', () => {
       avatar: authStore.avatar,
       status: 'approved',
       isHost: true,
+      isOnline: true,
       joinedAt: Date.now()
     };
 
@@ -172,6 +205,7 @@ export const useRoomStore = defineStore('room', () => {
       roomName: displayRoomName,
       hostUid: authStore.uid,
       createdAt: Date.now(),
+      roomStatus: 'active',
       mentorConfig: { ...mentorStore.config },
       participants: { [authStore.uid]: hostUser },
       messages: [
@@ -181,7 +215,7 @@ export const useRoomStore = defineStore('room', () => {
           senderName: 'System',
           senderAvatar: '🏛️',
           type: 'text',
-          content: `Room "${displayRoomName}" created! PIN: ${pin}. Share this PIN with participants — they will need your approval to join.`,
+          content: `Room "${displayRoomName}" created · PIN: ${pin}`,
           timestamp: Date.now()
         }
       ]
@@ -198,6 +232,7 @@ export const useRoomStore = defineStore('room', () => {
           roomName: displayRoomName,
           hostUid: authStore.uid,
           createdAt: Date.now(),
+          roomStatus: 'active',
           mentorConfig: mentorStore.config
         });
         await setDoc(doc(db, 'rooms', roomId, 'participants', authStore.uid), hostUser);
@@ -214,6 +249,11 @@ export const useRoomStore = defineStore('room', () => {
 
   // Join room as Participant (enters Waiting Room)
   const applyToJoin = async (pin: string) => {
+    const roomInfo = await checkRoomExists(pin);
+    if (!roomInfo.exists) {
+      throw new Error('Room not found');
+    }
+
     const roomId = `room_${pin}`;
     const applicant: Participant = {
       uid: authStore.uid,
@@ -221,6 +261,7 @@ export const useRoomStore = defineStore('room', () => {
       avatar: authStore.avatar,
       status: 'pending', // Waiting Room status
       isHost: false,
+      isOnline: true,
       joinedAt: Date.now()
     };
 
@@ -239,8 +280,10 @@ export const useRoomStore = defineStore('room', () => {
       const room: RoomData = existing || {
         roomId,
         pin,
+        roomName: roomInfo.roomName || `Meeting ${pin}`,
         hostUid: 'host_default',
         createdAt: Date.now(),
+        roomStatus: 'active',
         mentorConfig: { ...mentorStore.config },
         participants: {},
         messages: []
@@ -251,6 +294,11 @@ export const useRoomStore = defineStore('room', () => {
     }
   };
 
+  // Re-apply to join (after being kicked or rejected)
+  const reapplyToJoin = async (pin: string) => {
+    return applyToJoin(pin);
+  };
+
   // Host Action: Approve participant
   const approveParticipant = async (uid: string) => {
     if (!currentRoom.value || !isHost.value) return;
@@ -258,7 +306,8 @@ export const useRoomStore = defineStore('room', () => {
     if (db) {
       try {
         await updateDoc(doc(db, 'rooms', currentRoom.value.roomId, 'participants', uid), {
-          status: 'approved'
+          status: 'approved',
+          isOnline: true
         });
         const participant = currentRoom.value.participants[uid];
         await addDoc(collection(db, 'rooms', currentRoom.value.roomId, 'messages'), {
@@ -266,7 +315,7 @@ export const useRoomStore = defineStore('room', () => {
           senderName: 'System',
           senderAvatar: '👋',
           type: 'text',
-          content: `${participant?.displayName || 'New member'} has joined the meeting!`,
+          content: `${participant?.displayName || 'New member'} joined the meeting`,
           timestamp: Date.now()
         });
       } catch (err) {
@@ -277,13 +326,14 @@ export const useRoomStore = defineStore('room', () => {
       const participant = currentRoom.value.participants[uid];
       if (participant) {
         participant.status = 'approved';
+        participant.isOnline = true;
         currentRoom.value.messages.push({
           id: `sys_${Date.now()}`,
           senderUid: 'system',
           senderName: 'System',
           senderAvatar: '👋',
           type: 'text',
-          content: `${participant.displayName} has joined the meeting!`,
+          content: `${participant.displayName} joined the meeting`,
           timestamp: Date.now()
         });
         saveToStorage(currentRoom.value);
@@ -392,23 +442,90 @@ export const useRoomStore = defineStore('room', () => {
     }
   };
 
-  // Leave Room
+  // Leave Room (Sets participant offline, stays member of the room)
   const leaveRoom = async () => {
     if (!currentRoom.value) return;
-    if (db) {
+    if (db && authStore.uid) {
       try {
         await updateDoc(doc(db, 'rooms', currentRoom.value.roomId, 'participants', authStore.uid), {
-          status: 'left'
+          isOnline: false
+        });
+      } catch (err) {
+        console.error(err);
+      }
+    } else if (currentRoom.value.participants[authStore.uid]) {
+      currentRoom.value.participants[authStore.uid].isOnline = false;
+      saveToStorage(currentRoom.value);
+    }
+    stopListening();
+  };
+
+  // End Meeting for All (Host action)
+  const endMeetingForAll = async () => {
+    if (!currentRoom.value || !isHost.value) return;
+    if (db) {
+      try {
+        await updateDoc(doc(db, 'rooms', currentRoom.value.roomId), {
+          roomStatus: 'ended'
+        });
+        await addDoc(collection(db, 'rooms', currentRoom.value.roomId, 'messages'), {
+          senderUid: 'system',
+          senderName: 'System',
+          senderAvatar: '🛑',
+          type: 'text',
+          content: 'Meeting has been ended by the host',
+          timestamp: Date.now()
         });
       } catch (err) {
         console.error(err);
       }
     } else {
-      const p = currentRoom.value.participants[authStore.uid];
-      if (p) p.status = 'left';
+      currentRoom.value.roomStatus = 'ended';
       saveToStorage(currentRoom.value);
     }
     stopListening();
+  };
+
+  // Update Participant Profile in Room
+  const updateParticipantProfile = async (newName: string, newAvatar: string) => {
+    if (!currentRoom.value) return;
+    const oldName = currentRoom.value.participants[authStore.uid]?.displayName || authStore.displayName;
+    authStore.updateProfile(newName, newAvatar);
+
+    if (db && authStore.uid) {
+      try {
+        await updateDoc(doc(db, 'rooms', currentRoom.value.roomId, 'participants', authStore.uid), {
+          displayName: newName,
+          avatar: newAvatar
+        });
+        await addDoc(collection(db, 'rooms', currentRoom.value.roomId, 'messages'), {
+          senderUid: 'system',
+          senderName: 'System',
+          senderAvatar: '✏️',
+          type: 'text',
+          content: `${oldName} updated profile to ${newName} ${newAvatar}`,
+          timestamp: Date.now()
+        });
+      } catch (e) {
+        console.error(e);
+      }
+    } else {
+      const p = currentRoom.value.participants[authStore.uid];
+      if (p) {
+        p.displayName = newName;
+        p.avatar = newAvatar;
+      }
+      currentRoom.value.messages.push({
+        id: `sys_${Date.now()}`,
+        senderUid: 'system',
+        senderName: 'System',
+        senderAvatar: '✏️',
+        type: 'text',
+        content: `${oldName} updated profile to ${newName} ${newAvatar}`,
+        timestamp: Date.now()
+      });
+      saveToStorage(currentRoom.value);
+    }
   };
 
   const triggerMentorAgent = async (latestText: string) => {
@@ -482,13 +599,17 @@ export const useRoomStore = defineStore('room', () => {
     isAnalyzing,
     approvedParticipants,
     pendingParticipants,
+    checkRoomExists,
     createRoom,
     applyToJoin,
+    reapplyToJoin,
     approveParticipant,
     rejectParticipant,
     muteParticipant,
     kickParticipant,
     leaveRoom,
+    endMeetingForAll,
+    updateParticipantProfile,
     sendMessage,
     addAiMessage,
     pushToast,

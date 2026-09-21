@@ -433,6 +433,12 @@ const handleUnload = () => {
   roomStore.leaveRoom();
 };
 
+const handleVisibilityChange = () => {
+  if (document.visibilityState === 'visible') {
+    roomStore.sendHeartbeat();
+  }
+};
+
 const handleSaveProfile = () => {
   if (editName.value.trim()) {
     roomStore.updateParticipantProfile(editName.value.trim(), editAvatar.value);
@@ -474,6 +480,8 @@ let accessCheckTimer: any = null;
 
 onMounted(async () => {
   window.addEventListener('beforeunload', handleUnload);
+  window.addEventListener('pagehide', handleUnload);
+  document.addEventListener('visibilitychange', handleVisibilityChange);
 
   // 1. Verify meeting exists
   const check = await roomStore.checkRoomExists(pin);
@@ -483,7 +491,7 @@ onMounted(async () => {
     return;
   }
 
-  // 2. Start listener
+  // 2. Start listener & heartbeat
   roomStore.startFirestoreListener(roomId.value);
 
   // 3. Reactive Security Access Verification
@@ -523,6 +531,8 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('beforeunload', handleUnload);
+  window.removeEventListener('pagehide', handleUnload);
+  document.removeEventListener('visibilitychange', handleVisibilityChange);
   clearTimeout(scrollbarTimer);
   clearTimeout(accessCheckTimer);
   roomStore.stopListening();
@@ -580,9 +590,12 @@ onUnmounted(() => {
             </span>
           </div>
           <div class="text-[10px] sm:text-[11px] text-slate-400 flex items-center gap-1.5 sm:gap-2">
-            <span>{{ roomStore.approvedParticipants.length }} 人</span>
+            <span class="flex items-center gap-1">
+              <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+              {{ roomStore.onlineParticipants.length }} / {{ roomStore.approvedParticipants.length }} 在線
+            </span>
             <span v-if="roomStore.isHost" class="text-amber-400 font-medium">● Host</span>
-            <span class="text-[10px] text-slate-500 font-mono hidden sm:inline">v1.6.8</span>
+            <span class="text-[10px] text-slate-500 font-mono hidden sm:inline">v1.6.9</span>
           </div>
         </div>
       </div>

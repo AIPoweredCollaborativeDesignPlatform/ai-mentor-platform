@@ -8,6 +8,7 @@ export interface Participant {
   isHost?: boolean;
   isMuted?: boolean;
   isOnline?: boolean;
+  lastSeen?: number;
   joinedAt?: number;
 }
 

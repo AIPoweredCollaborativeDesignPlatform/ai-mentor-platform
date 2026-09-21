@@ -59,6 +59,8 @@ export const useRoomStore = defineStore('room', () => {
   const mentorStore = useMentorStore();
 
   let unsubs: Unsubscribe[] = [];
+  let heartbeatTimer: any = null;
+  let presenceSweepTimer: any = null;
 
   const isHost = computed(() => {
     return currentRoom.value?.hostUid === authStore.uid;
@@ -74,6 +76,10 @@ export const useRoomStore = defineStore('room', () => {
 
   const pendingParticipants = computed(() => {
     return participantsList.value.filter(p => p.status === 'pending');
+  });
+
+  const onlineParticipants = computed(() => {
+    return approvedParticipants.value.filter(p => p.isOnline !== false);
   });
 
   const pushToast = (
@@ -96,10 +102,50 @@ export const useRoomStore = defineStore('room', () => {
     toasts.value = toasts.value.filter(t => t.id !== id);
   };
 
-  // Detach listeners
+  // Active Heartbeat Sender
+  const sendHeartbeat = async () => {
+    if (db && authStore.uid && currentRoom.value) {
+      try {
+        await updateDoc(doc(db, 'rooms', currentRoom.value.roomId, 'participants', authStore.uid), {
+          isOnline: true,
+          lastSeen: Date.now()
+        });
+      } catch {}
+    }
+  };
+
+  // Sweep for participants whose heartbeat has lapsed (> 25s)
+  const checkStaleParticipants = () => {
+    if (!currentRoom.value) return;
+    const now = Date.now();
+    const STALE_TIMEOUT = 25000;
+
+    Object.values(currentRoom.value.participants).forEach(p => {
+      if (p.uid !== authStore.uid && p.status === 'approved' && p.isOnline !== false) {
+        if (p.lastSeen && (now - p.lastSeen > STALE_TIMEOUT)) {
+          p.isOnline = false;
+          if (db && currentRoom.value) {
+            updateDoc(doc(db, 'rooms', currentRoom.value.roomId, 'participants', p.uid), {
+              isOnline: false
+            }).catch(() => {});
+          }
+        }
+      }
+    });
+  };
+
+  // Detach listeners & clear presence timers
   const stopListening = () => {
     unsubs.forEach(u => u());
     unsubs = [];
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+    if (presenceSweepTimer) {
+      clearInterval(presenceSweepTimer);
+      presenceSweepTimer = null;
+    }
     currentRoom.value = null;
   };
 
@@ -164,10 +210,15 @@ export const useRoomStore = defineStore('room', () => {
     const unsubPart = onSnapshot(partCol, (snapshot) => {
       const parts: Record<string, Participant> = {};
       const oldParts = currentRoom.value ? { ...currentRoom.value.participants } : {};
+      const now = Date.now();
 
       snapshot.forEach(d => {
         const p = d.data() as Participant;
         if (p.status !== 'cancelled') {
+          // If heartbeat is older than 25s for other users, treat as offline immediately
+          if (p.uid !== authStore.uid && p.lastSeen && (now - p.lastSeen > 25000)) {
+            p.isOnline = false;
+          }
           parts[p.uid] = p;
         }
         if (p.uid === authStore.uid) {
@@ -246,12 +297,13 @@ export const useRoomStore = defineStore('room', () => {
     });
     unsubs.push(unsubPart);
 
-    // Mark current participant online
-    if (authStore.uid) {
-      updateDoc(doc(db, 'rooms', roomId, 'participants', authStore.uid), {
-        isOnline: true
-      }).catch(() => {});
-    }
+    // Initial heartbeat & start periodic heartbeat (10s) and presence sweep (5s)
+    sendHeartbeat();
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    heartbeatTimer = setInterval(sendHeartbeat, 10000);
+
+    if (presenceSweepTimer) clearInterval(presenceSweepTimer);
+    presenceSweepTimer = setInterval(checkStaleParticipants, 5000);
 
     // 3. Messages Collection listener (real-time stream)
     const msgCol = query(collection(db, 'rooms', roomId, 'messages'), orderBy('timestamp', 'asc'));
@@ -1210,6 +1262,8 @@ export const useRoomStore = defineStore('room', () => {
     typingUsers,
     approvedParticipants,
     pendingParticipants,
+    onlineParticipants,
+    sendHeartbeat,
     checkRoomExists,
     createRoom,
     applyToJoin,

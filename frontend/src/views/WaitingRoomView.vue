@@ -12,7 +12,8 @@ const roomStore = useRoomStore();
 
 const roomId = ref(route.params.roomId as string);
 const pin = roomId.value.replace('room_', '');
-let checkInterval: any = null;
+
+let hasApplied = false;
 
 const checkStatus = () => {
   if (roomStore.currentRoom) {
@@ -26,8 +27,10 @@ const checkStatus = () => {
       }
     } else {
       // User is not in participants list, they arrived directly via URL
-      if (!authStore.isConfigured) return; // wait for auth
-      roomStore.applyToJoin(pin);
+      if (authStore.uid && !hasApplied) {
+        hasApplied = true;
+        roomStore.applyToJoin(pin);
+      }
     }
   } else {
     // try local fallback just in case
@@ -50,14 +53,23 @@ watch(() => roomStore.myStatus, (newStatus) => {
   }
 });
 
+watch(() => roomStore.currentRoom, () => {
+  checkStatus();
+}, { deep: true });
+
+watch(() => authStore.uid, (newUid) => {
+  if (newUid && roomStore.currentRoom && !hasApplied) {
+    checkStatus();
+  }
+});
+
 onMounted(() => {
   roomStore.startFirestoreListener(roomId.value);
-  checkStatus();
-  checkInterval = setInterval(checkStatus, 1500);
+  // Give auth a brief moment to init if coming fresh
+  setTimeout(checkStatus, 800);
 });
 
 onUnmounted(() => {
-  if (checkInterval) clearInterval(checkInterval);
   roomStore.stopListening();
 });
 </script>

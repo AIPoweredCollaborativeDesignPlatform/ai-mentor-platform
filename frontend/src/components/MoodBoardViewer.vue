@@ -7,6 +7,7 @@ defineProps<{
 }>();
 
 const copiedHex = ref<string | null>(null);
+const previewImage = ref<string | null>(null);
 
 const copyColor = (hex: string) => {
   navigator.clipboard.writeText(hex);
@@ -14,6 +15,14 @@ const copyColor = (hex: string) => {
   setTimeout(() => {
     copiedHex.value = null;
   }, 2000);
+};
+
+const openPreview = (url: string) => {
+  previewImage.value = url;
+};
+
+const closePreview = () => {
+  previewImage.value = null;
 };
 </script>
 
@@ -47,7 +56,8 @@ const copyColor = (hex: string) => {
       <div
         v-for="(slice, i) in assetData.slices"
         :key="i"
-        class="group relative rounded-xl overflow-hidden aspect-video bg-slate-900 border border-slate-800"
+        class="group relative rounded-xl overflow-hidden aspect-video bg-slate-900 border border-slate-800 cursor-pointer"
+        @click="openPreview(slice.url)"
       >
         <img
           :src="slice.url"
@@ -96,6 +106,14 @@ const copyColor = (hex: string) => {
         <span class="font-medium text-slate-200">{{ mat.name }}</span>
         <span class="text-slate-400 text-[11px]">{{ mat.feature }}</span>
       </div>
+    </div>
+
+    <!-- Fullscreen Image Preview Modal -->
+    <div v-if="previewImage" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 p-4" @click="closePreview">
+      <button class="absolute top-4 right-4 p-2 text-white/70 hover:text-white bg-black/50 rounded-full" @click="closePreview">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+      <img :src="previewImage" class="max-w-full max-h-full object-contain rounded-lg shadow-2xl" @click.stop />
     </div>
   </div>
 </template>

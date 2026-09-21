@@ -20,6 +20,7 @@ import ModelViewerGLB from '../components/ModelViewerGLB.vue';
 import MoodBoardViewer from '../components/MoodBoardViewer.vue';
 import DocumentModal from '../components/DocumentModal.vue';
 import HostControlDrawer from '../components/HostControlDrawer.vue';
+import AlertModal from '../components/AlertModal.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -33,6 +34,16 @@ const isDrawerOpen = ref(false);
 const inputMessage = ref('');
 const copiedUrl = ref(false);
 const chatContainerRef = ref<HTMLDivElement | null>(null);
+const showScrollFab = ref(false);
+
+// Alert Modal state
+const alertModal = ref({
+  isOpen: false,
+  title: '',
+  message: '',
+  type: 'info' as 'warning'|'info'|'error',
+  onConfirm: () => {}
+});
 
 // Document Modal state
 const isDocModalOpen = ref(false);
@@ -60,13 +71,33 @@ const scrollToBottom = () => {
   });
 };
 
+const handleScroll = () => {
+  if (chatContainerRef.value) {
+    const { scrollTop, scrollHeight, clientHeight } = chatContainerRef.value;
+    // Show FAB if scrolled up more than 100px from bottom
+    showScrollFab.value = scrollHeight - (scrollTop + clientHeight) > 100;
+  }
+};
+
 const handleSend = async () => {
-  if (roomStore.currentRoom?.participants[authStore.uid]?.isMuted) return;
+  const me = roomStore.currentRoom?.participants?.[authStore.uid];
+  if (me?.isMuted) return;
+
   if (!inputMessage.value.trim()) return;
   const text = inputMessage.value;
   inputMessage.value = '';
+  // Reset textarea height
+  const ta = document.querySelector('textarea');
+  if (ta) ta.style.height = 'auto';
+
   await roomStore.sendMessage(text);
   scrollToBottom();
+};
+
+const adjustTextarea = (e: Event) => {
+  const target = e.target as HTMLTextAreaElement;
+  target.style.height = 'auto';
+  target.style.height = Math.min(target.scrollHeight, 128) + 'px'; // Max 32rem
 };
 
 const insertQuickTag = (tag: string) => {
@@ -77,17 +108,26 @@ const handleUnload = () => {
   roomStore.leaveRoom();
 };
 
-watch(
-  () => roomStore.myStatus,
-  (newStatus) => {
-    if (newStatus === 'kicked') {
-      alert('You have been removed from the meeting by the host.');
-      router.push('/');
-    } else if (newStatus === 'left') {
-      router.push('/');
-    }
+watch(() => roomStore.myStatus, (newStatus) => {
+  if (newStatus === 'kicked') {
+    alertModal.value = {
+      isOpen: true,
+      title: 'Removed from Meeting',
+      message: 'You have been removed from the meeting by the host.',
+      type: 'warning',
+      onConfirm: () => {
+        alertModal.value.isOpen = false;
+        router.replace('/');
+      }
+    };
+  } else if (newStatus === 'left') {
+    router.replace('/');
   }
-);
+});
+
+watch(() => roomStore.currentRoom?.messages, () => {
+  scrollToBottom();
+}, { deep: true });
 
 onMounted(() => {
   window.addEventListener('beforeunload', handleUnload);
@@ -174,7 +214,8 @@ onUnmounted(() => {
     <!-- Chat Stream Area -->
     <main
       ref="chatContainerRef"
-      class="flex-1 overflow-y-auto p-3 sm:p-5 space-y-3 max-w-4xl w-full mx-auto"
+      @scroll="handleScroll"
+      class="flex-1 overflow-y-auto p-3 sm:p-5 space-y-3 max-w-4xl w-full mx-auto relative"
     >
       <div
         v-for="msg in roomStore.currentRoom?.messages"
@@ -196,12 +237,12 @@ onUnmounted(() => {
 
         <!-- Message Body -->
         <div
-          class="max-w-2xl flex flex-col"
+          class="max-w-2xl flex flex-col min-w-0"
           :class="msg.senderUid === authStore.uid ? 'items-end' : 'items-start'"
         >
           <!-- Sender info -->
           <div class="flex items-center gap-1.5 mb-0.5 text-[11px] text-slate-400">
-            <span class="font-medium text-slate-300">{{ msg.senderName }}</span>
+            <span class="font-medium text-slate-300 truncate">{{ msg.senderName }}</span>
             <span
               v-if="msg.senderUid === 'ai_mentor'"
               class="text-[10px] bg-sky-500/20 text-sky-300 border border-sky-500/30 px-1.5 py-0.2 rounded-md font-mono"
@@ -212,7 +253,7 @@ onUnmounted(() => {
 
           <!-- Bubble Content -->
           <div
-            class="px-3.5 py-2 rounded-2xl text-sm leading-relaxed shadow"
+            class="px-3.5 py-2 rounded-2xl text-sm leading-relaxed shadow whitespace-pre-wrap break-words min-w-0 max-w-full"
             :class="{
               'bg-sky-600 text-white rounded-tr-xs': msg.senderUid === authStore.uid,
               'bg-slate-900 border border-slate-800 text-slate-200 rounded-tl-xs': msg.senderUid !== authStore.uid && msg.senderUid !== 'ai_mentor',
@@ -245,12 +286,12 @@ onUnmounted(() => {
               class="mt-3 p-3 bg-slate-950/80 border border-slate-700 rounded-xl flex items-center justify-between"
             >
               <div class="flex items-center gap-2">
-                <FileText class="w-5 h-5 text-sky-400" />
-                <span class="text-xs font-semibold text-slate-200">{{ msg.assetPayload?.title }}</span>
+                <FileText class="w-5 h-5 text-sky-400 shrink-0" />
+                <span class="text-xs font-semibold text-slate-200 truncate">{{ msg.assetPayload?.title }}</span>
               </div>
               <button
                 @click="openDocument(msg.assetPayload?.title, msg.assetPayload?.content)"
-                class="px-3 py-1 bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium rounded-lg transition"
+                class="px-3 py-1 bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium rounded-lg transition shrink-0 ml-2"
               >
                 View Document
               </button>
@@ -258,6 +299,15 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
+      
+      <!-- Scroll to bottom FAB -->
+      <button
+        v-show="showScrollFab"
+        @click="scrollToBottom"
+        class="sticky bottom-4 left-1/2 -translate-x-1/2 p-2 rounded-full bg-slate-800 border border-slate-700 shadow-xl text-sky-400 hover:text-white transition z-20 animate-fade-in opacity-90 hover:opacity-100"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
+      </button>
     </main>
 
     <!-- Bottom Input & Triggers Bar -->
@@ -326,6 +376,14 @@ onUnmounted(() => {
       :title="docModalTitle"
       :content="docModalContent"
       @close="isDocModalOpen = false"
+    />
+
+    <AlertModal
+      :isOpen="alertModal.isOpen"
+      :title="alertModal.title"
+      :message="alertModal.message"
+      :type="alertModal.type"
+      @confirm="alertModal.onConfirm"
     />
   </div>
 </template>

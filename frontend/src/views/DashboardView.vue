@@ -27,11 +27,29 @@ interface RoomHistoryItem {
   date: string;
   members: number;
   assetsCount: number;
+  timestamp: number;
 }
 
 const historyRooms = ref<RoomHistoryItem[]>([]);
-
 const generatedAssets = ref<{ type: string; title: string; date: string; roomPin: string }[]>([]);
+
+const selectedRooms = ref(new Set<string>());
+const showDeleteModal = ref(false);
+
+const toggleSelect = (pin: string) => {
+  const updated = new Set(selectedRooms.value);
+  if (updated.has(pin)) {
+    updated.delete(pin);
+  } else {
+    updated.add(pin);
+  }
+  selectedRooms.value = updated;
+};
+
+const promptDeleteSingle = (pin: string) => {
+  selectedRooms.value = new Set([pin]);
+  showDeleteModal.value = true;
+};
 
 onMounted(() => {
   // Discover local sessions from localStorage
@@ -41,13 +59,15 @@ onMounted(() => {
       try {
         const item = JSON.parse(localStorage.getItem(key) || '{}');
         if (item.pin && !historyRooms.value.some(r => r.pin === item.pin)) {
+          const timestamp = item.createdAt || Date.now();
           historyRooms.value.unshift({
             id: item.roomId || `room_${item.pin}`,
             pin: item.pin,
             title: item.roomName || `Meeting (${item.pin})`,
-            date: new Date(item.createdAt || Date.now()).toLocaleDateString(),
+            date: new Date(timestamp).toLocaleDateString(),
             members: Object.keys(item.participants || {}).length || 1,
-            assetsCount: item.messages?.filter((m: any) => m.type === 'ai_asset')?.length || 0
+            assetsCount: item.messages?.filter((m: any) => m.type === 'ai_asset')?.length || 0,
+            timestamp: timestamp
           });
           // Collect assets from this room
           if (item.messages) {
@@ -68,26 +88,33 @@ onMounted(() => {
       }
     }
   }
+  historyRooms.value.sort((a, b) => b.timestamp - a.timestamp);
 });
 
-const handleDeleteRoom = async (room: RoomHistoryItem) => {
-  if (!confirm(`Are you sure you want to remove history for "${room.title}"?`)) return;
-  
-  // If host, try to delete from Firestore
-  const rawItem = localStorage.getItem(`ai_room_${room.pin}`);
+const confirmDelete = async () => {
+  const pinsToDelete = Array.from(selectedRooms.value);
 
-  // Remove locally
-  localStorage.removeItem(`ai_room_${room.pin}`);
-  historyRooms.value = historyRooms.value.filter(r => r.pin !== room.pin);
-  
-  if (rawItem && db) {
-    try {
-      const parsed = JSON.parse(rawItem);
-      if (parsed.hostUid === authStore.uid) {
-        await deleteDoc(doc(db, 'rooms', room.id));
+  for (const pin of pinsToDelete) {
+    const rawItem = localStorage.getItem(`ai_room_${pin}`);
+    const room = historyRooms.value.find(r => r.pin === pin);
+    localStorage.removeItem(`ai_room_${pin}`);
+
+    if (rawItem && db) {
+      try {
+        const parsed = JSON.parse(rawItem);
+        if (parsed.hostUid === authStore.uid) {
+          const docId = room?.id || parsed.roomId || `room_${pin}`;
+          await deleteDoc(doc(db, 'rooms', docId));
+        }
+      } catch (e) {
+        // ignore
       }
-    } catch(e) {}
+    }
   }
+
+  historyRooms.value = historyRooms.value.filter(r => !selectedRooms.value.has(r.pin));
+  selectedRooms.value = new Set();
+  showDeleteModal.value = false;
 };
 
 const handleLogout = async () => {
@@ -97,7 +124,7 @@ const handleLogout = async () => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-slate-950 text-slate-100 p-4 sm:p-6">
+  <div class="min-h-screen bg-slate-950 text-slate-100 p-4 sm:p-6 pb-24">
     <div class="max-w-5xl mx-auto">
       <!-- Top Bar -->
       <div class="flex items-center justify-between pb-4 mb-6 border-b border-slate-800">
@@ -129,9 +156,14 @@ const handleLogout = async () => {
 
       <!-- History Rooms -->
       <section class="mb-8">
-        <h2 class="text-base font-bold text-slate-100 mb-3 flex items-center gap-2">
-          <Clock class="w-4 h-4 text-sky-400" /> Meeting History
-        </h2>
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-base font-bold text-slate-100 flex items-center gap-2">
+            <Clock class="w-4 h-4 text-sky-400" /> Meeting History
+          </h2>
+          <span v-if="historyRooms.length > 0" class="text-xs text-slate-500">
+            {{ historyRooms.length }} {{ historyRooms.length === 1 ? 'meeting' : 'meetings' }}
+          </span>
+        </div>
 
         <!-- Empty State -->
         <div v-if="historyRooms.length === 0" class="p-8 text-center rounded-2xl bg-slate-900/50 border border-slate-800">
@@ -144,16 +176,29 @@ const handleLogout = async () => {
           <div
             v-for="room in historyRooms"
             :key="room.id"
-            class="p-4 rounded-xl bg-slate-900/80 border border-slate-800 hover:border-slate-700 transition flex flex-col justify-between group shadow"
+            class="p-4 rounded-xl bg-slate-900/80 border transition flex flex-col justify-between group shadow"
+            :class="selectedRooms.has(room.pin) ? 'border-sky-500/60 ring-1 ring-sky-500/30' : 'border-slate-800 hover:border-slate-700'"
           >
             <div>
-              <div class="flex items-center justify-between mb-1.5">
-                <span class="text-[11px] font-mono px-2 py-0.5 rounded-md bg-slate-800 text-sky-400 border border-slate-700">
-                  PIN: {{ room.pin }}
-                </span>
+              <div class="flex items-center justify-between mb-2">
+                <div class="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    :checked="selectedRooms.has(room.pin)"
+                    @change="toggleSelect(room.pin)"
+                    class="w-4 h-4 rounded border-slate-700 bg-slate-800 text-sky-500 focus:ring-sky-500 focus:ring-offset-slate-900 cursor-pointer accent-sky-500"
+                  />
+                  <span class="text-[11px] font-mono px-2 py-0.5 rounded-md bg-slate-800 text-sky-400 border border-slate-700">
+                    PIN: {{ room.pin }}
+                  </span>
+                </div>
                 <div class="flex items-center gap-2">
                   <span class="text-[11px] text-slate-500">{{ room.date }}</span>
-                  <button @click.prevent="handleDeleteRoom(room)" class="text-slate-500 hover:text-rose-400 transition" title="Delete room history">
+                  <button
+                    @click.prevent="promptDeleteSingle(room.pin)"
+                    class="text-slate-500 hover:text-rose-400 transition"
+                    title="Delete room history"
+                  >
                     <Trash2 class="w-3.5 h-3.5" />
                   </button>
                 </div>
@@ -208,6 +253,72 @@ const handleLogout = async () => {
           </div>
         </div>
       </section>
+    </div>
+
+    <!-- Action Bar for Selected Rooms -->
+    <div
+      v-if="selectedRooms.size > 0"
+      class="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 bg-slate-900/95 backdrop-blur-md border border-slate-700 shadow-2xl px-5 py-3 rounded-2xl flex items-center gap-4 text-sm"
+    >
+      <span class="text-slate-300 font-medium">
+        <span class="text-sky-400 font-bold">{{ selectedRooms.size }}</span> Selected
+      </span>
+      <div class="h-4 w-px bg-slate-700"></div>
+      <button
+        @click="showDeleteModal = true"
+        class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-medium text-xs transition shadow-sm"
+      >
+        <Trash2 class="w-3.5 h-3.5" />
+        Delete {{ selectedRooms.size }} Selected
+      </button>
+      <button
+        @click="selectedRooms = new Set()"
+        class="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition border border-slate-700"
+      >
+        Cancel
+      </button>
+    </div>
+
+    <!-- Custom Modal Confirmation Dialog -->
+    <div
+      v-if="showDeleteModal"
+      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm"
+      @click.self="showDeleteModal = false"
+    >
+      <div class="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl text-slate-100">
+        <div class="flex items-center gap-3 mb-4">
+          <div class="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400">
+            <Trash2 class="w-5 h-5" />
+          </div>
+          <div>
+            <h3 class="text-base font-bold text-white">Confirm Deletion</h3>
+            <p class="text-xs text-slate-400">This action cannot be undone.</p>
+          </div>
+        </div>
+
+        <p class="text-sm text-slate-300 mb-6">
+          Are you sure you want to delete
+          <span class="font-semibold text-white">
+            {{ selectedRooms.size === 1 ? '1 room' : `${selectedRooms.size} selected rooms` }}
+          </span>
+          from your history?
+        </p>
+
+        <div class="flex items-center justify-end gap-3">
+          <button
+            @click="showDeleteModal = false"
+            class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition border border-slate-700"
+          >
+            Cancel
+          </button>
+          <button
+            @click="confirmDelete"
+            class="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold transition shadow-md"
+          >
+            Confirm Delete
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 </template>

@@ -18,13 +18,29 @@ import {
   UserMinus
 } from 'lucide-vue-next';
 
-defineProps<{
+import { onMounted, onUnmounted } from 'vue';
+
+const props = defineProps<{
   isOpen: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: 'close'): void;
 }>();
+
+const handleKeydown = (e: KeyboardEvent) => {
+  if (e.key === 'Escape' && props.isOpen) {
+    emit('close');
+  }
+};
+
+onMounted(() => {
+  window.addEventListener('keydown', handleKeydown);
+});
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown);
+});
 
 const roomStore = useRoomStore();
 const mentorStore = useMentorStore();
@@ -38,8 +54,11 @@ const sensitivities: { id: SensitivityLevel; name: string; desc: string }[] = [
 
 <template>
   <div v-if="isOpen" class="fixed inset-0 z-40 flex justify-end bg-black/60 backdrop-blur-xs">
+    <!-- Backdrop overlay for click-outside -->
+    <div class="absolute inset-0" @click="emit('close')"></div>
+
     <div
-      class="w-full max-w-md bg-slate-900 border-l border-slate-800 h-full flex flex-col shadow-2xl transition-transform duration-300"
+      class="relative w-full max-w-md bg-slate-900 border-l border-slate-800 h-full flex flex-col shadow-2xl transition-transform duration-300 z-10"
     >
       <!-- Header -->
       <div class="flex items-center justify-between p-4 border-b border-slate-800 bg-slate-950/60">

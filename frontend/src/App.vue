@@ -4,7 +4,11 @@ import ToastContainer from './components/ToastContainer.vue';
 
 <template>
   <div class="min-h-screen bg-slate-950 text-slate-100 selection:bg-sky-500 selection:text-white">
-    <router-view />
     <ToastContainer />
+    <router-view v-slot="{ Component }">
+      <transition name="fade" mode="out-in">
+        <component :is="Component" />
+      </transition>
+    </router-view>
   </div>
 </template>

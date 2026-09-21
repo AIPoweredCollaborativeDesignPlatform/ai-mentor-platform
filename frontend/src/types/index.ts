@@ -20,6 +20,17 @@ export interface MentorConfig {
   enableProcessIntervention: boolean;
 }
 
+export interface ToastMessage {
+  id: string;
+  message: string;
+  type: 'info' | 'success' | 'error';
+  actions?: {
+    label: string;
+    onClick: () => void;
+    type?: 'primary' | 'danger';
+  }[];
+}
+
 export interface MessageItem {
   id: string;
   senderUid: string;

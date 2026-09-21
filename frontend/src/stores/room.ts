@@ -18,9 +18,10 @@ import {
 
 export interface ToastMessage {
   id: string;
-  type: 'info' | 'success' | 'warning';
+  type: 'info' | 'success' | 'warning' | 'error';
   title: string;
   description: string;
+  actions?: { label: string; type?: 'primary' | 'danger'; onClick: () => void }[];
 }
 
 export const useRoomStore = defineStore('room', () => {
@@ -50,12 +51,20 @@ export const useRoomStore = defineStore('room', () => {
     return participantsList.value.filter(p => p.status === 'pending');
   });
 
-  const pushToast = (title: string, description: string, type: 'info' | 'success' | 'warning' = 'info') => {
+  const pushToast = (
+    title: string,
+    description: string,
+    type: 'info' | 'success' | 'warning' | 'error' = 'info',
+    actions?: { label: string; type?: 'primary' | 'danger'; onClick: () => void }[]
+  ) => {
     const id = `toast_${Date.now()}_${Math.random()}`;
-    toasts.value.push({ id, title, description, type });
-    setTimeout(() => {
-      toasts.value = toasts.value.filter(t => t.id !== id);
-    }, 6000);
+    toasts.value.push({ id, title, description, type, actions });
+    // Don't auto-dismiss if there are actions, wait for user interaction
+    if (!actions || actions.length === 0) {
+      setTimeout(() => {
+        toasts.value = toasts.value.filter(t => t.id !== id);
+      }, 6000);
+    }
   };
 
   const removeToast = (id: string) => {
@@ -114,7 +123,15 @@ export const useRoomStore = defineStore('room', () => {
 
         // Trigger Host Toast for new pending applicants
         if (isHost.value && p.status === 'pending' && !currentRoom.value?.participants[p.uid]) {
-          pushToast('New join request', `${p.displayName} is waiting for approval`, 'warning');
+          pushToast(
+            'New join request',
+            `${p.displayName} is waiting for approval`,
+            'info',
+            [
+              { label: 'Approve', type: 'primary', onClick: () => approveParticipant(p.uid) },
+              { label: 'Decline', type: 'danger', onClick: () => rejectParticipant(p.uid) }
+            ]
+          );
         }
       });
       currentRoom.value.participants = parts;

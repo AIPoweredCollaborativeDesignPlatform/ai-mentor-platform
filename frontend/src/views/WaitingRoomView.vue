@@ -55,7 +55,7 @@ const checkStatus = () => {
         roomStore.myStatus = 'kicked';
       }
     } else {
-      // User is not in participants list, auto-apply once auth is ready
+      // User is not in participants list locally yet, auto-apply
       if (authStore.uid && !hasApplied) {
         hasApplied = true;
         roomStore.applyToJoin(pin).catch((err) => {
@@ -94,11 +94,15 @@ const handleReapply = async () => {
   await roomStore.reapplyToJoin(pin);
 };
 
-watch(() => roomStore.myStatus, (newStatus) => {
-  if (newStatus === 'approved') {
-    router.replace(`/room/${roomId.value}`);
-  }
-});
+watch(
+  () => [roomStore.myStatus, roomStore.currentRoom?.participants?.[authStore.uid]?.status],
+  ([newStatus, partStatus]) => {
+    if (newStatus === 'approved' || partStatus === 'approved') {
+      router.replace(`/room/${roomId.value}`);
+    }
+  },
+  { immediate: true }
+);
 
 watch(() => roomStore.currentRoom, () => {
   checkStatus();
@@ -114,7 +118,13 @@ onMounted(async () => {
   generateFriendlyIdentity();
   
   // Verify room exists first!
-  const check = await roomStore.checkRoomExists(pin);
+  let check: { exists: boolean; roomName?: string } = { exists: false, roomName: '' };
+  if (roomStore.currentRoom?.pin === pin) {
+    check = { exists: true, roomName: roomStore.currentRoom.roomName || '' };
+  } else {
+    check = await roomStore.checkRoomExists(pin);
+  }
+  
   isCheckingRoom.value = false;
   if (!check.exists) {
     roomExists.value = false;
@@ -126,13 +136,25 @@ onMounted(async () => {
   setTimeout(checkStatus, 600);
 });
 
+const handleCancelAndBack = async () => {
+  await roomStore.cancelJoinRequest(pin);
+  router.push('/');
+};
+
 onUnmounted(() => {
-  roomStore.stopListening();
+  if (roomStore.myStatus === 'pending') {
+    roomStore.cancelJoinRequest(pin);
+  }
+  // If navigating back to home or away entirely, stop listening.
+  // If navigating to the room, MeetingRoomView will handle the listeners.
+  if (!route.path.startsWith('/room/')) {
+    roomStore.stopListening();
+  }
 });
 </script>
 
 <template>
-  <div class="h-screen flex items-center justify-center p-4 bg-slate-950">
+  <div class="min-h-[100dvh] flex items-center justify-center p-4 bg-slate-950 overflow-y-auto">
     <!-- Checking room loading state -->
     <div v-if="isCheckingRoom" class="text-center">
       <div class="w-10 h-10 border-2 border-sky-500 border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
@@ -174,10 +196,15 @@ onUnmounted(() => {
         <h2 class="text-xl font-bold text-white mb-1.5">
           Waiting for host approval...
         </h2>
-        <p class="text-xs sm:text-sm text-slate-400 leading-relaxed mb-5">
+        <p class="text-xs sm:text-sm text-slate-400 leading-relaxed mb-4">
           You've requested to join <span class="text-white font-semibold">"{{ targetRoomName || roomStore.currentRoom?.roomName || 'Meeting' }}"</span> (<span class="font-mono text-sky-400 font-semibold">{{ pin }}</span>).<br />
           You'll be redirected automatically once the host approves.
         </p>
+        
+        <div v-if="roomStore.currentRoom && roomStore.currentRoom.participants?.[roomStore.currentRoom.hostUid]?.isOnline === false" class="mb-5 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 text-[11px] font-medium text-left">
+          <ShieldAlert class="w-4 h-4 shrink-0" />
+          The host is currently offline and may take longer to approve your request.
+        </div>
 
         <!-- Identity Card with Edit Capability -->
         <div class="p-3.5 bg-slate-950/70 rounded-xl border border-slate-800 mb-5 text-left">
@@ -200,7 +227,7 @@ onUnmounted(() => {
                 v-model="customName"
                 type="text"
                 maxlength="20"
-                class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500"
+                class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-base sm:text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 min-h-[40px]"
                 placeholder="Enter name..."
               />
             </div>
@@ -255,12 +282,12 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <router-link
-          to="/"
+        <button
+          @click="handleCancelAndBack"
           class="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 transition"
         >
           <ArrowLeft class="w-3.5 h-3.5" /> Cancel and go back
-        </router-link>
+        </button>
       </div>
 
       <!-- Rejected or Kicked Status -->

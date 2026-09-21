@@ -2,7 +2,7 @@
 import { ref } from 'vue';
 import { Palette, Copy, Check } from 'lucide-vue-next';
 
-defineProps<{
+const props = defineProps<{
   assetData: any;
 }>();
 
@@ -17,8 +17,43 @@ const copyColor = (hex: string) => {
   }, 2000);
 };
 
-const openPreview = (url: string) => {
-  previewImage.value = url;
+const getImageUrl = (img: any, index: number) => {
+  if (typeof img === 'string') {
+    if (img.includes('image.pollinations.ai/prompt/')) {
+      return img.replace('&width=', '?width=').replace(/\?+/, '?');
+    }
+    return img;
+  }
+  if (img?.url) {
+    if (img.url.includes('image.pollinations.ai/prompt/')) {
+      return img.url.replace('&width=', '?width=').replace(/\?+/, '?');
+    }
+    return img.url;
+  }
+  const title = (props.assetData?.title || 'Design Concept').replace(/[&#]/g, ' ');
+  const kw = (img?.title || img?.caption || props.assetData?.keywords?.[index] || 'aesthetic').replace(/[&#]/g, ' ');
+  const prompt = encodeURIComponent(`${title} ${kw} high quality design rendering`);
+  return `https://image.pollinations.ai/prompt/${prompt}?width=600&height=450&nologo=true&seed=${index * 137 + 42}`;
+};
+
+const handleImgError = (e: Event, index: number) => {
+  const target = e.target as HTMLImageElement;
+  if (!target) return;
+  const fallbacks = [
+    'https://images.unsplash.com/photo-1618221195710-dd6b41faaea6?auto=format&fit=crop&w=600&h=450&q=80',
+    'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=600&h=450&q=80',
+    'https://images.unsplash.com/photo-1513694203232-719a280e022f?auto=format&fit=crop&w=600&h=450&q=80',
+    'https://images.unsplash.com/photo-1507652313519-d4e9174996dd?auto=format&fit=crop&w=600&h=450&q=80'
+  ];
+  target.src = fallbacks[index % fallbacks.length];
+};
+
+const openPreview = (e: MouseEvent) => {
+  const target = e.currentTarget as HTMLElement;
+  const img = target.querySelector('img');
+  if (img) {
+    previewImage.value = img.src;
+  }
 };
 
 const closePreview = () => {
@@ -51,22 +86,28 @@ const closePreview = () => {
       </span>
     </div>
 
-    <!-- Image Slices Grid -->
-    <div v-if="assetData?.slices?.length" class="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-3">
-      <div
-        v-for="(slice, i) in assetData.slices"
-        :key="i"
-        class="group relative rounded-xl overflow-hidden aspect-video bg-slate-900 border border-slate-800 cursor-pointer"
-        @click="openPreview(slice.url)"
-      >
-        <img
-          :src="slice.url"
-          :alt="slice.caption"
-          class="w-full h-full object-cover group-hover:scale-105 transition duration-300"
-          loading="lazy"
-        />
-        <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent flex items-end p-2 opacity-90">
-          <p class="text-[11px] text-slate-200 truncate">{{ slice.caption }}</p>
+    <!-- Concept Imagery Grid -->
+    <div v-if="(assetData?.images?.length || assetData?.slices?.length || assetData?.keywords?.length)" class="mb-3">
+      <h5 class="text-xs font-semibold text-slate-400 mb-1.5 flex items-center justify-between">
+        <span>Concept Imagery & Visual References</span>
+      </h5>
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+        <div
+          v-for="(img, i) in (assetData.images || assetData.slices || (assetData.keywords || ['concept']).slice(0, 3).map((kw: string) => ({ title: kw, caption: kw })))"
+          :key="i"
+          class="group relative rounded-xl overflow-hidden aspect-[4/3] bg-slate-900 border border-slate-800 cursor-pointer shadow hover:border-amber-500/50 transition duration-300"
+          @click="openPreview($event)"
+        >
+          <img
+            :src="getImageUrl(img, i)"
+            :alt="img?.title || img?.caption || 'Concept'"
+            @error="handleImgError($event, i)"
+            class="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+            loading="lazy"
+          />
+          <div class="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent flex items-end p-2 opacity-90">
+            <p class="text-[11px] text-slate-200 font-medium truncate">{{ img?.title || img?.caption || 'Concept Reference' }}</p>
+          </div>
         </div>
       </div>
     </div>

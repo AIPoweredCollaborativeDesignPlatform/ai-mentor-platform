@@ -19,18 +19,27 @@ service cloud.firestore {
     match /rooms/{roomId} {
       allow create: if isAuthenticated();
       allow read: if isAuthenticated();
-      allow update, delete: if isRoomHost(roomId);
+      allow update: if isAuthenticated() && (
+        isRoomHost(roomId) || 
+        resource.data.hostUid == request.auth.uid ||
+        request.resource.data.hostUid == request.auth.uid
+      );
+      allow delete: if isRoomHost(roomId);
 
       match /participants/{participantId} {
         allow create: if isAuthenticated() && 
-          request.auth.uid == participantId &&
-          request.resource.data.status == "pending";
+          request.auth.uid == participantId;
 
         allow read: if isAuthenticated() && 
           (isRoomHost(roomId) || request.auth.uid == participantId || isApprovedParticipant(roomId));
 
-        allow update: if isRoomHost(roomId);
-        allow delete: if isRoomHost(roomId) || request.auth.uid == participantId;
+        allow update: if isRoomHost(roomId) || (isAuthenticated() && request.auth.uid == participantId);
+        allow delete: if isRoomHost(roomId) || (isAuthenticated() && request.auth.uid == participantId);
+      }
+
+      match /typing/{typingId} {
+        allow read: if isAuthenticated();
+        allow create, update, delete: if isAuthenticated();
       }
 
       match /messages/{messageId} {

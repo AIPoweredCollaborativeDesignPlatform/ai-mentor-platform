@@ -4,6 +4,10 @@ import { auth, isFirebaseConfigured } from '../firebase/config';
 import {
   signInAnonymously,
   signInWithPopup,
+  signInWithRedirect,
+  linkWithPopup,
+  linkWithRedirect,
+  getRedirectResult,
   GoogleAuthProvider,
   signOut,
   onAuthStateChanged,
@@ -35,6 +39,29 @@ export const useAuthStore = defineStore('auth', () => {
 
   // Attach real Firebase listener if configured
   if (auth) {
+    // Check if we just came back from a redirect login/link
+    getRedirectResult(auth!).then((result) => {
+      if (result?.user) {
+        // If it was a redirect login/link, and we are here, it was successful.
+        // We will let onAuthStateChanged handle the state updates.
+      }
+    }).catch(async (err) => {
+      console.warn('Redirect sign-in error:', err);
+      if (err?.code === 'auth/credential-already-in-use') {
+         // The Google account is already used by another user.
+         // We must sign out of the anonymous account and sign in with the Google credential.
+         const credential = GoogleAuthProvider.credentialFromError(err);
+         if (credential && auth) {
+            // Need to sign out first to use the existing account
+            await signOut(auth);
+            // Sign in directly since we have the credential
+            // Actually, in redirect flow, getting credential from error requires prompt...
+            // the safest bet is to redirect again but as signIn instead of link.
+            await signInWithRedirect(auth, new GoogleAuthProvider());
+         }
+      }
+    });
+
     onAuthStateChanged(auth, (user) => {
       firebaseUser.value = user;
       if (user) {
@@ -59,6 +86,10 @@ export const useAuthStore = defineStore('auth', () => {
   // Real Anonymous Guest login
   const initGuestAuth = async () => {
     if (!auth) return;
+    // CRITICAL: If user was previously signed in with Google, DO NOT overwrite with anonymous sign-in!
+    if (localStorage.getItem('ai_mentor_google_linked') === 'true') {
+      return;
+    }
     try {
       if (!auth.currentUser) {
         const cred = await signInAnonymously(auth);
@@ -77,8 +108,50 @@ export const useAuthStore = defineStore('auth', () => {
     }
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
-    const result = await signInWithPopup(auth, provider);
-    const user = result.user;
+
+    const previousAnonUid = (auth.currentUser && auth.currentUser.isAnonymous)
+      ? auth.currentUser.uid
+      : null;
+
+    let user: User | null = null;
+    try {
+      if (auth.currentUser && auth.currentUser.isAnonymous) {
+        const result = await linkWithPopup(auth.currentUser, provider);
+        user = result.user;
+      } else {
+        const result = await signInWithPopup(auth, provider);
+        user = result.user;
+      }
+    } catch (err: any) {
+      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+      
+      if (err?.code === 'auth/credential-already-in-use') {
+        // If the Google account is already linked to another Firebase user, fallback to sign in
+        try {
+           const result = await signInWithPopup(auth, provider);
+           user = result.user;
+        } catch (innerErr: any) {
+           if (innerErr?.code === 'auth/popup-blocked' || isMobile) {
+              await signInWithRedirect(auth, provider);
+              return { success: true, user: auth.currentUser, previousAnonUid }; // Execution stops, page redirects
+           }
+           throw innerErr;
+        }
+      } else if (err?.code === 'auth/popup-blocked' || err?.code === 'auth/cancelled-popup-request' || isMobile) {
+        console.warn('Popup blocked or mobile device detected, using redirect instead...', err);
+        if (auth.currentUser && auth.currentUser.isAnonymous) {
+           await linkWithRedirect(auth.currentUser, provider);
+        } else {
+           await signInWithRedirect(auth, provider);
+        }
+        return { success: true, user: auth.currentUser, previousAnonUid }; // Execution stops, page redirects
+      } else {
+        throw err;
+      }
+    }
+    
+    if (!user) return { success: false };
+
     firebaseUser.value = user;
     uid.value = user.uid;
     email.value = user.email || '';
@@ -89,7 +162,7 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.setItem('ai_mentor_google_linked', 'true');
     localStorage.setItem('ai_mentor_email', email.value);
     localStorage.setItem('ai_mentor_name', displayName.value);
-    return { success: true, user };
+    return { success: true, user, previousAnonUid };
   };
 
   // Real Sign-out

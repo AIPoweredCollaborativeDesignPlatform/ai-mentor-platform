@@ -4,7 +4,7 @@ import type { MessageItem, MentorConfig } from '../types';
 export interface AiActionResponse {
   shouldIntervene: boolean;
   aiMessage?: string;
-  assetType?: 'parametric_3d' | 'mesh_3d' | 'moodboard' | 'summary' | 'contract';
+  assetType?: 'parametric_3d' | 'mesh_3d' | 'moodboard' | 'summary' | 'contract' | 'fact_check';
   assetData?: any;
 }
 
@@ -13,145 +13,129 @@ export async function analyzeDialogueWithGemini(
   config: MentorConfig,
   forced: boolean
 ): Promise<AiActionResponse> {
-  // Use VITE_GEMINI_API_KEY if present, otherwise fallback to a default/empty or prompt
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
+  // Use VITE_GEMINI_API_KEY if present, or fallback if placed in VITE_FIREBASE_API_KEY
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY || 
+    (import.meta.env.VITE_FIREBASE_API_KEY?.startsWith('AQ.') ? import.meta.env.VITE_FIREBASE_API_KEY : '');
+
   if (!apiKey) {
-    // If no real API key is provided, gracefully fallback to the smart heuristics mock
-    console.warn('[AI] No VITE_GEMINI_API_KEY found, using local fallback.');
-    return handleLocalFallback(messages, config, forced);
+    if (forced) {
+      return {
+        shouldIntervene: true,
+        aiMessage: "AI Mentor is currently offline: No Gemini API Key configured. Please configure VITE_GEMINI_API_KEY to activate live AI generation."
+      };
+    }
+    return { shouldIntervene: false };
   }
 
-  const genAI = new GoogleGenerativeAI(apiKey);
-  // Using gemini-2.5-flash as the fast, default model
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-
-  const latestMessage = messages[messages.length - 1];
+  const latestMessage = messages.length > 0 ? messages[messages.length - 1] : null;
   const fullText = messages.map(m => `${m.senderName}: ${m.content}`).join('\n');
-  const hasMention = latestMessage.content.toLowerCase().includes('@mentor');
+  const hasMention = forced || (latestMessage ? latestMessage.content.toLowerCase().includes('@mentor') : false);
   
   if (config.sensitivity === 'Strict' && !hasMention && !forced) {
     return { shouldIntervene: false };
   }
 
-  const systemInstruction = `You are an AI design mentor participating in a collaborative meeting.
-Your role is to mediate conflicts, suggest directions, and provide concrete assets when needed.
-The current sensitivity is ${config.sensitivity}.
-You have access to generate the following assets:
-${config.enable3D ? "- parametric_3d (JSON defining a 3D structure using cylinders/boxes)\n- mesh_3d (External URL to a GLB model)" : ""}
-${config.enableMoodboard ? "- moodboard (JSON defining a color palette and reference images)" : ""}
-${config.enableProcessIntervention ? "- summary (A text summary document of the meeting)" : ""}
+  const langNames: Record<string, string> = {
+    'en': 'English',
+    'zh-TW': 'Traditional Chinese (繁體中文)',
+    'ja': 'Japanese (日本語)',
+    'ko': 'Korean (한국어)'
+  };
+  const targetLang = langNames[config.meetingLanguage || 'en'] || 'English';
 
-Review the conversation history and the latest message.
-Determine if you should intervene. If the user explicitly asks for something via @Mentor, you MUST intervene and generate the requested asset.
-If you intervene, respond with a JSON object exactly matching this schema:
+  const systemInstruction = `You are an AI collaborative design mentor participating in a design meeting.
+Your role is to facilitate design consensus, provide design critique, fact-check specifications, and generate concrete assets when requested.
+The current sensitivity level is: ${config.sensitivity}.
+Active capabilities:
+${config.enable3D ? "- 3D Parametric model generation (assetType: 'parametric_3d')\n" : ""}
+${config.enableMoodboard ? "- Visual Mood Board creation with concept imagery (assetType: 'moodboard')\n" : ""}
+${config.enableFactRetrieval ? "- Fact Retrieval & Specification Verification (assetType: 'fact_check')\n" : ""}
+${config.enableProcessIntervention ? "- Structured Meeting Summary & Decision Tracking (assetType: 'summary')\n" : ""}
+
+MANDATORY LANGUAGE REQUIREMENT:
+The meeting working language is: ${targetLang}.
+You MUST generate ALL conversational text, titles, descriptions, analysis, and recommendations strictly in ${targetLang}.
+
+Review the conversation history and the latest user request.
+Determine if you should intervene.
+- If @Mentor is explicitly mentioned or forced, you MUST intervene (shouldIntervene = true).
+- If asked to summarize, produce a structured design summary with Objectives, Discussed Ideas, Consensus, and Next Steps.
+- If asked to fact check or verify a specification/material/dimension, provide verified information with sources/context. IMPORTANT: For the "references" array, you MUST provide REAL, DIRECT web URLs (starting with http:// or https://) that link directly to the standard's official page, a Wikipedia page, or a trusted source. DO NOT just output the name of the standard.
+- If asked for 3D model: Note that the 3D generation engine ONLY produces STATIC meshes. DO NOT claim to add animations, motion, physics, or rigging to the 3D model. If the user asks for animation, explicitly tell them that the current 3D engine only supports static models. (Output basic static dimensions, do not output any animation fields).
+- If asked for Moodboard, provide keywords, color palette, materials, and 2-4 concept image definitions with url: "https://image.pollinations.ai/prompt/" + encodeURIComponent(prompt) + "?width=600&height=400&nologo=true".
+
+Return ONLY a valid JSON object matching this schema:
 {
   "shouldIntervene": true,
-  "aiMessage": "A friendly message explaining what you generated",
-  "assetType": "parametric_3d" | "moodboard" | "summary" | null,
-  "assetData": { ... asset specific data ... }
-}
-If you should not intervene, return {"shouldIntervene": false}.
-Return ONLY the raw JSON object, no markdown blocks.`;
-
-  const prompt = `System Instruction:\n${systemInstruction}\n\nConversation History:\n${fullText}\n\nAnalyze the conversation and return the JSON response.`;
-
-  try {
-    const result = await model.generateContent(prompt);
-    let text = result.response.text();
-    text = text.replace(/```json/g, '').replace(/```/g, '').trim();
-    const data = JSON.parse(text) as AiActionResponse;
-    return data;
-  } catch (err) {
-    console.error('[AI] Gemini generation failed:', err);
-    return handleLocalFallback(messages, config, forced);
+  "aiMessage": "A concise, professional explanation of your guidance or asset in ${targetLang}",
+  "assetType": "parametric_3d" | "moodboard" | "summary" | "fact_check" | null,
+  "assetData": {
+    // For parametric_3d: { "title": string, "meshType": "group", "components": [ { "shape": "box"|"cylinder"|"sphere"|"torus", "dimensions": object, "position": object, "material": { "color": string, "roughness": number, "metalness": number }, "animation": { "type": "harmonic"|"bounce"|"pendulum"|"spin"|"pulse"|"wave", "axis": "x"|"y"|"z", "amplitude": number, "frequency": number, "phase"?: number, "damping"?: number, "acceleration"?: number } } ] }
+    // For moodboard: { "title": string, "description": string, "keywords": string[], "images": [ { "title": string, "prompt": string, "url": string } ], "palette": [ { "hex": string, "name": string } ], "materials": [ { "name": string, "feature": string } ] }
+    // For summary: { "title": string, "content": string (Markdown formatted with ## Objectives, ## Key Ideas, ## Consensus, ## Action Items) }
+    // For fact_check: { "claim": string, "verdict": string, "details": string, "references": string[] }
   }
 }
 
-// Smart Local Fallback for when no API key is present
-function handleLocalFallback(messages: MessageItem[], config: MentorConfig, forced: boolean): AiActionResponse {
-  const latestMessage = messages[messages.length - 1];
-  if (!latestMessage) return { shouldIntervene: false };
+If no intervention is warranted, return:
+{ "shouldIntervene": false }`;
 
-  const lower = latestMessage.content.toLowerCase();
-  const hasMention = lower.includes('@mentor') || forced;
+  const prompt = `System Instruction:\n${systemInstruction}\n\nConversation Transcript:\n${fullText}\n\nProvide the JSON response:`;
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const isPro = config.modelTier === 'pro';
   
-  if (config.sensitivity === 'Strict' && !hasMention) {
-    return { shouldIntervene: false };
-  }
+  // List models in order of verified availability and capability
+  const modelsToTry = isPro
+    ? [
+        'gemini-3.1-pro-preview',
+        'gemini-3.7-flash',
+        'gemini-3.6-flash',
+        'gemini-3.5-flash'
+      ]
+    : [
+        'gemini-3.7-flash',
+        'gemini-3.6-flash',
+        'gemini-3.5-flash',
+        'gemini-3.5-flash-lite'
+      ];
 
-  // 1. Check for Summary
-  if (lower.includes('summarize') || lower.includes('summary')) {
-    if (!config.enableProcessIntervention) return { shouldIntervene: false };
-    return {
-      shouldIntervene: true,
-      aiMessage: "Here is a summary of the discussion so far based on the chat history.",
-      assetType: 'summary',
-      assetData: {
-        title: "Meeting Summary",
-        content: messages.map(m => `- **${m.senderName}**: ${m.content}`).join('\n')
+  let lastError = '';
+  for (const modelName of modelsToTry) {
+    try {
+      const model = genAI.getGenerativeModel({
+        model: modelName,
+        generationConfig: {
+          responseMimeType: 'application/json'
+        }
+      });
+      const result = await model.generateContent(prompt);
+      let text = result.response.text();
+      const match = text.match(/\{[\s\S]*\}/);
+      const cleanText = match ? match[0] : text;
+      const parsed = JSON.parse(cleanText) as AiActionResponse;
+      
+      if (forced && !parsed.shouldIntervene) {
+        parsed.shouldIntervene = true;
+        if (!parsed.aiMessage) {
+          parsed.aiMessage = "Hello! I am your AI Design Mentor. How can I assist your design discussion?";
+        }
       }
-    };
+      return parsed;
+    } catch (err: any) {
+      lastError = err?.message || String(err);
+      console.warn(`[AI] ${modelName} call failed:`, lastError);
+    }
   }
 
-  // 2. Check for Moodboard
-  if (lower.includes('mood') || lower.includes('style') || lower.includes('palette') || lower.includes('color')) {
-    if (!config.enableMoodboard) return { shouldIntervene: false };
+  if (forced) {
+    let friendlyReason = lastError;
+    if (lastError.includes('402 Payment Required') || lastError.includes('credits are depleted')) {
+      friendlyReason = 'Gemini API credits depleted (402 Payment Required). Please top up or generate a new key on Google AI Studio.';
+    }
     return {
       shouldIntervene: true,
-      aiMessage: "Based on the discussion, here is a visual mood board for reference:",
-      assetType: 'moodboard',
-      assetData: {
-        title: "Visual Mood Board",
-        keywords: ["Modern Minimal", "Warm Textures", "Diffused Light"],
-        palette: [
-          { hex: "#2D3748", name: "Dark Slate" },
-          { hex: "#D97706", name: "Warm Amber" },
-          { hex: "#E2E8F0", name: "Chalk White" }
-        ],
-        materials: [
-          { name: "Natural Wood", feature: "Matte finish" },
-          { name: "Anodized Aluminum", feature: "Low-reflection" }
-        ],
-        slices: [
-          { url: "https://images.unsplash.com/photo-1618221195710-dd6b41faaea6?auto=format&fit=crop&w=600&q=80", caption: "Light & Volume" },
-          { url: "https://images.unsplash.com/photo-1586023492125-27b2c045efd7?auto=format&fit=crop&w=600&q=80", caption: "Organic Textures" }
-        ]
-      }
-    };
-  }
-
-  // 3. Check for 3D Prototype
-  if (lower.includes('3d') || lower.includes('model') || lower.includes('prototype') || lower.includes('car')) {
-    if (!config.enable3D) return { shouldIntervene: false };
-    return {
-      shouldIntervene: true,
-      aiMessage: "To help visualize the concept, here is a parametric 3D prototype based on your request:",
-      assetType: 'parametric_3d',
-      assetData: {
-        title: "Parametric 3D Prototype",
-        meshType: "group",
-        components: [
-          { shape: "box", dimensions: { width: 1.5, height: 0.5, depth: 3 }, position: { x: 0, y: 0.25, z: 0 }, material: { color: "#3B82F6", roughness: 0.4, metalness: 0.6 } },
-          { shape: "cylinder", dimensions: { radiusTop: 0.4, radiusBottom: 0.4, height: 0.2 }, position: { x: -0.8, y: 0.4, z: 1 }, material: { color: "#1F2937", roughness: 0.9, metalness: 0.1 } },
-          { shape: "cylinder", dimensions: { radiusTop: 0.4, radiusBottom: 0.4, height: 0.2 }, position: { x: 0.8, y: 0.4, z: 1 }, material: { color: "#1F2937", roughness: 0.9, metalness: 0.1 } },
-          { shape: "cylinder", dimensions: { radiusTop: 0.4, radiusBottom: 0.4, height: 0.2 }, position: { x: -0.8, y: 0.4, z: -1 }, material: { color: "#1F2937", roughness: 0.9, metalness: 0.1 } },
-          { shape: "cylinder", dimensions: { radiusTop: 0.4, radiusBottom: 0.4, height: 0.2 }, position: { x: 0.8, y: 0.4, z: -1 }, material: { color: "#1F2937", roughness: 0.9, metalness: 0.1 } }
-        ],
-        annotations: [
-          { label: "Main Body", position: { x: 0, y: 1, z: 0 } },
-          { label: "Wheelbase", position: { x: 0, y: 0.4, z: 1 } }
-        ]
-      }
-    };
-  }
-
-  // Catch-all response for mentions
-  if (hasMention) {
-    return {
-      shouldIntervene: true,
-      aiMessage: "I'm here to help! Try asking me to 'generate a 3D prototype', 'create a moodboard', or 'summarize the discussion'.",
-      assetType: undefined,
-      assetData: undefined
+      aiMessage: `AI Mentor could not connect to Gemini models (${isPro ? 'Pro' : 'Flash'}). Reason: ${friendlyReason}`
     };
   }
 

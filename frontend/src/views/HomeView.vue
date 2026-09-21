@@ -73,21 +73,27 @@ const handleJoinRoom = async () => {
   }
 };
 
+const authErrorMsg = ref('');
+
 const handleGoogleSignIn = async () => {
+  authErrorMsg.value = '';
   try {
     await authStore.upgradeWithGoogle();
   } catch (err: any) {
-    alert(`Sign-in error: ${err.message || err}`);
+    if (err?.code !== 'auth/popup-closed-by-user') {
+      authErrorMsg.value = err?.message || 'Google sign-in failed. Please try again.';
+      console.warn('Google sign-in error:', err);
+    }
   }
 };
 </script>
 
 <template>
-  <div class="h-screen flex flex-col items-center justify-center p-4 bg-gradient-to-b from-slate-900 via-slate-950 to-slate-900 overflow-hidden">
+  <div class="min-h-[100dvh] flex flex-col items-center justify-center p-4 sm:p-6 bg-gradient-to-b from-slate-900 via-slate-950 to-slate-900 overflow-y-auto">
     <!-- Brand / Header -->
     <div class="text-center max-w-xl mb-5">
-      <h1 class="text-2xl sm:text-3xl font-extrabold text-white tracking-tight mb-1.5">
-        <Sparkles class="w-5 h-5 sm:w-6 sm:h-6 inline-block text-sky-400 mr-1.5 -mt-1" />
+      <h1 class="text-xl sm:text-2xl font-black text-white mb-1.5 tracking-tight flex items-center justify-center gap-2">
+        <Sparkles class="w-5 h-5 sm:w-6 sm:h-6 inline-block text-sky-400 mr-1.5" />
         AI Mentor Platform
       </h1>
       <p class="text-slate-400 text-xs sm:text-sm">
@@ -100,14 +106,14 @@ const handleGoogleSignIn = async () => {
       <!-- Guest Profile Setup -->
       <section class="mb-5">
         <div class="flex items-center gap-3 mb-3">
-          <div class="text-2xl p-1.5 bg-slate-800 rounded-xl border border-slate-700">
+          <div class="text-2xl p-1.5 bg-slate-800 rounded-xl border border-slate-700 shrink-0">
             {{ selectedAvatar }}
           </div>
           <input
             v-model="inputName"
             type="text"
             placeholder="Enter your name..."
-            class="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500 transition"
+            class="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-base sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500 transition min-h-[44px]"
           />
         </div>
 
@@ -125,14 +131,19 @@ const handleGoogleSignIn = async () => {
         </div>
 
         <!-- Google Sign-in -->
-        <div v-if="!authStore.isGoogleLinked" class="pt-2 border-t border-slate-800/60 flex items-center justify-between">
-          <span class="text-xs text-slate-400">Sign in for cross-device sync</span>
-          <button
-            @click="handleGoogleSignIn"
-            class="inline-flex items-center gap-1.5 text-xs text-sky-400 hover:text-sky-300 font-medium px-3 py-1.5 rounded-xl border border-sky-500/30 bg-sky-500/10 hover:bg-sky-500/20 transition"
-          >
-            <LogIn class="w-3.5 h-3.5" /> Sign in with Google
-          </button>
+        <div v-if="!authStore.isGoogleLinked" class="pt-2 border-t border-slate-800/60">
+          <div class="flex items-center justify-between">
+            <span class="text-xs text-slate-400">Sign in for cross-device sync</span>
+            <button
+              @click="handleGoogleSignIn"
+              class="inline-flex items-center gap-1.5 text-xs text-sky-400 hover:text-sky-300 font-medium px-3 py-1.5 rounded-xl border border-sky-500/30 bg-sky-500/10 hover:bg-sky-500/20 transition"
+            >
+              <LogIn class="w-3.5 h-3.5" /> Sign in with Google
+            </button>
+          </div>
+          <p v-if="authErrorMsg" class="text-[11px] text-rose-400 mt-2 bg-rose-950/40 p-2 rounded-lg border border-rose-900/60 leading-relaxed">
+            {{ authErrorMsg }}
+          </p>
         </div>
         <div v-else class="pt-2 border-t border-slate-800/60 flex items-center justify-between text-xs">
           <span class="text-emerald-400 flex items-center gap-1">
@@ -154,12 +165,12 @@ const handleGoogleSignIn = async () => {
             v-model="roomNameInput"
             type="text"
             placeholder="Room name (optional)"
-            class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500 transition mb-2"
+            class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-base sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500 transition mb-2 min-h-[44px]"
           />
           <button
             @click="handleCreateRoom"
             :disabled="isLoading"
-            class="flex-1 flex flex-col justify-between p-4 rounded-xl bg-gradient-to-br from-sky-600 to-indigo-700 hover:from-sky-500 hover:to-indigo-600 text-white shadow-lg transition text-left group disabled:opacity-50"
+            class="flex-1 flex flex-col justify-between p-4 rounded-xl bg-gradient-to-br from-sky-600 to-indigo-700 hover:from-sky-500 hover:to-indigo-600 text-white shadow-lg transition text-left group disabled:opacity-50 min-h-[110px] cursor-pointer"
           >
             <div>
               <div class="p-2 bg-white/10 rounded-lg w-fit mb-2">
@@ -191,19 +202,24 @@ const handleGoogleSignIn = async () => {
               type="text"
               maxlength="6"
               placeholder="e.g. 849201"
-              class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-center text-sm tracking-widest font-mono text-white placeholder-slate-600 focus:outline-none focus:border-sky-500"
+              class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-center text-lg sm:text-base tracking-widest font-mono text-white placeholder-slate-600 focus:outline-none focus:border-sky-500 min-h-[44px]"
             />
             <p v-if="errorMsg" class="text-[11px] text-rose-400 mt-1">{{ errorMsg }}</p>
           </div>
           <button
             @click="handleJoinRoom"
             :disabled="isLoading"
-            class="mt-3 w-full py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs font-semibold transition disabled:opacity-50"
+            class="mt-3 w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs font-semibold transition disabled:opacity-50 min-h-[44px] cursor-pointer"
           >
             {{ isLoading ? 'Requesting...' : 'Request to Join' }}
           </button>
         </div>
       </div>
+    </div>
+
+    <!-- Subtle Version & Build Timestamp in normal flow -->
+    <div class="mt-4 text-center text-[10px] text-slate-600 font-mono select-none">
+      v1.6.6 · 2026-09-21 22:15
     </div>
   </div>
 </template>

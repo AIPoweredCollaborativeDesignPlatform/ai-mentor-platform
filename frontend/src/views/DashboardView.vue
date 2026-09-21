@@ -30,6 +30,7 @@ interface RoomHistoryItem {
   date: string;
   members: number;
   assetsCount: number;
+  preview?: string;
   timestamp: number;
 }
 
@@ -65,22 +66,44 @@ const cancelManageMode = () => {
 };
 
 onMounted(() => {
-  // Discover local sessions from localStorage
+  // Strict Auth Guard: Dashboard requires Google sign-in
+  if (!authStore.isGoogleLinked) {
+    router.replace('/');
+    return;
+  }
+
+  // Discover local sessions belonging to this user
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
     if (key && key.startsWith('ai_room_')) {
       try {
         const item = JSON.parse(localStorage.getItem(key) || '{}');
-        if (item.pin && !historyRooms.value.some(r => r.pin === item.pin)) {
-          const timestamp = item.createdAt || Date.now();
+        // Only show rooms where this user is host or participant
+        const isMyRoom = item.hostUid === authStore.uid || item.participants?.[authStore.uid];
+        if (isMyRoom && item.pin && !historyRooms.value.some(r => r.pin === item.pin)) {
+          const messages = item.messages || [];
+          const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
+          const lastActive = lastMsg ? lastMsg.timestamp : (item.createdAt || Date.now());
+          
+          let previewText = '';
+          if (lastMsg) {
+             const sender = lastMsg.senderUid === 'ai_mentor' ? 'AI' : (lastMsg.senderName || 'User');
+             let content = lastMsg.content || '';
+             if (lastMsg.type === 'file') content = '?? Attachment';
+             else if (lastMsg.type === 'ai_asset') content = '??AI Asset Generated';
+             previewText = `${sender}: ${content}`;
+             if (previewText.length > 50) previewText = previewText.substring(0, 50) + '...';
+          }
+          
           historyRooms.value.unshift({
             id: item.roomId || `room_${item.pin}`,
             pin: item.pin,
             title: item.roomName || `Meeting (${item.pin})`,
-            date: new Date(timestamp).toLocaleDateString(),
-            members: Object.keys(item.participants || {}).length || 1,
-            assetsCount: item.messages?.filter((m: any) => m.type === 'ai_asset')?.length || 0,
-            timestamp: timestamp
+            date: new Date(lastActive).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+            members: Object.keys(item.participants || {}).filter(k => item.participants[k].status === 'approved').length || 1,
+            assetsCount: item.assetsCount || (item.messages?.filter((m: any) => m.type === 'ai_asset')?.length) || 0,
+            preview: previewText,
+            timestamp: lastActive
           });
           // Collect assets from this room
           if (item.messages) {
@@ -140,12 +163,14 @@ const confirmDelete = async () => {
 
 const handleLogout = async () => {
   await authStore.logoutGoogle();
-  router.push('/');
+  historyRooms.value = [];
+  generatedAssets.value = [];
+  router.replace('/');
 };
 </script>
 
 <template>
-  <div class="min-h-screen bg-slate-950 text-slate-100 p-4 sm:p-6 pb-24">
+  <div class="min-h-[100dvh] bg-slate-950 text-slate-100 p-3.5 sm:p-6 pb-24 overflow-y-auto">
     <!-- Transient Trash Notification Banner -->
     <div
       v-if="trashNotification"
@@ -157,21 +182,22 @@ const handleLogout = async () => {
 
     <div class="max-w-5xl mx-auto">
       <!-- Top Bar -->
-      <div class="flex items-center justify-between pb-4 mb-6 border-b border-slate-800">
-        <div class="flex items-center gap-3">
+      <div class="flex items-center justify-between pb-4 mb-6 border-b border-slate-800 gap-2">
+        <div class="flex items-center gap-2.5 sm:gap-3 min-w-0">
           <router-link
             to="/"
-            class="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition border border-slate-800"
+            class="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition border border-slate-800 shrink-0"
           >
             <ArrowLeft class="w-5 h-5" />
           </router-link>
-          <div>
-            <h1 class="text-xl font-bold text-white flex items-center gap-2">
-              <LayoutDashboard class="w-5 h-5 text-sky-400" />
+          <div class="min-w-0">
+            <h1 class="text-lg sm:text-xl font-bold text-white flex items-center gap-2 truncate">
+              <LayoutDashboard class="w-4 h-4 sm:w-5 sm:h-5 text-sky-400 shrink-0" />
               Dashboard
+              
             </h1>
-            <p class="text-xs text-slate-400 mt-0.5">
-              <span class="text-sky-400 font-mono">{{ authStore.email }}</span>
+            <p class="text-xs text-slate-400 mt-0.5 truncate">
+              <span class="text-sky-400 font-mono truncate block max-w-[130px] xs:max-w-[200px] sm:max-w-none">{{ authStore.email }}</span>
             </p>
           </div>
         </div>
@@ -275,12 +301,16 @@ const handleLogout = async () => {
                 <span class="text-[11px] text-slate-500">{{ room.date }}</span>
               </div>
 
-              <h3 class="font-bold text-slate-100 text-sm mb-1.5 group-hover:text-sky-400 transition">
+              <h3 class="font-bold text-slate-100 text-sm mb-1 group-hover:text-sky-400 transition truncate">
                 {{ room.title }}
               </h3>
-              <p class="text-[11px] text-slate-400">
-                {{ room.members }} members · {{ room.assetsCount }} assets
+              <p class="text-[11px] text-slate-400 mb-2">
+                {{ room.members }} members
               </p>
+              
+              <div v-if="room.preview" class="p-2 rounded-lg bg-slate-950/50 border border-slate-800 text-xs text-slate-300 truncate">
+                {{ room.preview }}
+              </div>
             </div>
 
             <!-- Open Button (Only in non-manage mode) -->
@@ -369,6 +399,11 @@ const handleLogout = async () => {
           </button>
         </div>
       </div>
+    </div>
+
+    <!-- Version badge in normal document flow -->
+    <div class="mt-12 text-center text-[10px] text-slate-600 font-mono select-none">
+      v1.6.6 · 2026-09-21 22:15
     </div>
   </div>
 </template>

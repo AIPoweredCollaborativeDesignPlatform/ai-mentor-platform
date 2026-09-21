@@ -1,5 +1,15 @@
 {
   "projects": {
     "default": "ai-mentor-web"
-  }
+  },
+  "targets": {
+    "ai-mentor-web": {
+      "storage": {
+        "main": [
+          "ai-mentor-web.firebasestorage.app"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }

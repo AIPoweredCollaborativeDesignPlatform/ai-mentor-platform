@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, nextTick } from 'vue';
 import '@google/model-viewer';
 import {
   Layers,
@@ -67,9 +67,37 @@ const recommendedFilename = computed(() => {
   return `${baseName}.glb`;
 });
 
+const centerAndFrameModel = () => {
+  if (!modelViewerRef.value) return;
+  const mv = modelViewerRef.value;
+  try {
+    if (typeof mv.updateFraming === 'function') {
+      mv.updateFraming();
+    }
+    if (typeof mv.getBoundingBoxCenter === 'function') {
+      const center = mv.getBoundingBoxCenter();
+      if (center && typeof center.x === 'number' && typeof center.y === 'number' && typeof center.z === 'number') {
+        mv.cameraTarget = `${center.x}m ${center.y}m ${center.z}m`;
+      }
+    }
+    mv.cameraOrbit = 'auto auto 105%';
+    mv.fieldOfView = 'auto';
+    if (typeof mv.jumpCameraToGoal === 'function') {
+      mv.jumpCameraToGoal();
+    }
+  } catch (err) {
+    console.warn('[ModelViewer] Auto centering failed:', err);
+  }
+};
+
 const handleLoad = () => {
   isLoading.value = false;
   isModelInteractive.value = true;
+  nextTick(() => {
+    centerAndFrameModel();
+    // Re-verify after small render frame to ensure tight bounds are populated
+    setTimeout(centerAndFrameModel, 100);
+  });
 };
 
 const handleError = (e: any) => {
@@ -92,14 +120,7 @@ const zoomOut = () => {
 };
 
 const resetView = () => {
-  if (modelViewerRef.value) {
-    modelViewerRef.value.cameraOrbit = 'auto auto auto';
-    modelViewerRef.value.cameraTarget = 'auto auto auto';
-    modelViewerRef.value.fieldOfView = 'auto';
-    if (typeof modelViewerRef.value.jumpCameraToGoal === 'function') {
-      modelViewerRef.value.jumpCameraToGoal();
-    }
-  }
+  centerAndFrameModel();
 };
 
 // Download GLB model file with proper filename via Proxy Content-Disposition
@@ -179,29 +200,29 @@ const submitRefine = () => {
 </script>
 
 <template>
-  <div class="mt-3 bg-slate-950/90 border border-indigo-500/30 rounded-2xl p-4 shadow-2xl relative w-full">
+  <div class="mt-3 bg-slate-950/90 border border-indigo-500/30 rounded-2xl p-3 sm:p-4 shadow-2xl relative w-full">
     <!-- Header info -->
-    <div class="flex items-center justify-between mb-2">
-      <div class="flex items-center gap-2">
-        <Layers class="w-5 h-5 text-indigo-400" />
-        <h4 class="font-semibold text-slate-100 text-sm tracking-wide">
+    <div class="flex items-center justify-between mb-2 gap-2">
+      <div class="flex items-center gap-2 min-w-0">
+        <Layers class="w-5 h-5 text-indigo-400 shrink-0" />
+        <h4 class="font-semibold text-slate-100 text-sm tracking-wide truncate">
           {{ assetData?.title || '3D Neural Mesh' }}
         </h4>
-        <span class="text-[9px] text-slate-500 font-mono border border-slate-700/50 rounded px-1.5 py-0.5 ml-1">v1.6.6</span>
+        <span class="text-[9px] text-slate-500 font-mono border border-slate-700/50 rounded px-1.5 py-0.5 ml-1 shrink-0">v1.6.7</span>
         <span
           v-if="assetData?.isRefined"
-          class="text-[10px] bg-emerald-500/20 text-emerald-300 font-mono px-2 py-0.5 rounded-full border border-emerald-500/30 flex items-center gap-1"
+          class="text-[10px] bg-emerald-500/20 text-emerald-300 font-mono px-2 py-0.5 rounded-full border border-emerald-500/30 flex items-center gap-1 shrink-0"
         >
           <Palette class="w-2.5 h-2.5" /> PBR Colored
         </span>
         <span
           v-else
-          class="text-[10px] bg-indigo-500/20 text-indigo-300 font-mono px-2 py-0.5 rounded-full border border-indigo-500/30 flex items-center gap-1"
+          class="text-[10px] bg-indigo-500/20 text-indigo-300 font-mono px-2 py-0.5 rounded-full border border-indigo-500/30 flex items-center gap-1 shrink-0"
         >
           <Sparkles class="w-2.5 h-2.5" /> Meshy 3D Mesh
         </span>
       </div>
-      <span class="text-xs text-slate-400 font-medium hidden sm:block">
+      <span class="text-xs text-slate-400 font-medium hidden sm:block shrink-0">
         {{ assetData?.provider || 'Meshy.ai Engine' }}
       </span>
     </div>
@@ -274,8 +295,16 @@ const submitRefine = () => {
           <span class="text-slate-500">•</span>
           <span class="text-indigo-400 font-mono text-[11px]">watertight mesh</span>
         </div>
-        <!-- Enable Interactive 3D button -->
-        <div class="absolute bottom-3 right-3 flex flex-col items-end gap-1">
+        <!-- Poster Action Buttons (Interactive & Download) -->
+        <div class="absolute bottom-3 right-3 flex items-center gap-2">
+          <button
+            @click="downloadModel"
+            class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold shadow-lg transition cursor-pointer"
+            title="Download GLB"
+          >
+            <Download class="w-3.5 h-3.5 text-indigo-400" />
+            <span>Download GLB</span>
+          </button>
           <button
             v-if="!isRehosting && assetData?.taskId"
             @click.stop="reHostModel"
@@ -283,7 +312,7 @@ const submitRefine = () => {
             title="Enable Interactive 3D"
           >
             <RefreshCw class="w-3.5 h-3.5" />
-            Enable Interactive 3D
+            <span>Interactive 3D</span>
           </button>
           <div
             v-if="isRehosting"
@@ -292,12 +321,12 @@ const submitRefine = () => {
             <Loader2 class="w-3.5 h-3.5 animate-spin" />
             <span class="max-w-[160px] truncate">{{ rehostError || 'Processing...' }}</span>
           </div>
-          <p v-if="rehostError && !isRehosting" class="text-[10px] text-red-400 max-w-[180px] text-right">{{ rehostError }}</p>
         </div>
       </div>
 
-      <!-- Floating Toolbar in Bottom-Right -->
-      <div v-if="isModelInteractive" class="absolute bottom-3 right-3 flex items-center gap-1.5 bg-slate-950/90 backdrop-blur-md p-1.5 rounded-xl border border-slate-700/70 shadow-xl z-20">
+      <!-- Unified Parallel Controls in Bottom-Right (Eliminates extra bottom row!) -->
+      <div v-if="isModelInteractive" class="absolute bottom-3 right-3 flex items-center gap-1 bg-slate-950/90 backdrop-blur-md p-1.5 rounded-xl border border-slate-700/80 shadow-2xl z-20">
+        <!-- Zoom & Reset Controls -->
         <button
           @click="zoomIn"
           class="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
@@ -306,7 +335,6 @@ const submitRefine = () => {
           <ZoomIn class="w-4 h-4" />
         </button>
         <button
-          v-if="isModelInteractive"
           @click="zoomOut"
           class="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
           title="Zoom Out (-)"
@@ -314,12 +342,33 @@ const submitRefine = () => {
           <ZoomOut class="w-4 h-4" />
         </button>
         <button
-          v-if="isModelInteractive"
           @click="resetView"
           class="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
-          title="Reset Camera Angle"
+          title="Reset Camera Angle & Center"
         >
           <RotateCcw class="w-4 h-4" />
+        </button>
+
+        <div class="h-4 w-px bg-slate-700 mx-1"></div>
+
+        <!-- AI Refine Color Button -->
+        <button
+          v-if="assetData?.taskId && !assetData?.isRefined && message"
+          @click="openRefineModal"
+          class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white font-medium text-xs shadow transition cursor-pointer"
+        >
+          <Sparkles class="w-3.5 h-3.5" />
+          <span>Refine Color</span>
+        </button>
+
+        <!-- Download GLB Button (Parallel with tools) -->
+        <button
+          @click="downloadModel"
+          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-md shadow-indigo-950/40 transition cursor-pointer"
+          title="Download GLB with suggested name"
+        >
+          <Download class="w-3.5 h-3.5" />
+          <span>Download GLB</span>
         </button>
       </div>
 
@@ -330,28 +379,6 @@ const submitRefine = () => {
       >
         Drag to rotate 360° · Shift + Scroll to zoom
       </div>
-    </div>
-
-    <!-- Actions Bar (Direct Download & AI Refine) -->
-    <div class="mt-3 flex items-center justify-end gap-2.5 text-xs">
-      <!-- Download Model Button -->
-      <button
-        @click="downloadModel"
-        class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold shadow-md shadow-indigo-950/40 transition cursor-pointer"
-      >
-        <Download class="w-4 h-4" />
-        <span>Download GLB</span>
-      </button>
-
-      <!-- Refine/Texture Trigger -->
-      <button
-        v-if="assetData?.taskId && !assetData?.isRefined && message"
-        @click="openRefineModal"
-        class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white font-medium shadow-md shadow-purple-950/40 transition cursor-pointer"
-      >
-        <Sparkles class="w-4 h-4" />
-        <span>AI Refine Color</span>
-      </button>
     </div>
 
     <!-- Custom Refine Prompt Modal -->

@@ -60,12 +60,27 @@ const selected3DEngine = ref<'meshy' | 'tripo' | 'threejs'>(
 );
 const meshyApiKey = ref(getStoredMeshyApiKey());
 const tripoApiKey = ref(getStoredTripoApiKey());
+const geminiApiKey = ref(localStorage.getItem('ai_gemini_api_key') || '');
 const engineSavedMsg = ref('');
 
 const handleSelectEngine = (engine: 'meshy' | 'tripo' | 'threejs') => {
   selected3DEngine.value = engine;
   localStorage.setItem('ai_3d_engine', engine);
   engineSavedMsg.value = `Active 3D Engine: ${engine === 'meshy' ? 'Meshy.ai' : engine === 'tripo' ? 'Tripo3D' : 'Three.js'}`;
+  setTimeout(() => (engineSavedMsg.value = ''), 2500);
+};
+
+const handleSaveGeminiKey = () => {
+  const val = geminiApiKey.value.trim();
+  if (val) {
+    localStorage.setItem('ai_gemini_api_key', val);
+    (window as any).__SHARED_GEMINI_KEY__ = val;
+    engineSavedMsg.value = 'Google Gemini API Key saved!';
+  } else {
+    localStorage.removeItem('ai_gemini_api_key');
+    delete (window as any).__SHARED_GEMINI_KEY__;
+    engineSavedMsg.value = 'Gemini API Key removed';
+  }
   setTimeout(() => (engineSavedMsg.value = ''), 2500);
 };
 
@@ -424,6 +439,42 @@ const sensitivities: { id: SensitivityLevel; name: string; desc: string }[] = [
               </div>
               <p class="text-[10px] text-slate-400">Complex reasoning & deep design critique</p>
             </button>
+          </div>
+
+          <!-- 3.0 Google Gemini API Key -->
+          <div class="mt-3 p-3 bg-slate-950/70 rounded-xl border border-slate-800 space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-semibold text-sky-400 flex items-center gap-1.5">
+                <Sparkles class="w-3.5 h-3.5" />
+                Google Gemini API Key
+              </span>
+              <a
+                href="https://aistudio.google.com/app/apikey"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-[10px] text-sky-400 hover:underline flex items-center gap-0.5"
+              >
+                Get Key ↗
+              </a>
+            </div>
+            <p class="text-[11px] text-slate-400 leading-relaxed">
+              Connect your <strong>Google AI Studio</strong> Gemini API key for full AI dialogue, critique, and structured consensus:
+            </p>
+            <div class="flex items-center gap-2">
+              <input
+                v-model="geminiApiKey"
+                @change="handleSaveGeminiKey"
+                type="password"
+                placeholder="Gemini Key (AIzaSy...)"
+                class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-sky-500 font-mono"
+              />
+              <button
+                @click="handleSaveGeminiKey"
+                class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold shrink-0 transition"
+              >
+                Save
+              </button>
+            </div>
           </div>
 
           <!-- 3.1 3D Generation Engine (Meshy.ai & Tripo3D) -->

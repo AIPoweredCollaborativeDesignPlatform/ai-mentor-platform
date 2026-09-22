@@ -70,6 +70,7 @@ export const useRoomStore = defineStore('room', () => {
     aiStatus.value = 'idle';
     aiStatusDetail.value = `Ready (${mentorStore.config.modelTier === 'pro' ? 'Pro' : 'Flash'})`;
     generating3DStatus.value = '';
+    typingUsers.value = typingUsers.value.filter(u => u.uid !== 'ai_mentor' && u.uid !== 'ai_mentor_3d');
     if (db && currentRoom.value) {
       deleteDoc(doc(db, 'rooms', currentRoom.value.roomId, 'typing', 'ai_mentor')).catch(() => {});
       deleteDoc(doc(db, 'rooms', currentRoom.value.roomId, 'typing', 'ai_mentor_3d')).catch(() => {});
@@ -151,6 +152,9 @@ export const useRoomStore = defineStore('room', () => {
         }
       }
     });
+
+    // Also sweep stale typing indicators (> 5s)
+    typingUsers.value = typingUsers.value.filter(u => now - u.timestamp < 5000);
   };
 
   // Detach listeners & clear presence timers
@@ -1173,6 +1177,7 @@ export const useRoomStore = defineStore('room', () => {
       }
     } finally {
       isAnalyzing.value = false;
+      typingUsers.value = typingUsers.value.filter(u => u.uid !== 'ai_mentor' && u.uid !== 'ai_mentor_3d');
       lastAiCallTime.value = Date.now();
       aiCooldownRemaining.value = 8;
       aiStatus.value = 'cooldown';
@@ -1180,6 +1185,7 @@ export const useRoomStore = defineStore('room', () => {
       // Clear AI typing indicator
       if (db && currentRoom.value) {
         deleteDoc(doc(db, 'rooms', currentRoom.value.roomId, 'typing', 'ai_mentor')).catch(() => {});
+        deleteDoc(doc(db, 'rooms', currentRoom.value.roomId, 'typing', 'ai_mentor_3d')).catch(() => {});
       }
 
       clearInterval(cooldownTimer);

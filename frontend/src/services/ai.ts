@@ -8,25 +8,47 @@ export interface AiActionResponse {
   assetData?: any;
 }
 
+export function getStoredGeminiApiKey(): string {
+  return (
+    localStorage.getItem('ai_gemini_api_key') ||
+    (window as any).__SHARED_GEMINI_KEY__ ||
+    import.meta.env.VITE_GEMINI_API_KEY ||
+    ''
+  );
+}
+
+export function setStoredGeminiApiKey(key: string) {
+  if (key) {
+    localStorage.setItem('ai_gemini_api_key', key.trim());
+    (window as any).__SHARED_GEMINI_KEY__ = key.trim();
+  } else {
+    localStorage.removeItem('ai_gemini_api_key');
+    delete (window as any).__SHARED_GEMINI_KEY__;
+  }
+}
+
 export async function analyzeDialogueWithGemini(
   messages: MessageItem[],
   config: MentorConfig,
   forced: boolean,
   abortSignal?: AbortSignal
 ): Promise<AiActionResponse> {
-  // Use localStorage, VITE_GEMINI_API_KEY, or fallback
-  const apiKey =
-    localStorage.getItem('ai_gemini_api_key') ||
-    (window as any).__SHARED_GEMINI_KEY__ ||
-    import.meta.env.VITE_GEMINI_API_KEY ||
-    (import.meta.env.VITE_FIREBASE_API_KEY?.startsWith('AQ.') ? import.meta.env.VITE_FIREBASE_API_KEY : '');
+  const apiKey = getStoredGeminiApiKey();
+
+  const langNames: Record<string, string> = {
+    en: 'English',
+    'zh-TW': 'Traditional Chinese (繁體中文)',
+    ja: 'Japanese (日本語)',
+    ko: 'Korean (한국어)'
+  };
+  const targetLang = langNames[config.meetingLanguage || 'zh-TW'] || 'Traditional Chinese';
 
   if (!apiKey) {
     if (forced) {
       return {
         shouldIntervene: true,
         aiMessage:
-          'AI Mentor is currently offline: No Gemini API Key configured. Please configure VITE_GEMINI_API_KEY to activate live AI generation.'
+          '💡 [AI Mentor]: Please configure a free Google AI Studio Gemini API Key in Host Controls (⚙️) to enable live AI reasoning and parametric synthesis. (Get a key at https://aistudio.google.com/app/apikey).'
       };
     }
     return { shouldIntervene: false };
@@ -38,14 +60,6 @@ export async function analyzeDialogueWithGemini(
   if (config.sensitivity === 'Strict' && !hasMention && !forced) {
     return { shouldIntervene: false };
   }
-
-  const langNames: Record<string, string> = {
-    en: 'English',
-    'zh-TW': 'Traditional Chinese (繁體中文)',
-    ja: 'Japanese (日本語)',
-    ko: 'Korean (한국어)'
-  };
-  const targetLang = langNames[config.meetingLanguage || 'zh-TW'] || 'Traditional Chinese';
 
   const fullText = messages
     .slice(-15) // Keep last 15 messages for richer context
@@ -137,13 +151,16 @@ If no intervention is warranted, return:
 
   if (forced) {
     let friendlyReason = lastError;
-    if (lastError.includes('402 Payment Required') || lastError.includes('credits are depleted')) {
+    if (lastError.includes('404') || lastError.includes('not supported') || lastError.includes('API_KEY_INVALID')) {
       friendlyReason =
-        'Gemini API credits depleted (402 Payment Required). Please top up or generate a new key on Google AI Studio.';
+        'The configured Google Gemini API Key is invalid or does not have Generative Language API access. Please obtain a free key from Google AI Studio (https://aistudio.google.com/app/apikey) and configure it in Host Controls (⚙️).';
+    } else if (lastError.includes('402 Payment Required') || lastError.includes('credits are depleted') || lastError.includes('RESOURCE_EXHAUSTED')) {
+      friendlyReason =
+        'Gemini API credits depleted or rate limit reached. Please try again shortly or configure a new key on Google AI Studio.';
     }
     return {
       shouldIntervene: true,
-      aiMessage: `AI Mentor could not connect to Gemini models (${isPro ? 'Pro' : 'Flash'}). Reason: ${friendlyReason}`
+      aiMessage: `⚠️ AI Mentor (${isPro ? 'Pro' : 'Flash'}): ${friendlyReason}`
     };
   }
 

@@ -905,7 +905,7 @@ onUnmounted(() => {
 
       <!-- AI Mentor Analyzing / Thinking Bubble (Global & Real-time) -->
       <div
-        v-if="roomStore.isAnalyzing || roomStore.typingUsers.some(u => u.uid === 'ai_mentor' || u.uid === 'ai_mentor_3d')"
+        v-if="roomStore.isAnalyzing || (roomStore.aiStatus === 'analyzing' && roomStore.typingUsers.some(u => u.uid === 'ai_mentor' || u.uid === 'ai_mentor_3d'))"
         class="flex items-center gap-3 px-3.5 py-2 rounded-2xl bg-slate-900/90 border border-sky-500/40 text-xs text-slate-200 w-fit animate-fade-in shadow-xl my-2 ml-1"
       >
         <span class="text-base leading-none animate-pulse">✨</span>

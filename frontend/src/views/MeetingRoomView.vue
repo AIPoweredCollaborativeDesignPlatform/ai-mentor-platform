@@ -604,7 +604,7 @@ onUnmounted(() => {
               {{ roomStore.onlineParticipants.length }} / {{ roomStore.approvedParticipants.length }} 在線
             </span>
             <span v-if="roomStore.isHost" class="text-amber-400 font-medium">● Host</span>
-            <span class="text-[10px] text-slate-500 font-mono hidden sm:inline">v1.7.0</span>
+            <span class="text-[10px] text-slate-500 font-mono hidden sm:inline">v1.7.1</span>
           </div>
         </div>
       </div>

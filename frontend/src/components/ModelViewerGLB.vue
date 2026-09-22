@@ -373,7 +373,7 @@ onUnmounted(() => {
         <h4 class="font-semibold text-slate-100 text-sm tracking-wide truncate">
           {{ assetData?.title || '3D Neural Mesh' }}
         </h4>
-        <span class="text-[9px] text-slate-500 font-mono border border-slate-700/50 rounded px-1.5 py-0.5 ml-1 shrink-0">v1.7.0</span>
+        <span class="text-[9px] text-slate-500 font-mono border border-slate-700/50 rounded px-1.5 py-0.5 ml-1 shrink-0">v1.7.1</span>
         <span
           v-if="assetData?.isRefined"
           class="text-[10px] bg-emerald-500/20 text-emerald-300 font-mono px-2 py-0.5 rounded-full border border-emerald-500/30 flex items-center gap-1 shrink-0"

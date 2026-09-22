@@ -16,14 +16,17 @@ service cloud.firestore {
         get(/databases/$(database)/documents/rooms/$(roomId)/participants/$(request.auth.uid)).data.status == "approved";
     }
 
+    match /users/{userId} {
+      allow read, write: if isAuthenticated() && request.auth.uid == userId;
+      match /{allSubcollections=**} {
+        allow read, write: if isAuthenticated() && request.auth.uid == userId;
+      }
+    }
+
     match /rooms/{roomId} {
       allow create: if isAuthenticated();
       allow read: if isAuthenticated();
-      allow update: if isAuthenticated() && (
-        isRoomHost(roomId) || 
-        resource.data.hostUid == request.auth.uid ||
-        request.resource.data.hostUid == request.auth.uid
-      );
+      allow update: if isAuthenticated();
       allow delete: if isRoomHost(roomId);
 
       match /participants/{participantId} {

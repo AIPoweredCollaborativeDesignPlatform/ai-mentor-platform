@@ -19,6 +19,7 @@ import {
   limit,
   writeBatch,
   increment,
+  arrayUnion,
   type Unsubscribe
 } from 'firebase/firestore';
 
@@ -216,6 +217,20 @@ export const useRoomStore = defineStore('room', () => {
         if (data.mentorConfig) {
           mentorStore.config = data.mentorConfig;
         }
+        if (db && authStore.uid) {
+          setDoc(
+            doc(db, 'users', authStore.uid, 'rooms', roomId),
+            {
+              roomId,
+              pin: data.pin || roomId.replace('room_', ''),
+              roomName: data.roomName || `Meeting (${data.pin})`,
+              hostUid: data.hostUid,
+              lastActive: (data as any).lastActive || data.createdAt || Date.now(),
+              updatedAt: Date.now()
+            },
+            { merge: true }
+          ).catch(() => {});
+        }
       }
     });
     unsubs.push(unsubRoom);
@@ -407,12 +422,26 @@ export const useRoomStore = defineStore('room', () => {
           pin,
           roomName: displayRoomName,
           hostUid: authStore.uid,
+          participantUids: [authStore.uid],
           createdAt: Date.now(),
+          lastActive: Date.now(),
           roomStatus: 'active',
-          mentorConfig: mentorStore.config
+          mentorConfig: mentorStore.config,
+          assetsCount: 0
         });
         await setDoc(doc(db, 'rooms', roomId, 'participants', authStore.uid), hostUser);
         await addDoc(collection(db, 'rooms', roomId, 'messages'), newRoom.messages[0]);
+        if (authStore.uid) {
+          setDoc(doc(db, 'users', authStore.uid, 'rooms', roomId), {
+            roomId,
+            pin,
+            roomName: displayRoomName,
+            hostUid: authStore.uid,
+            role: 'host',
+            createdAt: Date.now(),
+            lastActive: Date.now()
+          }, { merge: true }).catch(() => {});
+        }
         startFirestoreListener(roomId);
       } catch (err) {
         console.warn('[Firestore] createRoom fallback:', err);
@@ -464,6 +493,20 @@ export const useRoomStore = defineStore('room', () => {
       try {
         startFirestoreListener(roomId);
         await setDoc(doc(db, 'rooms', roomId, 'participants', authStore.uid), applicant);
+        updateDoc(doc(db, 'rooms', roomId), {
+          participantUids: arrayUnion(authStore.uid),
+          lastActive: Date.now()
+        }).catch(() => {});
+        if (authStore.uid) {
+          setDoc(doc(db, 'users', authStore.uid, 'rooms', roomId), {
+            roomId,
+            pin,
+            roomName: roomInfo.roomName || `Meeting ${pin}`,
+            role: isUserHost ? 'host' : 'participant',
+            joinedAt: Date.now(),
+            lastActive: Date.now()
+          }, { merge: true }).catch(() => {});
+        }
       } catch (err) {
         console.warn('[Firestore] applyToJoin fallback:', err);
       }
@@ -597,6 +640,15 @@ export const useRoomStore = defineStore('room', () => {
         const { status, id, ...payload } = optimisticMsg;
         await addDoc(collection(db, 'rooms', currentRoom.value.roomId, 'messages'), payload);
         optimisticMsg.status = 'delivered';
+        updateDoc(doc(db, 'rooms', currentRoom.value.roomId), {
+          lastActive: Date.now(),
+          lastMessage: {
+            content: text.trim().slice(0, 100),
+            senderName: authStore.displayName,
+            senderUid: authStore.uid,
+            timestamp: Date.now()
+          }
+        }).catch(() => {});
       } catch (e) {
         console.warn('[Firestore] sendMessage error:', e);
         optimisticMsg.status = 'failed';
@@ -656,6 +708,15 @@ export const useRoomStore = defineStore('room', () => {
         const { status, id, ...payload } = optimisticMsg;
         await addDoc(collection(db, 'rooms', currentRoom.value.roomId, 'messages'), payload);
         optimisticMsg.status = 'delivered';
+        updateDoc(doc(db, 'rooms', currentRoom.value.roomId), {
+          lastActive: Date.now(),
+          lastMessage: {
+            content: caption ? caption.slice(0, 100) : `📎 ${fileData.name}`,
+            senderName: authStore.displayName,
+            senderUid: authStore.uid,
+            timestamp: Date.now()
+          }
+        }).catch(() => {});
       } catch (e) {
         console.warn('[Firestore] sendFileMessage error:', e);
         optimisticMsg.status = 'failed';
@@ -1159,11 +1220,19 @@ export const useRoomStore = defineStore('room', () => {
         const { id, status, ...payload } = aiMsg;
         const docRef = await addDoc(collection(db, 'rooms', currentRoom.value.roomId, 'messages'), payload);
         aiMsg.id = docRef.id;
+        const updatePayload: any = {
+          lastActive: Date.now(),
+          lastMessage: {
+            content: assetType ? (assetType === 'parametric_3d' || assetType === 'mesh_3d' ? '🎨 3D Model Generated' : '✨ AI Asset Generated') : content.slice(0, 100),
+            senderName: 'AI Mentor',
+            senderUid: 'ai_mentor',
+            timestamp: Date.now()
+          }
+        };
         if (assetType) {
-          await updateDoc(doc(db, 'rooms', currentRoom.value.roomId), {
-            assetsCount: increment(1)
-          });
+          updatePayload.assetsCount = increment(1);
         }
+        await updateDoc(doc(db, 'rooms', currentRoom.value.roomId), updatePayload);
       } catch (e) {
         console.warn('[AI Message] Firestore addDoc failed:', e);
       }

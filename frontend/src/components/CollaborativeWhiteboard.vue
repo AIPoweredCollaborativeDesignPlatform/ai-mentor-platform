@@ -117,24 +117,24 @@ const updateStickyToolbar = () => {
     if (coords && coords.length >= 4) {
       const minSceneX = Math.min(coords[0].x, coords[1].x, coords[2].x, coords[3].x);
       const maxSceneX = Math.max(coords[0].x, coords[1].x, coords[2].x, coords[3].x);
-      const minSceneY = Math.min(coords[0].y, coords[1].y, coords[2].y, coords[3].y);
+      const maxSceneY = Math.max(coords[0].y, coords[1].y, coords[2].y, coords[3].y);
       const midSceneX = (minSceneX + maxSceneX) / 2;
 
       const screenX = midSceneX * vpt[0] + vpt[4];
-      const screenY = minSceneY * vpt[3] + vpt[5];
+      const screenY = maxSceneY * vpt[3] + vpt[5];
 
       stickyToolbarPosition.value = {
         x: screenX,
-        y: Math.max(20, screenY - 72), // Well clear of the top rotation handle (mtr)
+        y: screenY + 12,
         visible: true
       };
     } else {
       const bound = active.getBoundingRect(true);
       const screenX = (bound.left + bound.width / 2) * vpt[0] + vpt[4];
-      const screenY = bound.top * vpt[3] + vpt[5];
+      const screenY = (bound.top + bound.height) * vpt[3] + vpt[5];
       stickyToolbarPosition.value = {
         x: screenX,
-        y: Math.max(20, screenY - 72),
+        y: screenY + 12,
         visible: true
       };
     }
@@ -171,9 +171,9 @@ const updateSelectionState = () => {
   );
   if (active && (active.type?.toLowerCase() === 'activeselection' || active._objects)) {
     const targets = active.getObjects ? active.getObjects() : active._objects;
-    isObjectLocked.value = targets.length > 0 && targets.every((o: any) => o.isLocked);
+    isObjectLocked.value = targets.length > 0 && targets.every((o: any) => o.isLocked === true);
   } else {
-    isObjectLocked.value = !!(active && active.isLocked);
+    isObjectLocked.value = !!(active && active.isLocked === true);
   }
   updateStickyToolbar();
 };
@@ -715,10 +715,14 @@ const initFabric = () => {
     height: wrapperRef.value.clientHeight
   });
 
-  // Guard against browser native context menu anywhere on upper canvas
-  canvas.upperCanvasEl.addEventListener('contextmenu', (e: MouseEvent) => {
+  // Guard against browser native context menu anywhere on canvas wrapper and elements
+  const blockCanvasContextMenu = (e: MouseEvent) => {
     e.preventDefault();
-  }, { capture: true });
+    e.stopPropagation();
+  };
+  canvas.upperCanvasEl.addEventListener('contextmenu', blockCanvasContextMenu, { capture: true });
+  canvas.lowerCanvasEl?.addEventListener('contextmenu', blockCanvasContextMenu, { capture: true });
+  canvas.wrapperEl?.addEventListener('contextmenu', blockCanvasContextMenu, { capture: true });
 
   // Override collectObjects for precise entity-level marquee selection
   const originalCollectObjects = (canvas as any).collectObjects;
@@ -1582,6 +1586,7 @@ const spawnStickyNote = (x: number, y: number, colorCfg = selectedStickyColor.va
   (note as any).isStickyNote = true;
   (note as any).stickyColorConfig = colorCfg;
   (note as any).minHeight = 180;
+  (note as any).isLocked = false;
 
   // Guarantee square baseline, auto dynamic height expansion on multi-line text, and centered text/cursor
   const origCalcTextHeight = note.calcTextHeight.bind(note);
@@ -1612,6 +1617,10 @@ const spawnStickyNote = (x: number, y: number, colorCfg = selectedStickyColor.va
 
 const changeStickyNoteColor = (note: any, colorCfg: StickyColorConfig) => {
   if (!canvas || !note) return;
+  const wasEditing = !!note.isEditing;
+  const selStart = note.selectionStart;
+  const selEnd = note.selectionEnd;
+
   note.set({
     backgroundColor: colorCfg.bg,
     fill: colorCfg.text
@@ -1622,6 +1631,15 @@ const changeStickyNoteColor = (note: any, colorCfg: StickyColorConfig) => {
   saveHistoryState();
   syncToFirebase();
   updateStickyToolbar();
+
+  if (wasEditing) {
+    note.enterEditing();
+    if (typeof selStart === 'number' && typeof selEnd === 'number') {
+      note.selectionStart = selStart;
+      note.selectionEnd = selEnd;
+    }
+    note.hiddenTextarea?.focus();
+  }
 };
 
 const duplicateStickyNote = async (note: any) => {
@@ -1885,15 +1903,20 @@ const deleteSelected = () => {
   const activeObjects = canvas.getActiveObjects();
   if (!activeObjects.length) return;
 
-  const lockedObjects = activeObjects.filter((obj: any) => obj.isLocked || obj.lockMovementX);
-  const deletable = activeObjects.filter((obj: any) => !obj.isLocked && !obj.lockMovementX);
+  const lockedObjects = activeObjects.filter((obj: any) => obj.isLocked === true);
+  const deletable = activeObjects.filter((obj: any) => obj.isLocked !== true);
 
   if (lockedObjects.length > 0) {
     displayToast('Locked objects cannot be deleted (Unlock with Ctrl+L first)');
   }
 
   if (deletable.length) {
-    deletable.forEach(obj => canvas?.remove(obj));
+    deletable.forEach((obj: any) => {
+      if (obj.isEditing && obj.exitEditing) {
+        obj.exitEditing();
+      }
+      canvas?.remove(obj);
+    });
     canvas.discardActiveObject();
     canvas.requestRenderAll();
     saveHistoryState();
@@ -2193,20 +2216,63 @@ const handleConfirmSave = () => {
 // Keyboard Shortcuts
 const handleKeydown = (e: KeyboardEvent) => {
   const activeObj = canvas?.getActiveObject() as any;
-  if (activeObj?.isEditing) return;
-
   const targetTag = (e.target as HTMLElement)?.tagName?.toLowerCase();
-  if (targetTag === 'input' || targetTag === 'textarea') return;
+  const isInputTarget = targetTag === 'input' || (targetTag === 'textarea' && !(e.target as HTMLElement)?.classList.contains('fabric-canvas-textarea'));
 
-  // ESC exits Group Isolation Mode
+  // If focused in external app input elements (e.g. AI prompt), ignore canvas shortcuts
+  if (isInputTarget) return;
+
+  // 1. ESC: Exit sticky/text editing or Group Isolation Mode
   if (e.key === 'Escape') {
+    if (activeObj?.isEditing) {
+      e.preventDefault();
+      activeObj.exitEditing();
+      canvas?.requestRenderAll();
+      updateSelectionState();
+      return;
+    }
     if (isIsolationMode.value) {
       e.preventDefault();
       exitGroupIsolation();
       return;
     }
+    return;
   }
 
+  // 2. Ctrl+Enter: Confirm and exit sticky/text editing
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    if (activeObj?.isEditing) {
+      e.preventDefault();
+      activeObj.exitEditing();
+      canvas?.requestRenderAll();
+      updateSelectionState();
+      return;
+    }
+  }
+
+  // 3. Ctrl+S: Quick save whiteboard state anytime (even while typing)
+  if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+    e.preventDefault();
+    e.stopPropagation();
+    handleQuickSave();
+    return;
+  }
+
+  // 4. Ctrl+L: Lock / Unlock selected object (exit text editing first if active)
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'l' || e.key === 'L')) {
+    e.preventDefault();
+    if (activeObj?.isEditing) {
+      activeObj.exitEditing();
+    }
+    toggleLockSelected();
+    return;
+  }
+
+  // When actively editing text inside a sticky note or text object, allow typing/editing keys
+  // (Backspace, Delete, Arrow keys, Ctrl+A, Ctrl+C, Ctrl+V, Ctrl+X, Ctrl+Z) to be handled naturally by Fabric's hidden textarea
+  if (activeObj?.isEditing) return;
+
+  // Whiteboard object-level shortcuts (when NOT editing text)
   if (e.key === 'Delete' || e.key === 'Backspace') {
     if (activeObj) {
       e.preventDefault();
@@ -2237,9 +2303,6 @@ const handleKeydown = (e: KeyboardEvent) => {
     } else {
       groupObjects();
     }
-  } else if ((e.ctrlKey || e.metaKey) && (e.key === 'l' || e.key === 'L')) {
-    e.preventDefault();
-    toggleLockSelected();
   } else if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
     e.preventDefault();
     e.stopPropagation();
@@ -2393,8 +2456,11 @@ const generateAIObject = async () => {
 };
 
 const handleContextMenuCapture = (e: MouseEvent) => {
-  e.preventDefault();
-  e.stopPropagation();
+  const target = e.target as Node;
+  if (wrapperRef.value && (wrapperRef.value === target || wrapperRef.value.contains(target))) {
+    e.preventDefault();
+    e.stopPropagation();
+  }
 };
 
 onMounted(() => {
@@ -2402,6 +2468,7 @@ onMounted(() => {
   window.addEventListener('click', handleWindowClick);
   window.addEventListener('paste', handleGlobalPaste);
   window.addEventListener('beforeunload', handleBeforeUnload);
+  window.addEventListener('contextmenu', handleContextMenuCapture, { capture: true });
   if (wrapperRef.value) {
     wrapperRef.value.addEventListener('contextmenu', handleContextMenuCapture, { capture: true });
   }
@@ -2415,6 +2482,7 @@ onUnmounted(() => {
   window.removeEventListener('click', handleWindowClick);
   window.removeEventListener('paste', handleGlobalPaste);
   window.removeEventListener('beforeunload', handleBeforeUnload);
+  window.removeEventListener('contextmenu', handleContextMenuCapture, { capture: true });
   if (wrapperRef.value) {
     wrapperRef.value.removeEventListener('contextmenu', handleContextMenuCapture, { capture: true });
   }
@@ -2508,7 +2576,7 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- Floating Quick-Action Bar above Selected Sticky Note -->
+      <!-- Floating Quick-Action Bar below Selected Sticky Note -->
       <div
         v-if="stickyToolbarPosition.visible && activeStickyNote"
         class="absolute z-30 flex items-center gap-1.5 p-1.5 bg-slate-900/95 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl transition-all animate-in fade-in zoom-in-95 pointer-events-auto"
@@ -2516,7 +2584,7 @@ onUnmounted(() => {
         :style="{
           left: `${stickyToolbarPosition.x}px`,
           top: `${stickyToolbarPosition.y}px`,
-          transform: 'translate(-50%, -100%)'
+          transform: 'translate(-50%, 0)'
         }"
       >
         <div class="flex items-center gap-1 px-1">

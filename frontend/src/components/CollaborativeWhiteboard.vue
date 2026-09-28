@@ -4,7 +4,7 @@ import { useRoomStore } from '../stores/room';
 import { useAuthStore } from '../stores/auth';
 import * as fabric from 'fabric';
 import {
-  X, Pencil, Image as ImageIcon, Undo2, Trash2, Maximize, Minimize, Check, Loader2, Sparkles, Send, Radio, Settings2, MousePointer2, Type, Square, Circle, Triangle, Minus, Group, Ungroup, BringToFront, SendToBack, MoveUp, MoveDown, Copy, Scissors, ClipboardPaste, AlertTriangle, AlertCircle, RefreshCw, ChevronDown, ChevronUp, StickyNote, MoreHorizontal
+  X, Pencil, Image as ImageIcon, Undo2, Trash2, Maximize, Minimize, Check, Loader2, Sparkles, Send, Radio, Settings2, MousePointer2, Type, Square, Circle, Triangle, Minus, Group, Ungroup, BringToFront, SendToBack, MoveUp, MoveDown, Copy, Scissors, ClipboardPaste, AlertTriangle, AlertCircle, RefreshCw, ChevronDown, ChevronUp, StickyNote, MoreHorizontal, Lock, Unlock, HelpCircle
 } from 'lucide-vue-next';
 import { generateSvgForWhiteboard } from '../services/ai';
 
@@ -28,9 +28,12 @@ const authStore = useAuthStore();
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 const fileInputRef = ref<HTMLInputElement | null>(null);
 const wrapperRef = ref<HTMLDivElement | null>(null);
-const stickyTextareaRef = ref<HTMLTextAreaElement | null>(null);
 
 let canvas: fabric.Canvas | null = null;
+
+// Workspace boundary (3200x2000px)
+const WORKSPACE_WIDTH = 3200;
+const WORKSPACE_HEIGHT = 2000;
 
 const activeColor = ref('#0f172a'); // Dark slate for drawing on light background
 const strokeWidth = ref(4);
@@ -66,18 +69,6 @@ const isStickyMenuOpen = ref(false);
 const activeStickyNote = ref<any>(null);
 const stickyToolbarPosition = ref({ x: 0, y: 0, visible: false });
 
-const editingSticky = ref<{
-  group: any;
-  textObj: any;
-  text: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  bg: string;
-  textColor: string;
-} | null>(null);
-
 const isBrushMenuOpen = ref(false);
 const currentTool = ref('draw'); // 'select', 'draw', 'text', 'sticky', 'rect', 'circle', 'triangle', 'line'
 
@@ -91,6 +82,25 @@ const contextMenu = ref({ visible: false, x: 0, y: 0 });
 const hasSelection = ref(false);
 const isMultiSelection = ref(false);
 const isGroupSelected = ref(false);
+const isObjectLocked = ref(false);
+
+// Group Isolation Mode (Illustrator style)
+const isIsolationMode = ref(false);
+let isolatedGroup: fabric.Group | null = null;
+let isolatedItems: any[] = [];
+
+// Hover highlight & toast & cheatsheet
+const isHoveringSend = ref(false);
+const toastMsg = ref('');
+const showToast = ref(false);
+let toastTimer: any = null;
+const displayToast = (msg: string) => {
+  toastMsg.value = msg;
+  showToast.value = true;
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { showToast.value = false; }, 2500);
+};
+const showShortcutsModal = ref(false);
 
 const updateStickyToolbar = () => {
   if (!canvas) {
@@ -98,9 +108,9 @@ const updateStickyToolbar = () => {
     stickyToolbarPosition.value.visible = false;
     return;
   }
-  const active = canvas.getActiveObject();
-  if (active && (active.type === 'group' && ((active as any).isStickyNote || (active as any).stickyColor))) {
-    activeStickyNote.value = active as fabric.Group;
+  const active = canvas.getActiveObject() as any;
+  if (active && (active.isStickyNote || (active.type === 'textbox' && active.stickyColorConfig))) {
+    activeStickyNote.value = active;
     const bound = active.getBoundingRect();
     const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
     const zoom = canvas.getZoom();
@@ -109,7 +119,7 @@ const updateStickyToolbar = () => {
     const screenW = bound.width * zoom;
     stickyToolbarPosition.value = {
       x: screenX + screenW / 2,
-      y: Math.max(10, screenY - 12),
+      y: Math.max(10, screenY - 50), // Position higher to not block top rotation handle (mtr)
       visible: true
     };
   } else {
@@ -123,14 +133,16 @@ const updateSelectionState = () => {
     hasSelection.value = false;
     isMultiSelection.value = false;
     isGroupSelected.value = false;
+    isObjectLocked.value = false;
     activeStickyNote.value = null;
     stickyToolbarPosition.value.visible = false;
     return;
   }
-  const active = canvas.getActiveObject();
+  const active = canvas.getActiveObject() as any;
   hasSelection.value = !!active;
   isMultiSelection.value = active?.type === 'activeSelection';
   isGroupSelected.value = active?.type === 'group';
+  isObjectLocked.value = !!(active && active.isLocked);
   updateStickyToolbar();
 };
 
@@ -275,7 +287,23 @@ const initFabric = () => {
     });
   };
 
-  // Render light dot grid that scales and pans with zoom and pan
+  // Clamps viewport pan to prevent dragging workspace infinitely into the void
+  const clampViewportPan = () => {
+    if (!canvas || !wrapperRef.value) return;
+    const vpt = canvas.viewportTransform;
+    if (!vpt) return;
+    const zoom = canvas.getZoom();
+    const w = wrapperRef.value.clientWidth;
+    const h = wrapperRef.value.clientHeight;
+    const minX = w - WORKSPACE_WIDTH * zoom - 150;
+    const maxX = 150;
+    const minY = h - WORKSPACE_HEIGHT * zoom - 150;
+    const maxY = 150;
+    vpt[4] = Math.min(maxX, Math.max(minX, vpt[4]));
+    vpt[5] = Math.min(maxY, Math.max(minY, vpt[5]));
+  };
+
+  // Render workspace background with dark gray mask outside boundary
   canvas.on('before:render', () => {
     if (!canvas) return;
     const ctx = canvas.getContext();
@@ -283,40 +311,69 @@ const initFabric = () => {
     const width = canvas.getWidth();
     const height = canvas.getHeight();
 
-    // 1. Fill crisp light background
+    // 1. Fill outer space with dark slate mask
     ctx.save();
-    ctx.fillStyle = '#f8fafc';
+    ctx.fillStyle = '#1e293b';
     ctx.fillRect(0, 0, width, height);
 
-    // 2. Draw responsive dot grid
+    // 2. Calculate workspace boundary on screen
     const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
     const zoom = canvas.getZoom();
-    const panX = vpt[4];
-    const panY = vpt[5];
+    const screenX = vpt[4];
+    const screenY = vpt[5];
+    const screenW = WORKSPACE_WIDTH * zoom;
+    const screenH = WORKSPACE_HEIGHT * zoom;
 
+    // 3. Fill bounded workspace with light background
+    ctx.fillStyle = '#f8fafc';
+    ctx.fillRect(screenX, screenY, screenW, screenH);
+
+    // 4. Draw dot grid ONLY inside workspace boundary
     const baseSpacing = 28;
     const screenSpacing = baseSpacing * zoom;
 
     if (screenSpacing >= 8) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(screenX, screenY, screenW, screenH);
+      ctx.clip();
+
       ctx.fillStyle = '#cbd5e1';
       const dotRadius = Math.max(0.75, Math.min(2.0, 1.1 * Math.sqrt(zoom)));
 
-      const startX = ((panX % screenSpacing) + screenSpacing) % screenSpacing;
-      const startY = ((panY % screenSpacing) + screenSpacing) % screenSpacing;
+      const startX = screenX + (((0 - screenX) % screenSpacing + screenSpacing) % screenSpacing);
+      const startY = screenY + (((0 - screenY) % screenSpacing + screenSpacing) % screenSpacing);
 
-      for (let x = startX; x < width; x += screenSpacing) {
-        for (let y = startY; y < height; y += screenSpacing) {
+      for (let x = startX; x < screenX + screenW; x += screenSpacing) {
+        for (let y = startY; y < screenY + screenH; y += screenSpacing) {
           ctx.beginPath();
           ctx.arc(x, y, dotRadius, 0, Math.PI * 2);
           ctx.fill();
         }
       }
+      ctx.restore();
     }
+
+    // 5. Draw subtle workspace boundary border
+    ctx.strokeStyle = '#94a3b8';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(screenX, screenY, screenW, screenH);
+
     ctx.restore();
   });
 
   updateBrush();
   saveHistoryState(); // Initial empty state
+
+  // Center workspace in initial canvas view
+  if (wrapperRef.value) {
+    const w = wrapperRef.value.clientWidth;
+    const h = wrapperRef.value.clientHeight;
+    const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
+    vpt[4] = Math.round((w - WORKSPACE_WIDTH) / 2);
+    vpt[5] = Math.round((h - WORKSPACE_HEIGHT) / 2);
+    canvas.setViewportTransform(vpt);
+  }
 
   // Selection change listeners
   canvas.on('selection:created', updateSelectionState);
@@ -344,7 +401,7 @@ const initFabric = () => {
   canvas.on('text:editing:exited', (e) => {
     if (!canvas) return;
     const textObj = e.target as any;
-    if (!textObj.text.trim() || textObj.text === 'Type here...') {
+    if (!textObj.text?.trim() || textObj.text === 'Type here...' || textObj.text === 'Type note here...') {
       canvas.remove(textObj);
       canvas.requestRenderAll();
       saveHistoryState();
@@ -361,15 +418,17 @@ const initFabric = () => {
     if (opt.e.ctrlKey) {
       let zoom = canvas.getZoom();
       zoom *= 0.999 ** delta;
-      if (zoom > 20) zoom = 20;
-      if (zoom < 0.05) zoom = 0.05;
+      if (zoom > 5) zoom = 5;
+      if (zoom < 0.2) zoom = 0.2;
       canvas.zoomToPoint({ x: opt.e.offsetX, y: opt.e.offsetY } as fabric.Point, zoom);
+      clampViewportPan();
       opt.e.preventDefault();
       opt.e.stopPropagation();
     } else if (opt.e.altKey) {
       const vpt = canvas.viewportTransform;
       if (vpt) {
         vpt[4] -= delta;
+        clampViewportPan();
         canvas.requestRenderAll();
       }
       opt.e.preventDefault();
@@ -378,6 +437,7 @@ const initFabric = () => {
       const vpt = canvas.viewportTransform;
       if (vpt) {
         vpt[5] -= delta;
+        clampViewportPan();
         canvas.requestRenderAll();
       }
       opt.e.preventDefault();
@@ -493,7 +553,7 @@ const initFabric = () => {
       };
 
       if (currentTool.value === 'rect') drawingObject = new fabric.Rect({ ...options, width: 0, height: 0 });
-      else if (currentTool.value === 'circle') drawingObject = new fabric.Circle({ ...options, radius: 0, lockUniScaling: true });
+      else if (currentTool.value === 'circle') drawingObject = new fabric.Ellipse({ ...options, originX: 'center', originY: 'center', rx: 0, ry: 0 });
       else if (currentTool.value === 'triangle') drawingObject = new fabric.Triangle({ ...options, width: 0, height: 0 });
       else if (currentTool.value === 'line') drawingObject = new fabric.Line([scenePoint.x, scenePoint.y, scenePoint.x, scenePoint.y], { ...options });
 
@@ -511,6 +571,7 @@ const initFabric = () => {
       if (vpt) {
         vpt[4] += e.clientX - lastPosX;
         vpt[5] += e.clientY - lastPosY;
+        clampViewportPan();
         canvas.requestRenderAll();
       }
       lastPosX = e.clientX;
@@ -522,21 +583,21 @@ const initFabric = () => {
     const scenePoint = canvas.getScenePoint(e);
 
     if (currentTool.value === 'rect' || currentTool.value === 'triangle') {
-      drawingObject.set({
-        width: Math.abs(scenePoint.x - drawingStartPoint.x),
-        height: Math.abs(scenePoint.y - drawingStartPoint.y),
-      });
-      if (scenePoint.x < drawingStartPoint.x) drawingObject.set({ left: scenePoint.x });
-      if (scenePoint.y < drawingStartPoint.y) drawingObject.set({ top: scenePoint.y });
+      const left = Math.min(scenePoint.x, drawingStartPoint.x);
+      const top = Math.min(scenePoint.y, drawingStartPoint.y);
+      const width = Math.abs(scenePoint.x - drawingStartPoint.x);
+      const height = Math.abs(scenePoint.y - drawingStartPoint.y);
+      drawingObject.set({ left, top, width, height });
     } else if (currentTool.value === 'circle') {
-      const dx = scenePoint.x - drawingStartPoint.x;
-      const dy = scenePoint.y - drawingStartPoint.y;
-      const side = Math.max(Math.abs(dx), Math.abs(dy));
-      const radius = side / 2;
+      const minX = Math.min(scenePoint.x, drawingStartPoint.x);
+      const minY = Math.min(scenePoint.y, drawingStartPoint.y);
+      const rx = Math.abs(scenePoint.x - drawingStartPoint.x) / 2;
+      const ry = Math.abs(scenePoint.y - drawingStartPoint.y) / 2;
       drawingObject.set({
-        radius,
-        left: dx >= 0 ? drawingStartPoint.x : drawingStartPoint.x - side,
-        top: dy >= 0 ? drawingStartPoint.y : drawingStartPoint.y - side,
+        left: minX + rx,
+        top: minY + ry,
+        rx,
+        ry
       });
     } else if (currentTool.value === 'line') {
       drawingObject.set({ x2: scenePoint.x, y2: scenePoint.y });
@@ -559,7 +620,7 @@ const initFabric = () => {
       if (currentTool.value === 'rect' || currentTool.value === 'triangle') {
         isTooSmall = (drawingObject.width || 0) < 5 || (drawingObject.height || 0) < 5;
       } else if (currentTool.value === 'circle') {
-        isTooSmall = (drawingObject.radius || 0) < 3;
+        isTooSmall = (drawingObject.rx || 0) < 3 || (drawingObject.ry || 0) < 3;
       } else if (currentTool.value === 'line') {
         const dx = (drawingObject.x2 || 0) - (drawingObject.x1 || 0);
         const dy = (drawingObject.y2 || 0) - (drawingObject.y1 || 0);
@@ -571,13 +632,6 @@ const initFabric = () => {
         canvas.requestRenderAll();
       } else {
         drawingObject.set({ selectable: true, evented: true, perPixelTargetFind: true });
-        if (currentTool.value === 'circle') {
-          drawingObject.set({ lockUniScaling: true });
-          drawingObject.setControlVisible('mt', false);
-          drawingObject.setControlVisible('mb', false);
-          drawingObject.setControlVisible('ml', false);
-          drawingObject.setControlVisible('mr', false);
-        }
         drawingObject.setCoords();
         canvas.setActiveObject(drawingObject);
         canvas.requestRenderAll();
@@ -591,15 +645,35 @@ const initFabric = () => {
     }
   });
 
-  // Double click for sticky notes text editing
+  // Double click for sticky notes inline editing or group isolation mode
   canvas.on('mouse:dblclick', (opt) => {
     const target = opt.target as any;
-    if (target && target.type === 'group' && (target.isStickyNote || target.stickyColor)) {
-      openStickyEditor(target);
+    if (!target) return;
+    if (target.isStickyNote && target.enterEditing) {
+      target.enterEditing();
+      return;
+    }
+    if (target.type === 'group' && !target.isStickyNote && !isIsolationMode.value) {
+      enterGroupIsolation(target as fabric.Group);
     }
   });
 
-  canvas.on('object:moving', updateStickyToolbar);
+  // Clamp moving objects within workspace boundary
+  canvas.on('object:moving', (e: any) => {
+    const obj = e.target;
+    if (obj) {
+      const bound = obj.getBoundingRect(true);
+      if (obj.left < 0) obj.left = 0;
+      if (obj.top < 0) obj.top = 0;
+      if (obj.left + (bound.width || 0) > WORKSPACE_WIDTH) {
+        obj.left = Math.max(0, WORKSPACE_WIDTH - (bound.width || 0));
+      }
+      if (obj.top + (bound.height || 0) > WORKSPACE_HEIGHT) {
+        obj.top = Math.max(0, WORKSPACE_HEIGHT - (bound.height || 0));
+      }
+    }
+    updateStickyToolbar();
+  });
   canvas.on('object:scaling', updateStickyToolbar);
   canvas.on('object:rotating', updateStickyToolbar);
 
@@ -741,155 +815,169 @@ const pasteSelection = async (targetPoint?: { x: number; y: number }) => {
   updateSelectionState();
 };
 
-// Sticky Note Actions
-const openStickyEditor = (group: any) => {
-  if (!canvas || !group) return;
-  const items = group.getObjects ? group.getObjects() : [];
-  const rectObj = items.find((o: any) => o.type === 'rect') as fabric.Rect;
-  const textObj = items.find((o: any) => o.type === 'i-text' || o.type === 'text' || o.type === 'textbox') as fabric.IText;
-  if (!rectObj || !textObj) return;
-
-  const bound = group.getBoundingRect();
-  const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
-  const zoom = canvas.getZoom();
-
-  const screenX = bound.left * zoom + vpt[4];
-  const screenY = bound.top * zoom + vpt[5];
-  const screenW = bound.width * zoom;
-  const screenH = bound.height * zoom;
-
-  const colorCfg = (group as any).stickyColorConfig || selectedStickyColor.value;
-
-  editingSticky.value = {
-    group,
-    textObj,
-    text: textObj.text === 'Double click to edit...' ? '' : (textObj.text || ''),
-    x: screenX,
-    y: screenY,
-    width: Math.max(120, screenW),
-    height: Math.max(120, screenH),
-    bg: colorCfg.bg,
-    textColor: colorCfg.text
-  };
-
-  nextTick(() => {
-    if (stickyTextareaRef.value) {
-      stickyTextareaRef.value.focus();
-      stickyTextareaRef.value.select();
-    }
-  });
-};
-
-const closeStickyEditor = () => {
-  if (!editingSticky.value || !canvas) return;
-  const { group, textObj, text } = editingSticky.value;
-  const trimmed = text.trim();
-  textObj.set({ text: trimmed || 'Double click to edit...' });
-  group.dirty = true;
-  canvas.requestRenderAll();
-  saveHistoryState();
-  syncToFirebase();
-  editingSticky.value = null;
-  updateStickyToolbar();
-};
-
+// Sticky Note Actions (Native unified fabric.Textbox with instant typing mode)
 const spawnStickyNote = (x: number, y: number, colorCfg = selectedStickyColor.value) => {
   if (!canvas) return;
   const size = 180;
-  const rect = new fabric.Rect({
+  const note = new fabric.Textbox('Type note here...', {
+    left: x - size / 2,
+    top: y - size / 2,
     width: size,
-    height: size,
-    fill: colorCfg.bg,
-    stroke: colorCfg.border,
-    strokeWidth: 2,
-    rx: 10,
-    ry: 10,
-    originX: 'center',
-    originY: 'center',
-    shadow: new fabric.Shadow({
-      color: 'rgba(0, 0, 0, 0.12)',
-      blur: 10,
-      offsetX: 2,
-      offsetY: 4
-    })
-  });
-
-  const text = new fabric.IText('Double click to edit...', {
-    fontSize: 16,
+    fontSize: 15,
     fontFamily: 'Inter, sans-serif',
+    backgroundColor: colorCfg.bg,
     fill: colorCfg.text,
-    originX: 'center',
-    originY: 'center',
-    textAlign: 'center',
-    width: size - 32,
-    splitByGrapheme: true
+    textAlign: 'left',
+    splitByGrapheme: true,
+    padding: 14,
+    rx: 0,
+    ry: 0,
+    strokeWidth: 0,
+    shadow: new fabric.Shadow({
+      color: 'rgba(0, 0, 0, 0.25)',
+      blur: 4,
+      offsetX: 3,
+      offsetY: 4
+    }),
+    perPixelTargetFind: true,
+    lockUniScaling: true
   });
 
-  const group = new fabric.Group([rect, text], {
-    left: x,
-    top: y,
-    originX: 'center',
-    originY: 'center',
-    subTargetCheck: false,
-    perPixelTargetFind: true
-  });
+  (note as any).isStickyNote = true;
+  (note as any).stickyColorConfig = colorCfg;
 
-  (group as any).lockUniScaling = true;
-  (group as any).isStickyNote = true;
-  (group as any).stickyColorConfig = colorCfg;
-  (group as any).stickyColor = colorCfg.bg;
-
-  canvas.add(group);
-  canvas.setActiveObject(group);
+  canvas.add(note);
+  canvas.setActiveObject(note);
   canvas.requestRenderAll();
   saveHistoryState();
   syncToFirebase();
   updateSelectionState();
 
-  toggleMode(false);
-  openStickyEditor(group);
+  // Instant typing mode without needing double-click
+  note.enterEditing();
+  note.selectAll();
+  // Remains on currentTool = 'sticky' for consecutive placement!
 };
 
-const changeStickyNoteColor = (group: any, colorCfg: StickyColorConfig) => {
-  if (!canvas || !group) return;
-  const items = group.getObjects ? group.getObjects() : [];
-  const rectObj = items.find((o: any) => o.type === 'rect') as fabric.Rect;
-  const textObj = items.find((o: any) => o.type === 'i-text' || o.type === 'text' || o.type === 'textbox') as fabric.IText;
-
-  if (rectObj) {
-    rectObj.set({ fill: colorCfg.bg, stroke: colorCfg.border });
-  }
-  if (textObj) {
-    textObj.set({ fill: colorCfg.text });
-  }
-  (group as any).stickyColorConfig = colorCfg;
-  (group as any).stickyColor = colorCfg.bg;
-  group.dirty = true;
+const changeStickyNoteColor = (note: any, colorCfg: StickyColorConfig) => {
+  if (!canvas || !note) return;
+  note.set({
+    backgroundColor: colorCfg.bg,
+    fill: colorCfg.text
+  });
+  note.stickyColorConfig = colorCfg;
+  note.dirty = true;
   canvas.requestRenderAll();
   saveHistoryState();
   syncToFirebase();
   updateStickyToolbar();
 };
 
-const duplicateStickyNote = async (group: any) => {
-  if (!canvas || !group) return;
-  const cloned = await group.clone();
+const duplicateStickyNote = async (note: any) => {
+  if (!canvas || !note) return;
+  const cloned = await note.clone();
   cloned.set({
-    left: (group.left || 0) + 24,
-    top: (group.top || 0) + 24,
+    left: (note.left || 0) + 24,
+    top: (note.top || 0) + 24,
     evented: true,
     perPixelTargetFind: true
   });
-  (cloned as any).lockUniScaling = true;
   (cloned as any).isStickyNote = true;
-  (cloned as any).stickyColorConfig = (group as any).stickyColorConfig;
-  (cloned as any).stickyColor = (group as any).stickyColor;
+  (cloned as any).stickyColorConfig = (note as any).stickyColorConfig;
   canvas.add(cloned);
   canvas.setActiveObject(cloned);
   canvas.requestRenderAll();
   saveHistoryState();
   syncToFirebase();
   updateSelectionState();
+};
+
+// Group Isolation Mode Actions
+const enterGroupIsolation = (group: fabric.Group) => {
+  if (!canvas || isIsolationMode.value) return;
+  isIsolationMode.value = true;
+  isolatedGroup = group;
+
+  // Dim all other canvas objects
+  canvas.getObjects().forEach((o: any) => {
+    if (o !== group) {
+      o._origOpacity = o.opacity ?? 1;
+      o._origSelectable = o.selectable ?? true;
+      o._origEvented = o.evented ?? true;
+      o.set({ opacity: 0.2, selectable: false, evented: false });
+    }
+  });
+
+  // Extract items from group onto canvas
+  isolatedItems = group.removeAll();
+  canvas.remove(group);
+  isolatedItems.forEach(item => {
+    item.set({ selectable: true, evented: true, perPixelTargetFind: true });
+    canvas?.add(item);
+  });
+
+  canvas.requestRenderAll();
+  updateSelectionState();
+};
+
+const exitGroupIsolation = () => {
+  if (!canvas || !isIsolationMode.value) return;
+
+  // Restore opacity and interaction for non-isolated objects
+  canvas.getObjects().forEach((o: any) => {
+    if (!isolatedItems.includes(o)) {
+      o.set({
+        opacity: o._origOpacity ?? 1,
+        selectable: o._origSelectable ?? true,
+        evented: o._origEvented ?? true
+      });
+    }
+  });
+
+  // Re-bundle isolated items back into group
+  isolatedItems.forEach(item => canvas?.remove(item));
+  const newGroup = new fabric.Group(isolatedItems, {
+    canvas,
+    subTargetCheck: false,
+    perPixelTargetFind: true
+  });
+  canvas.add(newGroup);
+  canvas.setActiveObject(newGroup);
+  canvas.requestRenderAll();
+
+  isIsolationMode.value = false;
+  isolatedGroup = null;
+  isolatedItems = [];
+  saveHistoryState();
+  syncToFirebase();
+  updateSelectionState();
+};
+
+// Object Lock Action
+const toggleLockSelected = () => {
+  if (!canvas) return;
+  const activeObj = canvas.getActiveObject() as any;
+  if (!activeObj) return;
+  const newLocked = !activeObj.isLocked;
+  activeObj.set({
+    lockMovementX: newLocked,
+    lockMovementY: newLocked,
+    lockRotation: newLocked,
+    lockScalingX: newLocked,
+    lockScalingY: newLocked,
+    hasControls: !newLocked,
+    isLocked: newLocked
+  });
+  isObjectLocked.value = newLocked;
+  canvas.requestRenderAll();
+  saveHistoryState();
+  syncToFirebase();
+};
+
+// Quick save action (Ctrl+S)
+const handleQuickSave = () => {
+  triggerAutoSaveAsAsset();
+  displayToast('Whiteboard saved to Room Album');
 };
 
 const addSticky = (color?: StickyColorConfig) => {
@@ -1251,7 +1339,8 @@ const handleSendToChat = async () => {
   const blob = await res.blob();
   const file = new File([blob], `Whiteboard_${Date.now()}.jpg`, { type: 'image/jpeg' });
   emit('share', file);
-  emit('close');
+  displayToast('Viewport image sent to chat');
+  // Keeps whiteboard open for continuous drawing!
 };
 
 const handleBroadcast = () => {
@@ -1306,6 +1395,15 @@ const handleKeydown = (e: KeyboardEvent) => {
   const targetTag = (e.target as HTMLElement)?.tagName?.toLowerCase();
   if (targetTag === 'input' || targetTag === 'textarea') return;
 
+  // ESC exits Group Isolation Mode
+  if (e.key === 'Escape') {
+    if (isIsolationMode.value) {
+      e.preventDefault();
+      exitGroupIsolation();
+      return;
+    }
+  }
+
   if (e.key === 'Delete' || e.key === 'Backspace') {
     if (activeObj) {
       e.preventDefault();
@@ -1328,6 +1426,19 @@ const handleKeydown = (e: KeyboardEvent) => {
   } else if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
     e.preventDefault();
     selectAll();
+  } else if ((e.ctrlKey || e.metaKey) && (e.key === 'g' || e.key === 'G')) {
+    e.preventDefault();
+    if (e.shiftKey) {
+      ungroupObjects();
+    } else {
+      groupObjects();
+    }
+  } else if ((e.ctrlKey || e.metaKey) && (e.key === 'l' || e.key === 'L')) {
+    e.preventDefault();
+    toggleLockSelected();
+  } else if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+    e.preventDefault();
+    handleQuickSave();
   }
 };
 
@@ -1398,6 +1509,15 @@ const retryGenerateAIObject = () => {
   }
 };
 
+let aiAbortController: AbortController | null = null;
+const abortAiGeneration = () => {
+  if (aiAbortController) {
+    aiAbortController.abort();
+    aiAbortController = null;
+  }
+  isGeneratingSvg.value = false;
+};
+
 const generateAIObject = async () => {
   if (!aiPrompt.value.trim() || !canvas || isGeneratingSvg.value) return;
   const currentPrompt = aiPrompt.value.trim();
@@ -1405,21 +1525,33 @@ const generateAIObject = async () => {
   isGeneratingSvg.value = true;
   aiError.value = null;
   showAiErrorDetails.value = false;
+  aiAbortController = new AbortController();
 
   try {
-    const svgString = await generateSvgForWhiteboard(currentPrompt, roomStore.currentRoom!.mentorConfig);
+    const svgString = await generateSvgForWhiteboard(currentPrompt, roomStore.currentRoom!.mentorConfig, aiAbortController.signal);
     const { objects, options } = await fabric.loadSVGFromString(svgString);
     if (!canvas) return;
     const validObjects = objects.filter((o): o is fabric.FabricObject => o !== null);
     const obj = fabric.util.groupSVGElements(validObjects, options);
+
+    // Natural bounding box calculation with min 140px, max 360px constraint
+    const bound = obj.getBoundingRect ? obj.getBoundingRect() : { width: obj.width || 200, height: obj.height || 200 };
+    const maxDim = Math.max(bound.width || 200, bound.height || 200);
+    let targetScale = 1;
+    if (maxDim > 360) {
+      targetScale = 360 / maxDim;
+    } else if (maxDim < 140) {
+      targetScale = 140 / maxDim;
+    }
+
     const center = canvas.getVpCenter();
     obj.set({
       left: center.x,
       top: center.y,
       originX: 'center',
       originY: 'center',
-      scaleX: 2,
-      scaleY: 2,
+      scaleX: targetScale,
+      scaleY: targetScale,
       perPixelTargetFind: true
     });
     canvas.add(obj);
@@ -1430,6 +1562,7 @@ const generateAIObject = async () => {
     aiPrompt.value = '';
     toggleMode(false);
   } catch (e: any) {
+    if (e?.message?.includes('aborted') || e?.name === 'AbortError') return;
     console.error('Whiteboard AI Generation Error:', e);
     if (e?.isAiError) {
       aiError.value = {
@@ -1449,6 +1582,7 @@ const generateAIObject = async () => {
     }
   } finally {
     isGeneratingSvg.value = false;
+    aiAbortController = null;
   }
 };
 
@@ -1497,21 +1631,61 @@ onUnmounted(() => {
         Local Sketchpad
       </div>
     </div>
+
+    <!-- Group Isolation Mode Top Floating Banner -->
+    <div
+      v-if="isIsolationMode"
+      class="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 px-4 py-2 bg-slate-900/95 border border-indigo-500/80 rounded-2xl shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95"
+    >
+      <div class="flex items-center gap-2 text-indigo-300 font-semibold text-xs">
+        <Group class="w-4 h-4 text-indigo-400" />
+        <span>Group Isolation Mode</span>
+        <span class="text-slate-400 font-normal hidden sm:inline">(Press ESC or Exit to return)</span>
+      </div>
+      <button
+        @click="exitGroupIsolation"
+        class="px-2.5 py-1 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition cursor-pointer"
+      >
+        Exit Isolation
+      </button>
+    </div>
     
     <div class="absolute top-4 right-4 z-10 flex items-center gap-2">
-      <button v-if="roomStore.currentRoom?.whiteboardActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid" @click="handleStopBroadcast()" class="px-3 py-1.5 rounded-xl bg-rose-500/90 hover:bg-rose-600 text-white shadow-sm transition text-xs font-semibold flex items-center gap-1">
+      <button v-if="roomStore.currentRoom?.whiteboardActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid" @click="handleStopBroadcast()" class="px-3 py-1.5 rounded-xl bg-rose-500/90 hover:bg-rose-600 text-white shadow-sm transition text-xs font-semibold flex items-center gap-1 cursor-pointer">
         <X class="w-3.5 h-3.5" /> Stop Broadcast
       </button>
-      <button v-if="!roomStore.currentRoom?.whiteboardActive" @click="handleBroadcast" class="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm transition text-xs font-semibold flex items-center gap-1">
+      <button v-if="!roomStore.currentRoom?.whiteboardActive" @click="handleBroadcast" class="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm transition text-xs font-semibold flex items-center gap-1 cursor-pointer">
         <Radio class="w-3.5 h-3.5" /> Broadcast
       </button>
-      <button @click="handleCloseRequest" class="p-1.5 rounded-xl bg-white/90 hover:bg-white text-slate-500 hover:text-slate-700 shadow-sm transition" title="Close Panel">
+      <button @click="showShortcutsModal = true" class="p-1.5 rounded-xl bg-white/90 hover:bg-white text-slate-600 hover:text-indigo-600 shadow-sm transition cursor-pointer" title="Shortcuts Cheatsheet (?)">
+        <HelpCircle class="w-4 h-4" />
+      </button>
+      <button @click="handleCloseRequest" class="p-1.5 rounded-xl bg-white/90 hover:bg-white text-slate-500 hover:text-slate-700 shadow-sm transition cursor-pointer" title="Close Panel">
         <X class="w-4 h-4" />
       </button>
     </div>
 
-    <!-- Canvas Wrapper -->
-    <div ref="wrapperRef" class="flex-1 w-full h-full relative cursor-crosshair">
+    <!-- Quick Save & Action Toast Notification -->
+    <transition
+      enter-active-class="transition duration-200 ease-out"
+      enter-from-class="opacity-0 -translate-y-2"
+      enter-to-class="opacity-100 translate-y-0"
+      leave-active-class="transition duration-150 ease-in"
+      leave-from-class="opacity-100 translate-y-0"
+      leave-to-class="opacity-0 -translate-y-2"
+    >
+      <div v-if="showToast" class="absolute top-16 left-1/2 -translate-x-1/2 z-40 px-4 py-2 bg-slate-900/95 border border-emerald-500/60 text-emerald-300 text-xs font-semibold rounded-2xl shadow-2xl flex items-center gap-2 backdrop-blur-md">
+        <Check class="w-4 h-4 text-emerald-400" />
+        <span>{{ toastMsg }}</span>
+      </div>
+    </transition>
+
+    <!-- Canvas Wrapper with glowing Send viewport border on hover -->
+    <div
+      ref="wrapperRef"
+      class="flex-1 w-full h-full relative cursor-crosshair transition-all duration-300"
+      :class="{ 'ring-4 ring-sky-400/80 shadow-[0_0_35px_rgba(56,189,248,0.35)]': isHoveringSend }"
+    >
       <canvas ref="canvasRef" class="w-full h-full touch-none"></canvas>
 
       <!-- Floating Quick-Action Bar above Selected Sticky Note -->
@@ -1536,13 +1710,6 @@ onUnmounted(() => {
         </div>
         <div class="w-px h-4 bg-slate-700"></div>
         <button
-          @click="openStickyEditor(activeStickyNote)"
-          class="p-1 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition cursor-pointer"
-          title="Edit Note"
-        >
-          <Pencil class="w-3.5 h-3.5" />
-        </button>
-        <button
           @click="duplicateStickyNote(activeStickyNote)"
           class="p-1 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition cursor-pointer"
           title="Duplicate Note"
@@ -1556,33 +1723,6 @@ onUnmounted(() => {
         >
           <Trash2 class="w-3.5 h-3.5" />
         </button>
-      </div>
-
-      <!-- Inline Textarea Overlay for Sticky Note Editing -->
-      <div
-        v-if="editingSticky"
-        class="absolute z-40 pointer-events-auto shadow-2xl rounded-xl"
-        :style="{
-          left: `${editingSticky.x}px`,
-          top: `${editingSticky.y}px`,
-          width: `${editingSticky.width}px`,
-          height: `${editingSticky.height}px`
-        }"
-      >
-        <textarea
-          ref="stickyTextareaRef"
-          v-model="editingSticky.text"
-          @blur="closeStickyEditor"
-          @keydown.esc="closeStickyEditor"
-          @keydown.stop
-          class="w-full h-full p-4 resize-none border-2 rounded-xl font-medium text-sm focus:outline-none shadow-inner leading-relaxed transition-all"
-          :style="{
-            backgroundColor: editingSticky.bg,
-            color: editingSticky.textColor,
-            borderColor: 'rgba(0,0,0,0.15)'
-          }"
-          placeholder="Type note here..."
-        ></textarea>
       </div>
     </div>
 
@@ -1673,46 +1813,55 @@ onUnmounted(() => {
     <div class="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 sm:gap-4 transition-all w-max max-w-[95%]">
       
       <!-- AI Input -->
-      <div class="flex flex-col gap-2 w-[180px] sm:w-[220px]">
-        <div v-if="isGeneratingSvg" class="px-3 py-2 bg-slate-900/90 text-sky-400 text-xs font-medium rounded-xl flex items-center gap-2 backdrop-blur border border-slate-700 shadow-xl">
-          <Loader2 class="w-4 h-4 animate-spin" /> Generating...
+      <div class="flex flex-col gap-2 w-[190px] sm:w-[240px]">
+        <div v-if="isGeneratingSvg" class="h-11 sm:h-12 px-3 bg-slate-900/95 text-sky-400 text-xs font-medium rounded-2xl flex items-center justify-between gap-2 backdrop-blur border border-slate-700 shadow-xl">
+          <span class="flex items-center gap-1.5 min-w-0 truncate">
+            <Loader2 class="w-4 h-4 animate-spin text-sky-400 shrink-0" />
+            <span class="truncate">Generating...</span>
+          </span>
+          <button
+            @click="abortAiGeneration"
+            class="px-2.5 py-1 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-semibold transition cursor-pointer shrink-0"
+          >
+            Stop
+          </button>
         </div>
-        <form v-else @submit.prevent="generateAIObject" class="flex bg-white/95 backdrop-blur-md rounded-2xl shadow-xl border border-slate-200 p-1">
+        <form v-else @submit.prevent="generateAIObject" class="flex items-center h-11 sm:h-12 bg-white/95 backdrop-blur-md rounded-2xl shadow-xl border border-slate-200 p-1">
           <input v-model="aiPrompt" type="text" placeholder="Generate icon, chart..." class="flex-1 bg-transparent px-3 py-1.5 text-xs focus:outline-none text-slate-700 placeholder-slate-400 min-w-0" />
-          <button type="submit" :disabled="!aiPrompt.trim()" class="p-1.5 rounded-xl bg-indigo-100 text-indigo-600 hover:bg-indigo-200 transition disabled:opacity-50 disabled:cursor-not-allowed shrink-0">
-            <Sparkles class="w-3.5 h-3.5" />
+          <button type="submit" :disabled="!aiPrompt.trim()" class="p-2 rounded-xl bg-indigo-100 text-indigo-600 hover:bg-indigo-200 transition disabled:opacity-50 disabled:cursor-not-allowed shrink-0 cursor-pointer">
+            <Sparkles class="w-4 h-4" />
           </button>
         </form>
       </div>
 
       <!-- Main Tools -->
-      <div class="bg-white/95 backdrop-blur-md rounded-2xl shadow-xl border border-slate-200 p-2 flex items-center gap-1 sm:gap-2">
-        <button @click="toggleMode(false)" class="p-2 rounded-xl transition" :class="currentTool === 'select' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'" title="Select / Move">
+      <div class="h-11 sm:h-12 bg-white/95 backdrop-blur-md rounded-2xl shadow-xl border border-slate-200 p-1.5 sm:p-2 flex items-center gap-1 sm:gap-2">
+        <button @click="toggleMode(false)" class="p-2 rounded-xl transition cursor-pointer" :class="currentTool === 'select' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'" title="Select / Move">
           <MousePointer2 class="w-4 h-4" />
         </button>
         
         <div class="relative">
-          <button @click="toggleMode(true); isBrushMenuOpen = !isBrushMenuOpen" class="p-2 rounded-xl transition flex items-center gap-1" :class="currentTool !== 'select' && currentTool !== 'text' && currentTool !== 'sticky' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'" title="Draw & Shapes">
+          <button @click="toggleMode(true); isBrushMenuOpen = !isBrushMenuOpen" class="p-2 rounded-xl transition flex items-center gap-1 cursor-pointer" :class="currentTool !== 'select' && currentTool !== 'text' && currentTool !== 'sticky' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'" title="Draw & Shapes">
             <Pencil class="w-4 h-4" />
           </button>
           
           <div v-if="isBrushMenuOpen && isDrawingMode" class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-white rounded-xl shadow-xl border border-slate-200 p-3 flex flex-col gap-3 min-w-[140px]">
             <div class="flex items-center justify-between gap-1">
-              <button v-for="size in strokeSizes" :key="size.value" @click="strokeWidth = size.value; isBrushMenuOpen = false" class="px-2 py-1 rounded-lg text-[10px] font-bold transition flex-1" :class="strokeWidth === size.value ? 'bg-indigo-100 text-indigo-700' : 'text-slate-400 hover:text-slate-600 bg-slate-50'">
+              <button v-for="size in strokeSizes" :key="size.value" @click="strokeWidth = size.value; isBrushMenuOpen = false" class="px-2 py-1 rounded-lg text-[10px] font-bold transition flex-1 cursor-pointer" :class="strokeWidth === size.value ? 'bg-indigo-100 text-indigo-700' : 'text-slate-400 hover:text-slate-600 bg-slate-50'">
                 {{ size.label }}
               </button>
             </div>
             <div class="h-px bg-slate-100"></div>
             <div class="flex items-center gap-1 justify-between">
-              <button @click="addShape('rect')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500"><Square class="w-4 h-4" /></button>
-              <button @click="addShape('circle')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500"><Circle class="w-4 h-4" /></button>
-              <button @click="addShape('triangle')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500"><Triangle class="w-4 h-4" /></button>
-              <button @click="addShape('line')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500"><Minus class="w-4 h-4" /></button>
+              <button @click="addShape('rect')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Rectangle"><Square class="w-4 h-4" /></button>
+              <button @click="addShape('circle')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Circle / Ellipse"><Circle class="w-4 h-4" /></button>
+              <button @click="addShape('triangle')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Triangle"><Triangle class="w-4 h-4" /></button>
+              <button @click="addShape('line')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Line"><Minus class="w-4 h-4" /></button>
             </div>
           </div>
         </div>
         
-        <button @click="addText" class="p-2 rounded-xl transition" :class="currentTool === 'text' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'" title="Add Text">
+        <button @click="addText" class="p-2 rounded-xl transition cursor-pointer" :class="currentTool === 'text' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'" title="Add Text">
           <Type class="w-4 h-4" />
         </button>
 
@@ -1720,7 +1869,7 @@ onUnmounted(() => {
         <div class="relative">
           <button
             @click="addSticky(); isStickyMenuOpen = !isStickyMenuOpen"
-            class="p-2 rounded-xl transition flex items-center gap-1"
+            class="p-2 rounded-xl transition flex items-center gap-1 cursor-pointer"
             :class="currentTool === 'sticky' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'"
             title="Sticky Note (便條紙)"
           >
@@ -1745,21 +1894,27 @@ onUnmounted(() => {
         <div class="w-px h-6 bg-slate-200 mx-1 hidden sm:block"></div>
         
         <div class="flex items-center gap-1">
-          <button v-for="color in colors" :key="color" @click="applyColorToSelected(color)" class="w-4 h-4 sm:w-5 sm:h-5 rounded-full border-2 transition transform hover:scale-110" :class="activeColor === color ? 'border-indigo-400 scale-110 shadow-sm' : 'border-transparent opacity-80 hover:opacity-100'" :style="{ backgroundColor: color }"></button>
+          <button v-for="color in colors" :key="color" @click="applyColorToSelected(color)" class="w-4 h-4 sm:w-5 sm:h-5 rounded-full border-2 transition transform hover:scale-110 cursor-pointer" :class="activeColor === color ? 'border-indigo-400 scale-110 shadow-sm' : 'border-transparent opacity-80 hover:opacity-100'" :style="{ backgroundColor: color }"></button>
         </div>
         
         <div class="w-px h-6 bg-slate-200 mx-1 hidden sm:block"></div>
         
         <div class="flex items-center gap-1">
           <input ref="fileInputRef" type="file" accept="image/*" class="hidden" @change="handleImageUpload" />
-          <button @click="fileInputRef?.click()" class="p-1.5 rounded-xl hover:bg-slate-100 text-slate-500 transition" title="Add Image"><ImageIcon class="w-4 h-4" /></button>
-          <button @click="undo" class="p-1.5 rounded-xl hover:bg-slate-100 text-slate-500 transition" title="Undo" :disabled="historyStack.length <= 1" :class="{'opacity-50 cursor-not-allowed': historyStack.length <= 1}"><Undo2 class="w-4 h-4" /></button>
-          <button @click="deleteSelected" class="p-1.5 rounded-xl hover:bg-rose-100 text-rose-500 transition" title="Delete Selected"><Trash2 class="w-4 h-4" /></button>
+          <button @click="fileInputRef?.click()" class="p-1.5 rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" title="Add Image"><ImageIcon class="w-4 h-4" /></button>
+          <button @click="undo" class="p-1.5 rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" title="Undo (Ctrl+Z)" :disabled="historyStack.length <= 1" :class="{'opacity-50 cursor-not-allowed': historyStack.length <= 1}"><Undo2 class="w-4 h-4" /></button>
+          <button @click="deleteSelected" class="p-1.5 rounded-xl hover:bg-rose-100 text-rose-500 transition cursor-pointer" title="Delete Selected (Del)"><Trash2 class="w-4 h-4" /></button>
         </div>
         
         <div class="w-px h-6 bg-slate-200 mx-1"></div>
         
-        <button @click="handleSendToChat" class="p-1.5 px-3 rounded-xl bg-sky-500 hover:bg-sky-600 text-white transition flex items-center gap-1.5 text-xs font-medium" title="Send drawing to chat">
+        <button
+          @click="handleSendToChat"
+          @mouseenter="isHoveringSend = true"
+          @mouseleave="isHoveringSend = false"
+          class="p-1.5 px-3 rounded-xl bg-sky-500 hover:bg-sky-600 text-white transition flex items-center gap-1.5 text-xs font-medium cursor-pointer shadow-xs"
+          title="Send viewport image to chat"
+        >
           <Send class="w-3.5 h-3.5" /> <span class="hidden sm:inline">Send</span>
         </button>
       </div>
@@ -1769,7 +1924,7 @@ onUnmounted(() => {
     <div
       v-if="contextMenu.visible"
       :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
-      class="fixed z-50 min-w-[200px] bg-slate-900/95 backdrop-blur-md border border-slate-700/80 rounded-2xl shadow-2xl p-1.5 text-xs text-slate-200 select-none animate-in fade-in zoom-in-95 duration-100"
+      class="fixed z-50 min-w-[210px] bg-slate-900/95 backdrop-blur-md border border-slate-700/80 rounded-2xl shadow-2xl p-1.5 text-xs text-slate-200 select-none animate-in fade-in zoom-in-95 duration-100"
       @click.stop
     >
       <!-- When selection is active -->
@@ -1787,6 +1942,16 @@ onUnmounted(() => {
         >
           <span class="flex items-center gap-2"><Scissors class="w-3.5 h-3.5 text-amber-400" /> Cut</span>
           <span class="text-[10px] text-slate-400 font-mono">Ctrl+X</span>
+        </button>
+        <button
+          @click="toggleLockSelected(); contextMenu.visible = false"
+          class="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+        >
+          <span class="flex items-center gap-2">
+            <component :is="isObjectLocked ? Unlock : Lock" class="w-3.5 h-3.5" :class="isObjectLocked ? 'text-amber-400' : 'text-slate-400'" />
+            {{ isObjectLocked ? 'Unlock Object' : 'Lock Object' }}
+          </span>
+          <span class="text-[10px] text-slate-400 font-mono">Ctrl+L</span>
         </button>
       </template>
 
@@ -1834,16 +1999,18 @@ onUnmounted(() => {
         <button
           v-if="isMultiSelection"
           @click="groupObjects(); contextMenu.visible = false"
-          class="w-full flex items-center gap-2 px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+          class="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
         >
-          <Group class="w-3.5 h-3.5 text-violet-400" /> Group Objects
+          <span class="flex items-center gap-2"><Group class="w-3.5 h-3.5 text-violet-400" /> Group Objects</span>
+          <span class="text-[10px] text-slate-400 font-mono">Ctrl+G</span>
         </button>
         <button
           v-if="isGroupSelected"
           @click="ungroupObjects(); contextMenu.visible = false"
-          class="w-full flex items-center gap-2 px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+          class="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
         >
-          <Ungroup class="w-3.5 h-3.5 text-violet-400" /> Ungroup
+          <span class="flex items-center gap-2"><Ungroup class="w-3.5 h-3.5 text-violet-400" /> Ungroup</span>
+          <span class="text-[10px] text-slate-400 font-mono">Ctrl+Shift+G</span>
         </button>
 
         <div class="my-1 border-t border-slate-800"></div>
@@ -1868,6 +2035,70 @@ onUnmounted(() => {
           <span class="text-[10px] text-slate-400 font-mono">Ctrl+A</span>
         </button>
       </template>
+    </div>
+
+    <!-- Shortcuts Cheatsheet Modal -->
+    <div
+      v-if="showShortcutsModal"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
+      @click.self="showShortcutsModal = false"
+    >
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full shadow-2xl text-slate-100 space-y-4 animate-in fade-in zoom-in-95">
+        <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+          <div class="flex items-center gap-2 font-bold text-sm text-slate-200">
+            <HelpCircle class="w-4 h-4 text-indigo-400" />
+            <span>Whiteboard Keyboard Shortcuts</span>
+          </div>
+          <button @click="showShortcutsModal = false" class="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer">
+            <X class="w-4 h-4" />
+          </button>
+        </div>
+        <div class="grid grid-cols-2 gap-2 text-xs">
+          <div class="flex items-center justify-between p-2 rounded-xl bg-slate-950/60 border border-slate-800/80">
+            <span class="text-slate-400">Quick Save</span>
+            <kbd class="px-1.5 py-0.5 rounded bg-slate-800 font-mono text-[10px] text-indigo-300">Ctrl+S</kbd>
+          </div>
+          <div class="flex items-center justify-between p-2 rounded-xl bg-slate-950/60 border border-slate-800/80">
+            <span class="text-slate-400">Lock / Unlock</span>
+            <kbd class="px-1.5 py-0.5 rounded bg-slate-800 font-mono text-[10px] text-indigo-300">Ctrl+L</kbd>
+          </div>
+          <div class="flex items-center justify-between p-2 rounded-xl bg-slate-950/60 border border-slate-800/80">
+            <span class="text-slate-400">Group Objects</span>
+            <kbd class="px-1.5 py-0.5 rounded bg-slate-800 font-mono text-[10px] text-indigo-300">Ctrl+G</kbd>
+          </div>
+          <div class="flex items-center justify-between p-2 rounded-xl bg-slate-950/60 border border-slate-800/80">
+            <span class="text-slate-400">Ungroup</span>
+            <kbd class="px-1.5 py-0.5 rounded bg-slate-800 font-mono text-[10px] text-indigo-300">Ctrl+Shift+G</kbd>
+          </div>
+          <div class="flex items-center justify-between p-2 rounded-xl bg-slate-950/60 border border-slate-800/80">
+            <span class="text-slate-400">Copy / Paste</span>
+            <kbd class="px-1.5 py-0.5 rounded bg-slate-800 font-mono text-[10px] text-indigo-300">Ctrl+C / V</kbd>
+          </div>
+          <div class="flex items-center justify-between p-2 rounded-xl bg-slate-950/60 border border-slate-800/80">
+            <span class="text-slate-400">Cut / Delete</span>
+            <kbd class="px-1.5 py-0.5 rounded bg-slate-800 font-mono text-[10px] text-indigo-300">Ctrl+X / Del</kbd>
+          </div>
+          <div class="flex items-center justify-between p-2 rounded-xl bg-slate-950/60 border border-slate-800/80">
+            <span class="text-slate-400">Undo Action</span>
+            <kbd class="px-1.5 py-0.5 rounded bg-slate-800 font-mono text-[10px] text-indigo-300">Ctrl+Z</kbd>
+          </div>
+          <div class="flex items-center justify-between p-2 rounded-xl bg-slate-950/60 border border-slate-800/80">
+            <span class="text-slate-400">Select All</span>
+            <kbd class="px-1.5 py-0.5 rounded bg-slate-800 font-mono text-[10px] text-indigo-300">Ctrl+A</kbd>
+          </div>
+          <div class="flex items-center justify-between p-2 rounded-xl bg-slate-950/60 border border-slate-800/80">
+            <span class="text-slate-400">Zoom Canvas</span>
+            <kbd class="px-1.5 py-0.5 rounded bg-slate-800 font-mono text-[10px] text-indigo-300">Ctrl+Wheel</kbd>
+          </div>
+          <div class="flex items-center justify-between p-2 rounded-xl bg-slate-950/60 border border-slate-800/80">
+            <span class="text-slate-400">Pan Canvas</span>
+            <kbd class="px-1.5 py-0.5 rounded bg-slate-800 font-mono text-[10px] text-indigo-300">Alt+Wheel / Mid</kbd>
+          </div>
+          <div class="col-span-2 p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80 text-[11px] text-slate-300">
+            💡 <span class="font-semibold text-indigo-300">Group Isolation Mode:</span> Double-click any group to edit items individually. Press <kbd class="px-1.5 py-0.5 bg-slate-800 rounded font-mono text-[10px]">ESC</kbd> or click Exit Isolation to return.
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Unsaved Changes Confirmation Modal (English) -->

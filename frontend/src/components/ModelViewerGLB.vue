@@ -13,7 +13,8 @@ import {
   Palette,
   Loader2,
   RefreshCw,
-  Eye
+  Eye,
+  Copy
 } from 'lucide-vue-next';
 import type { MessageItem } from '../types';
 import { useRoomStore } from '../stores/room';
@@ -214,14 +215,12 @@ const loadGlbModel = (rawUrl: string) => {
   );
 };
 
-// Handle Mouse Wheel for Shift + Zoom
+// Handle Mouse Wheel for Shift + Zoom (allows normal page scroll and Ctrl+Wheel browser zoom when !Shift)
 const handleWheel = (e: WheelEvent) => {
   if (!isModelInteractive.value || !camera || !controls) return;
 
   if (!e.shiftKey) {
-    e.preventDefault();
-    e.stopPropagation();
-
+    // DO NOT preventDefault or stopPropagation: allow natural page scrolling and Ctrl+Wheel browser zoom!
     showShiftPrompt.value = true;
     if (shiftPromptTimeout) clearTimeout(shiftPromptTimeout);
     shiftPromptTimeout = setTimeout(() => {
@@ -230,7 +229,7 @@ const handleWheel = (e: WheelEvent) => {
     return;
   }
 
-  // Shift is pressed -> Zoom in / out smoothly
+  // Shift is pressed -> Zoom 3D model in / out smoothly
   e.preventDefault();
   const zoomFactor = e.deltaY < 0 ? 0.9 : 1.1;
   camera.position.multiplyScalar(zoomFactor);
@@ -239,6 +238,39 @@ const handleWheel = (e: WheelEvent) => {
   if (dist < 0.5) camera.position.setLength(0.5);
   if (dist > 12) camera.position.setLength(12);
   controls.update();
+};
+
+const isCopyingImage = ref(false);
+const copyTransparentImage = async () => {
+  if (!renderer || !scene || !camera) return;
+  isCopyingImage.value = true;
+  try {
+    const origBg = scene.background;
+    scene.background = null;
+    renderer.render(scene, camera);
+
+    const domCanvas = renderer.domElement;
+    domCanvas.toBlob(async (blob) => {
+      if (scene) scene.background = origBg;
+      if (renderer && scene && camera) renderer.render(scene, camera);
+
+      if (blob) {
+        try {
+          await navigator.clipboard.write([
+            new ClipboardItem({ 'image/png': blob })
+          ]);
+          roomStore.pushToast('Image Copied', 'Transparent 3D render copied to clipboard', 'success');
+        } catch (err) {
+          console.error('Clipboard write error:', err);
+          roomStore.pushToast('Copy Failed', 'Clipboard access denied or unsupported', 'error');
+        }
+      }
+      isCopyingImage.value = false;
+    }, 'image/png');
+  } catch (err) {
+    isCopyingImage.value = false;
+    console.error('Failed to capture 3D render:', err);
+  }
 };
 
 // Zoom Controls (+ / -)
@@ -498,6 +530,15 @@ onUnmounted(() => {
           title="Reset Camera Angle & Center"
         >
           <RotateCcw class="w-4 h-4" />
+        </button>
+        <button
+          @click="copyTransparentImage"
+          class="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+          :title="isCopyingImage ? 'Copying...' : 'Copy Transparent 3D Render to Clipboard'"
+          :disabled="isCopyingImage"
+        >
+          <Loader2 v-if="isCopyingImage" class="w-4 h-4 animate-spin text-sky-400" />
+          <Copy v-else class="w-4 h-4 text-sky-400" />
         </button>
 
         <div class="h-4 w-px bg-slate-700 mx-1"></div>

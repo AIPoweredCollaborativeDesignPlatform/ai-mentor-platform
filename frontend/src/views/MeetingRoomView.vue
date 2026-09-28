@@ -26,8 +26,10 @@ import {
   LogIn,
   Eye,
   WifiOff,
-  Loader2
-, PenTool } from 'lucide-vue-next';
+  Loader2,
+  RefreshCw,
+  PenTool
+} from 'lucide-vue-next';
 
 import ParametricViewer3D from '../components/ParametricViewer3D.vue';
 import ModelViewerGLB from '../components/ModelViewerGLB.vue';
@@ -71,6 +73,7 @@ const handleShareWhiteboard = async (file: File) => {
 };
 
 const handleSaveWhiteboardState = async (json: string, previewUrl: string) => {
+  let assetId = activeWhiteboardAssetId.value;
   if (activeWhiteboardAssetId.value) {
     // Update existing asset in Room Album (deduplication & moves to top via timestamp update)
     await roomStore.updateCustomMessage(activeWhiteboardAssetId.value, {
@@ -103,7 +106,21 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string) => {
     });
     if (newId) {
       activeWhiteboardAssetId.value = newId;
+      assetId = newId;
     }
+  }
+
+  // Trigger Gemini Whiteboard Vision Background Memory Record
+  roomStore.recordWhiteboardSnapshotMemory(previewUrl, json, assetId || undefined);
+};
+
+const retryingAiMessageId = ref<string | null>(null);
+const handleRetryAiMessage = async (messageId: string) => {
+  retryingAiMessageId.value = messageId;
+  try {
+    await roomStore.retryAiMentorMessage(messageId);
+  } finally {
+    retryingAiMessageId.value = null;
   }
 };
 
@@ -1034,16 +1051,16 @@ onUnmounted(() => {
               />
 
               
-              <!-- Embedded Whiteboard State -->
+              <!-- Embedded Whiteboard State (50% size, light background) -->
               <div
                 v-if="msg.type === 'whiteboard_state'"
-                class="mt-2 rounded-xl overflow-hidden cursor-pointer group shadow relative border border-slate-700/80 hover:border-indigo-500/50 transition max-w-[240px] sm:max-w-[280px]"
+                class="mt-2 rounded-xl overflow-hidden cursor-pointer group shadow relative border border-slate-700/80 hover:border-indigo-500/50 transition max-w-[130px] sm:max-w-[150px] bg-slate-100"
                 @click="openWhiteboardState(msg)"
               >
-                <img :src="msg.fileData?.url" class="w-full h-auto max-h-48 object-cover opacity-85 group-hover:opacity-100 transition" />
+                <img :src="msg.fileData?.url" class="w-full h-auto max-h-24 object-contain group-hover:scale-105 transition" />
                 <div class="absolute inset-0 flex items-center justify-center bg-slate-950/40 opacity-0 group-hover:opacity-100 transition">
-                  <span class="bg-indigo-600 text-white px-2.5 py-1 rounded-lg text-xs font-bold shadow-lg flex items-center gap-1.5">
-                    <PenTool class="w-3.5 h-3.5" /> Open in Whiteboard
+                  <span class="bg-indigo-600 text-white px-2 py-0.5 rounded text-[10px] font-bold shadow-lg flex items-center gap-1">
+                    <PenTool class="w-3 h-3" /> Edit
                   </span>
                 </div>
               </div>
@@ -1070,6 +1087,22 @@ onUnmounted(() => {
                   View Document
                 </button>
               </div>
+            </div>
+
+            <!-- AI Mentor Failure / 503 Retry with Flash Button -->
+            <div
+              v-if="msg.senderUid === 'ai_mentor' && (msg.content?.includes('503') || msg.content?.includes('GoogleGenerativeAI Error') || msg.content?.includes('high demand') || msg.content?.includes('overloaded'))"
+              class="flex items-center gap-2 mt-1.5"
+            >
+              <button
+                @click="handleRetryAiMessage(msg.id)"
+                :disabled="retryingAiMessageId === msg.id"
+                class="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-indigo-600/90 hover:bg-indigo-600 text-white text-xs font-semibold shadow transition cursor-pointer disabled:opacity-50"
+              >
+                <Loader2 v-if="retryingAiMessageId === msg.id" class="w-3.5 h-3.5 animate-spin" />
+                <RefreshCw v-else class="w-3.5 h-3.5 text-sky-300" />
+                <span>{{ retryingAiMessageId === msg.id ? 'Retrying with Flash...' : 'Retry with Flash' }}</span>
+              </button>
             </div>
 
             <!-- Optimistic UI Status indicators (Failed with retry) -->

@@ -1032,8 +1032,19 @@ export const useRoomStore = defineStore('room', () => {
         currentRoom.value.messages,
         mentorStore.config,
         isForced,
-        currentAiAbortController.signal
+        currentAiAbortController.signal,
+        currentRoom.value.whiteboardMemories
       );
+
+      if (response.degradedFromPro) {
+        await sendCustomMessage({
+          senderUid: 'system',
+          senderName: 'System',
+          content: '⚡ Note: Automatically switched from Gemini Pro to Flash due to free-tier quota limits.',
+          type: 'text'
+        });
+      }
+
       if (response.shouldIntervene && response.aiMessage) {
         // Check if Meshy.ai or Tripo3D API key is configured for photorealistic curved 3D models
         const activeEngine = localStorage.getItem('ai_3d_engine') || 'meshy';
@@ -1479,6 +1490,77 @@ export const useRoomStore = defineStore('room', () => {
     }
   };
 
+  let lastWhiteboardMemoryRecordedTime = 0;
+
+  const recordWhiteboardSnapshotMemory = async (previewUrl: string, json: string, assetId?: string) => {
+    if (!currentRoom.value || !db || !previewUrl) return;
+    const now = Date.now();
+    // 30s cooldown to prevent token overuse
+    if (now - lastWhiteboardMemoryRecordedTime < 30000) {
+      return;
+    }
+    lastWhiteboardMemoryRecordedTime = now;
+
+    try {
+      const { summarizeWhiteboardVisualSnapshot } = await import('../services/ai');
+      const summary = await summarizeWhiteboardVisualSnapshot(previewUrl);
+      if (!summary) return;
+
+      const memoryItem = {
+        timestamp: now,
+        timeFormatted: new Date(now).toLocaleTimeString(),
+        summary,
+        assetId: assetId || ''
+      };
+
+      if (!currentRoom.value.whiteboardMemories) {
+        currentRoom.value.whiteboardMemories = [];
+      }
+      currentRoom.value.whiteboardMemories.push(memoryItem);
+
+      await updateDoc(doc(db, 'rooms', currentRoom.value.roomId), {
+        whiteboardMemories: arrayUnion(memoryItem)
+      });
+      console.log('[Whiteboard Memory Recorded]:', summary);
+    } catch (err) {
+      console.warn('Failed to record whiteboard snapshot memory:', err);
+    }
+  };
+
+  const retryAiMentorMessage = async (messageId: string) => {
+    if (!currentRoom.value || isAnalyzing.value) return;
+    const targetMsg = currentRoom.value.messages.find(m => m.id === messageId);
+    if (!targetMsg) return;
+
+    isAnalyzing.value = true;
+    try {
+      const { analyzeDialogueWithGemini } = await import('../services/ai');
+      const response = await analyzeDialogueWithGemini(
+        currentRoom.value.messages,
+        { ...mentorStore.config, modelTier: 'flash' },
+        true,
+        undefined,
+        currentRoom.value.whiteboardMemories
+      );
+
+      if (response.shouldIntervene && response.aiMessage) {
+        await updateCustomMessage(messageId, {
+          content: response.aiMessage,
+          ...(response.assetType && response.assetData ? {
+            type: 'ai_asset',
+            assetPayload: {
+              type: response.assetType,
+              ...response.assetData
+            }
+          } : {})
+        });
+      }
+    } catch (err: any) {
+      console.error('Failed to retry AI Mentor message:', err);
+    } finally {
+      isAnalyzing.value = false;
+    }
+  };
 
   return {
     currentRoom,
@@ -1526,6 +1608,8 @@ export const useRoomStore = defineStore('room', () => {
     syncMentorConfig,
     startWhiteboardSession,
     syncWhiteboardState,
-    endWhiteboardSession
+    endWhiteboardSession,
+    recordWhiteboardSnapshotMemory,
+    retryAiMentorMessage
   };
 });

@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
-import { auth, isFirebaseConfigured } from '../firebase/config';
+import { auth, db, isFirebaseConfigured } from '../firebase/config';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import {
   signInAnonymously,
   signInWithPopup,
@@ -62,7 +63,7 @@ export const useAuthStore = defineStore('auth', () => {
       }
     });
 
-    onAuthStateChanged(auth, (user) => {
+    onAuthStateChanged(auth, async (user) => {
       firebaseUser.value = user;
       if (user) {
         uid.value = user.uid;
@@ -78,6 +79,32 @@ export const useAuthStore = defineStore('auth', () => {
           localStorage.setItem('ai_mentor_google_linked', 'true');
           localStorage.setItem('ai_mentor_email', email.value);
           localStorage.setItem('ai_mentor_name', displayName.value);
+        }
+
+        // Restore cloud-synced API keys from Firestore user profile across devices
+        if (db) {
+          try {
+            const userDocRef = doc(db, 'users', user.uid);
+            const snap = await getDoc(userDocRef);
+            if (snap.exists()) {
+              const data = snap.data();
+              if (data.geminiApiKey) {
+                localStorage.setItem('ai_gemini_api_key', data.geminiApiKey);
+                (window as any).__SHARED_GEMINI_KEY__ = data.geminiApiKey;
+              }
+              if (data.tripoApiKey) {
+                localStorage.setItem('ai_tripo_api_key', data.tripoApiKey);
+              }
+              if (data.meshyApiKey) {
+                localStorage.setItem('ai_meshy_api_key', data.meshyApiKey);
+              }
+              if (data.engine3D) {
+                localStorage.setItem('ai_3d_engine', data.engine3D);
+              }
+            }
+          } catch (err) {
+            console.warn('[Auth] Failed to load user profile API keys:', err);
+          }
         }
       }
     });
@@ -182,6 +209,50 @@ export const useAuthStore = defineStore('auth', () => {
     await initGuestAuth();
   };
 
+  const syncUserApiKeys = async (keys: {
+    geminiApiKey?: string;
+    tripoApiKey?: string;
+    meshyApiKey?: string;
+    engine3D?: string;
+  }) => {
+    if (keys.geminiApiKey !== undefined) {
+      if (keys.geminiApiKey) {
+        localStorage.setItem('ai_gemini_api_key', keys.geminiApiKey.trim());
+        (window as any).__SHARED_GEMINI_KEY__ = keys.geminiApiKey.trim();
+      } else {
+        localStorage.removeItem('ai_gemini_api_key');
+        delete (window as any).__SHARED_GEMINI_KEY__;
+      }
+    }
+    if (keys.tripoApiKey !== undefined) {
+      if (keys.tripoApiKey) localStorage.setItem('ai_tripo_api_key', keys.tripoApiKey.trim());
+      else localStorage.removeItem('ai_tripo_api_key');
+    }
+    if (keys.meshyApiKey !== undefined) {
+      if (keys.meshyApiKey) localStorage.setItem('ai_meshy_api_key', keys.meshyApiKey.trim());
+      else localStorage.removeItem('ai_meshy_api_key');
+    }
+    if (keys.engine3D !== undefined) {
+      if (keys.engine3D) localStorage.setItem('ai_3d_engine', keys.engine3D);
+    }
+
+    // Sync to Firestore if user and db exist
+    if (db && uid.value) {
+      try {
+        const userDocRef = doc(db, 'users', uid.value);
+        await setDoc(userDocRef, {
+          ...(keys.geminiApiKey !== undefined && { geminiApiKey: keys.geminiApiKey }),
+          ...(keys.tripoApiKey !== undefined && { tripoApiKey: keys.tripoApiKey }),
+          ...(keys.meshyApiKey !== undefined && { meshyApiKey: keys.meshyApiKey }),
+          ...(keys.engine3D !== undefined && { engine3D: keys.engine3D }),
+          updatedAt: Date.now()
+        }, { merge: true });
+      } catch (err) {
+        console.warn('[Auth] Failed to sync keys to Firestore user profile:', err);
+      }
+    }
+  };
+
   // Init on store creation
   initGuestAuth();
 
@@ -196,6 +267,7 @@ export const useAuthStore = defineStore('auth', () => {
     updateProfile,
     upgradeWithGoogle,
     logoutGoogle,
-    initGuestAuth
+    initGuestAuth,
+    syncUserApiKeys
   };
 });

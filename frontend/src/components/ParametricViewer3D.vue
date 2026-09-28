@@ -13,9 +13,12 @@ import {
   Pause,
   FastForward,
   Activity,
-  RotateCcw
+  RotateCcw,
+  Copy,
+  Loader2
 } from 'lucide-vue-next';
 import type { ComponentAnimation } from '../types';
+import { useRoomStore } from '../stores/room';
 
 const props = defineProps<{
   assetData: any;
@@ -408,6 +411,40 @@ const resetView = () => {
   fitCameraToObject();
 };
 
+const roomStore = useRoomStore();
+const isCopyingImage = ref(false);
+const copyTransparentImage = async () => {
+  if (!renderer || !scene || !camera) return;
+  isCopyingImage.value = true;
+  try {
+    const origBg = scene.background;
+    scene.background = null;
+    renderer.render(scene, camera);
+
+    const domCanvas = renderer.domElement;
+    domCanvas.toBlob(async (blob) => {
+      if (scene) scene.background = origBg;
+      if (renderer && scene && camera) renderer.render(scene, camera);
+
+      if (blob) {
+        try {
+          await navigator.clipboard.write([
+            new ClipboardItem({ 'image/png': blob })
+          ]);
+          roomStore.pushToast('Image Copied', 'Transparent 3D render copied to clipboard', 'success');
+        } catch (err) {
+          console.error('Clipboard write error:', err);
+          roomStore.pushToast('Copy Failed', 'Clipboard access denied or unsupported', 'error');
+        }
+      }
+      isCopyingImage.value = false;
+    }, 'image/png');
+  } catch (err) {
+    isCopyingImage.value = false;
+    console.error('Failed to capture 3D render:', err);
+  }
+};
+
 watch(() => props.assetData, () => {
   buildParametricMesh();
 }, { deep: true });
@@ -538,6 +575,16 @@ onUnmounted(() => {
           class="px-2.5 py-1 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-300 transition cursor-pointer"
         >
           Reset Camera
+        </button>
+        <button
+          @click="copyTransparentImage"
+          class="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-300 transition cursor-pointer"
+          :title="isCopyingImage ? 'Copying...' : 'Copy Transparent Render to Clipboard'"
+          :disabled="isCopyingImage"
+        >
+          <Loader2 v-if="isCopyingImage" class="w-3.5 h-3.5 animate-spin text-sky-400" />
+          <Copy v-else class="w-3.5 h-3.5 text-sky-400" />
+          <span>Copy Image</span>
         </button>
       </div>
     </div>

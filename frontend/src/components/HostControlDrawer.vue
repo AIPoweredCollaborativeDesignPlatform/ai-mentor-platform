@@ -65,38 +65,31 @@ const engineSavedMsg = ref('');
 
 const handleSelectEngine = (engine: 'meshy' | 'tripo' | 'threejs') => {
   selected3DEngine.value = engine;
-  localStorage.setItem('ai_3d_engine', engine);
-  engineSavedMsg.value = `Active 3D Engine: ${engine === 'meshy' ? 'Meshy.ai' : engine === 'tripo' ? 'Tripo3D' : 'Three.js'}`;
+  authStore.syncUserApiKeys({ engine3D: engine });
+  engineSavedMsg.value = `Active 3D Engine: ${engine === 'meshy' ? 'Meshy.ai' : engine === 'tripo' ? 'Tripo3D' : 'Three.js'} (Synced)`;
   setTimeout(() => (engineSavedMsg.value = ''), 2500);
 };
 
 const handleSaveGeminiKey = () => {
   const val = geminiApiKey.value.trim();
-  if (val) {
-    localStorage.setItem('ai_gemini_api_key', val);
-    (window as any).__SHARED_GEMINI_KEY__ = val;
-    engineSavedMsg.value = 'Google Gemini API Key saved!';
-  } else {
-    localStorage.removeItem('ai_gemini_api_key');
-    delete (window as any).__SHARED_GEMINI_KEY__;
-    engineSavedMsg.value = 'Gemini API Key removed';
-  }
+  authStore.syncUserApiKeys({ geminiApiKey: val });
+  engineSavedMsg.value = val ? 'Gemini API Key saved & synced!' : 'Gemini API Key removed';
   setTimeout(() => (engineSavedMsg.value = ''), 2500);
 };
 
 const handleSaveMeshyKey = () => {
   setStoredMeshyApiKey(meshyApiKey.value);
   if (meshyApiKey.value) selected3DEngine.value = 'meshy';
-  localStorage.setItem('ai_3d_engine', selected3DEngine.value);
-  engineSavedMsg.value = meshyApiKey.value ? 'Meshy AI Key saved!' : 'Meshy Key removed';
+  authStore.syncUserApiKeys({ meshyApiKey: meshyApiKey.value, engine3D: selected3DEngine.value });
+  engineSavedMsg.value = meshyApiKey.value ? 'Meshy AI Key saved & synced!' : 'Meshy Key removed';
   setTimeout(() => (engineSavedMsg.value = ''), 2500);
 };
 
 const handleSaveTripoKey = () => {
   setStoredTripoApiKey(tripoApiKey.value);
   if (tripoApiKey.value) selected3DEngine.value = 'tripo';
-  localStorage.setItem('ai_3d_engine', selected3DEngine.value);
-  engineSavedMsg.value = tripoApiKey.value ? 'Tripo3D Key saved!' : 'Tripo3D Key removed';
+  authStore.syncUserApiKeys({ tripoApiKey: tripoApiKey.value, engine3D: selected3DEngine.value });
+  engineSavedMsg.value = tripoApiKey.value ? 'Tripo3D Key saved & synced!' : 'Tripo3D Key removed';
   setTimeout(() => (engineSavedMsg.value = ''), 2500);
 };
 

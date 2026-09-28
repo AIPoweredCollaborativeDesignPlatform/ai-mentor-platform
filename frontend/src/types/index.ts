@@ -79,6 +79,7 @@ export interface RoomData {
   whiteboardHostUid?: string;
   whiteboardHostName?: string;
   whiteboardState?: string;
+  whiteboardMemories?: Array<{ timestamp: number; timeFormatted: string; summary: string; assetId?: string }>;
   deletedAt?: number;
 }
 

@@ -113,11 +113,11 @@ const handleShareWhiteboard = async (file: File) => {
   await handleSend();
 };
 
-const handleSaveWhiteboardState = async (json: string, previewUrl: string) => {
-  let assetId = activeWhiteboardAssetId.value;
-  if (activeWhiteboardAssetId.value) {
-    // Update existing asset in Room Album (deduplication & moves to top via timestamp update)
-    await roomStore.updateCustomMessage(activeWhiteboardAssetId.value, {
+const handleSaveWhiteboardState = async (json: string, previewUrl: string, explicitAssetId?: string | null) => {
+  let assetId = explicitAssetId || activeWhiteboardAssetId.value;
+  if (assetId) {
+    // Update existing asset in Room Album (deduplication & overwrite update)
+    await roomStore.updateCustomMessage(assetId, {
       fileData: {
         type: 'image',
         url: previewUrl,
@@ -148,6 +148,9 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string) => {
     if (newId) {
       activeWhiteboardAssetId.value = newId;
       assetId = newId;
+      if (whiteboardRef.value) {
+        (whiteboardRef.value as any).setCurrentAssetId?.(newId);
+      }
     }
   }
 

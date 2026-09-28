@@ -1476,23 +1476,31 @@ export const useRoomStore = defineStore('room', () => {
   };
 
   const updateCustomMessage = async (messageId: string, updates: Partial<MessageItem>) => {
-    if (!currentRoom.value || !db) return;
+    if (!currentRoom.value) return;
     const now = Date.now();
-    try {
-      const msgRef = doc(db, 'rooms', currentRoom.value.roomId, 'messages', messageId);
-      const updateData: Record<string, any> = {
-        ...updates,
-        timestamp: now
-      };
-      await updateDoc(msgRef, updateData);
+    if (db) {
+      try {
+        const msgRef = doc(db, 'rooms', currentRoom.value.roomId, 'messages', messageId);
+        const updateData: Record<string, any> = {
+          ...updates,
+          timestamp: now
+        };
+        await updateDoc(msgRef, updateData);
 
-      // Optimistically update local message and move to top
+        // Optimistically update local message and move to top
+        const localMsg = currentRoom.value.messages.find(m => m.id === messageId);
+        if (localMsg) {
+          Object.assign(localMsg, updates, { timestamp: now });
+        }
+      } catch (e) {
+        console.warn('Failed to update custom message:', e);
+      }
+    } else {
       const localMsg = currentRoom.value.messages.find(m => m.id === messageId);
       if (localMsg) {
         Object.assign(localMsg, updates, { timestamp: now });
+        saveToStorage(currentRoom.value);
       }
-    } catch (e) {
-      console.warn('Failed to update custom message:', e);
     }
   };
 

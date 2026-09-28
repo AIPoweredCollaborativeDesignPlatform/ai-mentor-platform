@@ -16,8 +16,28 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'close'): void;
   (e: 'share', file: File): void;
-  (e: 'save-state', json: string, previewDataUrl: string): void;
+  (e: 'save-state', json: string, previewDataUrl: string, assetId?: string | null): void;
 }>();
+
+const currentAssetId = ref<string | null | undefined>(props.activeAssetId);
+watch(() => props.activeAssetId, (newId) => {
+  currentAssetId.value = newId;
+});
+
+// Custom properties that must be preserved across JSON serialization
+const CUSTOM_PROPS = [
+  'isStickyNote',
+  'stickyColorConfig',
+  'minHeight',
+  'isLocked',
+  'isArrow',
+  'lockMovementX',
+  'lockMovementY',
+  'lockRotation',
+  'lockScalingX',
+  'lockScalingY',
+  'hasControls'
+];
 
 const hasUnsavedChanges = ref(false);
 const showCloseConfirmModal = ref(false);
@@ -867,7 +887,6 @@ const initFabric = () => {
   });
 
   updateBrush();
-  saveHistoryState(); // Initial empty state
 
   // Center workspace in initial canvas view
   if (wrapperRef.value) {
@@ -1413,12 +1432,17 @@ const initFabric = () => {
   });
   resizeObserver.observe(wrapperRef.value);
 
-  // Load initial state
+  // Load initial state or set up clean baseline
   if (props.initialJson) {
+    historyStack.value = [];
     loadFromFirebase(props.initialJson);
     hasUnsavedChanges.value = false;
   } else if (roomStore.currentRoom?.whiteboardActive && roomStore.currentRoom?.whiteboardState) {
+    historyStack.value = [];
     loadFromFirebase(roomStore.currentRoom.whiteboardState);
+  } else {
+    historyStack.value = [];
+    saveHistoryState(); // Initial baseline state only for brand-new whiteboard!
   }
 };
 
@@ -1434,34 +1458,34 @@ watch([activeColor, strokeWidth], () => {
   updateBrush();
 });
 
-const saveHistoryState = () => {
-  if (!canvas || isInternalChange) return;
-  const json = JSON.stringify(canvas.toJSON());
-  historyStack.value.push(json);
-  if (historyStack.value.length > 50) {
-    historyStack.value.shift();
-  }
-  if (historyStack.value.length > 1) {
-    hasUnsavedChanges.value = true;
-  }
-};
-
-const syncToFirebase = () => {
-  if (isInternalChange || !canvas || !roomStore.currentRoom?.whiteboardActive) return;
-  const json = JSON.stringify(canvas.toJSON());
-  roomStore.syncWhiteboardState(json);
-};
-
-const loadFromFirebase = async (json: string) => {
-  if (!canvas || !json) return;
-  isInternalChange = true;
-  await canvas.loadFromJSON(json);
+// Rehydrate custom attributes, methods, and constraints after deserializing from JSON
+const rehydrateCanvasObjects = () => {
+  if (!canvas) return;
   canvas.getObjects().forEach((o: any) => {
     o.set({ perPixelTargetFind: true });
+
+    // Clean up temporary group isolation mode styles if any were serialized
+    if (o._origOpacity !== undefined) {
+      o.set({ opacity: o._origOpacity });
+      delete o._origOpacity;
+    } else if (o.opacity === 0.2) {
+      o.set({ opacity: 1 });
+    }
+    if (o._origSelectable !== undefined) {
+      o.set({ selectable: o._origSelectable });
+      delete o._origSelectable;
+    }
+    if (o._origEvented !== undefined) {
+      o.set({ evented: o._origEvented });
+      delete o._origEvented;
+    }
+
     if (o.isStickyNote || (o.type === 'textbox' && (o.stickyColorConfig || o.backgroundColor))) {
       o.isStickyNote = true;
-      o.minHeight = 180;
+      o.minHeight = o.minHeight || 180;
       o.textAlign = 'center';
+      o.splitByGrapheme = true;
+      o.lockUniScaling = true;
       const orig = o.calcTextHeight.bind(o);
       o.calcTextHeight = function() {
         return Math.max(orig(), (this as any).minHeight || 180);
@@ -1474,10 +1498,53 @@ const loadFromFirebase = async (json: string) => {
       };
       o.initDimensions();
     }
+
+    if (o.isLocked) {
+      o.set({
+        lockMovementX: true,
+        lockMovementY: true,
+        lockRotation: true,
+        lockScalingX: true,
+        lockScalingY: true,
+        hasControls: false
+      });
+    }
   });
+};
+
+const getSerializedCanvasJson = (): string => {
+  if (!canvas) return '';
+  return JSON.stringify((canvas as any).toObject(CUSTOM_PROPS));
+};
+
+const saveHistoryState = () => {
+  if (!canvas || isInternalChange) return;
+  const json = getSerializedCanvasJson();
+  historyStack.value.push(json);
+  if (historyStack.value.length > 50) {
+    historyStack.value.shift();
+  }
+  if (historyStack.value.length > 1) {
+    hasUnsavedChanges.value = true;
+  }
+};
+
+const syncToFirebase = () => {
+  if (isInternalChange || !canvas || !roomStore.currentRoom?.whiteboardActive) return;
+  const json = getSerializedCanvasJson();
+  roomStore.syncWhiteboardState(json);
+};
+
+const loadFromFirebase = async (json: string) => {
+  if (!canvas || !json) return;
+  isInternalChange = true;
+  await canvas.loadFromJSON(json);
+  rehydrateCanvasObjects();
   canvas.requestRenderAll();
 
-  if (historyStack.value[historyStack.value.length - 1] !== json) {
+  if (historyStack.value.length === 0) {
+    historyStack.value = [json];
+  } else if (historyStack.value[historyStack.value.length - 1] !== json) {
     historyStack.value.push(json);
     if (historyStack.value.length > 50) historyStack.value.shift();
   }
@@ -2048,13 +2115,19 @@ const ungroupObjects = () => {
 
 const undo = async () => {
   if (!canvas || historyStack.value.length <= 1) return;
+
+  // Clean up group isolation mode state safely if currently in isolation mode
+  if (isIsolationMode.value) {
+    isIsolationMode.value = false;
+    isolatedGroup = null;
+    isolatedItems = [];
+  }
+
   isInternalChange = true;
   historyStack.value.pop(); // remove current state
   const previousState = historyStack.value[historyStack.value.length - 1];
   await canvas.loadFromJSON(previousState);
-  canvas.getObjects().forEach((o: any) => {
-    o.set({ perPixelTargetFind: true });
-  });
+  rehydrateCanvasObjects();
   canvas.requestRenderAll();
   syncToFirebase();
   updateSelectionState();
@@ -2169,17 +2242,21 @@ const handleSendToChat = async () => {
   // Keeps whiteboard open for continuous drawing!
 };
 
+const handleCancelCloseModal = () => {
+  showCloseConfirmModal.value = false;
+};
+
 const handleBroadcast = () => {
   if (!canvas) return;
-  const json = JSON.stringify(canvas.toJSON());
+  const json = getSerializedCanvasJson();
   roomStore.startWhiteboardSession(json);
 };
 
 const handleStopBroadcast = async () => {
   if (!canvas) return;
-  const json = JSON.stringify(canvas.toJSON());
+  const json = getSerializedCanvasJson();
   const dataUrl = getCanvasSnapshot(0.7);
-  emit('save-state', json, dataUrl);
+  emit('save-state', json, dataUrl, currentAssetId.value);
   hasUnsavedChanges.value = false;
   roomStore.endWhiteboardSession();
   emit('close');
@@ -2205,9 +2282,9 @@ const handleConfirmDiscard = () => {
 
 const handleConfirmSave = () => {
   if (!canvas) return;
-  const json = JSON.stringify(canvas.toJSON());
+  const json = getSerializedCanvasJson();
   const dataUrl = getCanvasSnapshot(0.7);
-  emit('save-state', json, dataUrl);
+  emit('save-state', json, dataUrl, currentAssetId.value);
   hasUnsavedChanges.value = false;
   showCloseConfirmModal.value = false;
   emit('close');
@@ -2215,6 +2292,13 @@ const handleConfirmSave = () => {
 
 // Keyboard Shortcuts
 const handleKeydown = (e: KeyboardEvent) => {
+  // 0. ESC inside Confirmation Modal: cancel modal and return to editing
+  if (e.key === 'Escape' && showCloseConfirmModal.value) {
+    e.preventDefault();
+    handleCancelCloseModal();
+    return;
+  }
+
   const activeObj = canvas?.getActiveObject() as any;
   const targetTag = (e.target as HTMLElement)?.tagName?.toLowerCase();
   const isInputTarget = targetTag === 'input' || (targetTag === 'textarea' && !(e.target as HTMLElement)?.classList.contains('fabric-canvas-textarea'));
@@ -2317,11 +2401,12 @@ const handleWindowClick = () => {
 };
 
 const triggerAutoSaveAsAsset = async () => {
-  if (!canvas) return;
-  const json = JSON.stringify(canvas.toJSON());
+  if (!canvas) return '';
+  const json = getSerializedCanvasJson();
   const dataUrl = getCanvasSnapshot(0.7);
-  emit('save-state', json, dataUrl);
+  emit('save-state', json, dataUrl, currentAssetId.value);
   hasUnsavedChanges.value = false;
+  return json;
 };
 
 const handleBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -2342,7 +2427,8 @@ defineExpose({
   triggerAutoSaveAsAsset,
   handleStopBroadcast,
   getCanvasSnapshot,
-  getCanvasJson: () => canvas ? JSON.stringify(canvas.toJSON()) : ''
+  setCurrentAssetId: (id: string) => { currentAssetId.value = id; },
+  getCanvasJson: () => getSerializedCanvasJson()
 });
 
 // --- AI Generator ---
@@ -3065,6 +3151,7 @@ onUnmounted(() => {
     <div
       v-if="showCloseConfirmModal"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
+      @click.self="handleCancelCloseModal"
     >
       <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-sm w-full shadow-2xl text-slate-100 space-y-4 animate-in fade-in zoom-in-95">
         <div class="flex items-center gap-3">
@@ -3080,6 +3167,12 @@ onUnmounted(() => {
           Would you like to save this whiteboard as an asset in the Room Album and post it to chat, or discard your modifications?
         </p>
         <div class="flex items-center justify-end gap-2 pt-2">
+          <button
+            @click="handleCancelCloseModal"
+            class="px-3 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-slate-800 border border-slate-700 transition cursor-pointer"
+          >
+            Cancel
+          </button>
           <button
             @click="handleConfirmDiscard"
             class="px-3 py-2 rounded-xl text-xs font-semibold text-rose-400 hover:bg-rose-950/40 border border-rose-500/30 transition cursor-pointer"

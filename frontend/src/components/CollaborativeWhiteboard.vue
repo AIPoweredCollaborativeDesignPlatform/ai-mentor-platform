@@ -4,7 +4,7 @@ import { useRoomStore } from '../stores/room';
 import { useAuthStore } from '../stores/auth';
 import * as fabric from 'fabric';
 import {
-  X, Pencil, Image as ImageIcon, Undo2, Trash2, Maximize, Minimize, Check, Loader2, Sparkles, Send, Radio, Settings2, MousePointer2, Type, Square, Circle, Triangle, Minus, Group, Ungroup, BringToFront, SendToBack, MoveUp, MoveDown, Copy, Scissors, ClipboardPaste, AlertTriangle, AlertCircle, RefreshCw, ChevronDown, ChevronUp
+  X, Pencil, Image as ImageIcon, Undo2, Trash2, Maximize, Minimize, Check, Loader2, Sparkles, Send, Radio, Settings2, MousePointer2, Type, Square, Circle, Triangle, Minus, Group, Ungroup, BringToFront, SendToBack, MoveUp, MoveDown, Copy, Scissors, ClipboardPaste, AlertTriangle, AlertCircle, RefreshCw, ChevronDown, ChevronUp, StickyNote, MoreHorizontal
 } from 'lucide-vue-next';
 import { generateSvgForWhiteboard } from '../services/ai';
 
@@ -28,6 +28,7 @@ const authStore = useAuthStore();
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 const fileInputRef = ref<HTMLInputElement | null>(null);
 const wrapperRef = ref<HTMLDivElement | null>(null);
+const stickyTextareaRef = ref<HTMLTextAreaElement | null>(null);
 
 let canvas: fabric.Canvas | null = null;
 
@@ -43,8 +44,42 @@ const strokeSizes = [
   { label: 'XL', value: 16 }
 ];
 
+// Sticky Notes Configuration & State
+interface StickyColorConfig {
+  name: string;
+  bg: string;
+  text: string;
+  border: string;
+}
+
+const stickyColors: StickyColorConfig[] = [
+  { name: 'Yellow', bg: '#fef08a', text: '#854d0e', border: '#fde047' },
+  { name: 'Green', bg: '#bbf7d0', text: '#166534', border: '#86efac' },
+  { name: 'Blue', bg: '#bae6fd', text: '#075985', border: '#7dd3fc' },
+  { name: 'Pink', bg: '#fbcfe8', text: '#9d174d', border: '#f472b6' },
+  { name: 'Purple', bg: '#e9d5ff', text: '#6b21a8', border: '#c084fc' },
+  { name: 'Orange', bg: '#fed7aa', text: '#9a3412', border: '#fdba74' },
+];
+
+const selectedStickyColor = ref<StickyColorConfig>(stickyColors[0]);
+const isStickyMenuOpen = ref(false);
+const activeStickyNote = ref<any>(null);
+const stickyToolbarPosition = ref({ x: 0, y: 0, visible: false });
+
+const editingSticky = ref<{
+  group: any;
+  textObj: any;
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  bg: string;
+  textColor: string;
+} | null>(null);
+
 const isBrushMenuOpen = ref(false);
-const currentTool = ref('draw'); // 'select', 'draw', 'text', 'rect', 'circle', 'triangle', 'line'
+const currentTool = ref('draw'); // 'select', 'draw', 'text', 'sticky', 'rect', 'circle', 'triangle', 'line'
 
 let isInternalChange = false;
 const historyStack = ref<string[]>([]);
@@ -57,17 +92,46 @@ const hasSelection = ref(false);
 const isMultiSelection = ref(false);
 const isGroupSelected = ref(false);
 
+const updateStickyToolbar = () => {
+  if (!canvas) {
+    activeStickyNote.value = null;
+    stickyToolbarPosition.value.visible = false;
+    return;
+  }
+  const active = canvas.getActiveObject();
+  if (active && (active.type === 'group' && ((active as any).isStickyNote || (active as any).stickyColor))) {
+    activeStickyNote.value = active as fabric.Group;
+    const bound = active.getBoundingRect();
+    const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
+    const zoom = canvas.getZoom();
+    const screenX = bound.left * zoom + vpt[4];
+    const screenY = bound.top * zoom + vpt[5];
+    const screenW = bound.width * zoom;
+    stickyToolbarPosition.value = {
+      x: screenX + screenW / 2,
+      y: Math.max(10, screenY - 12),
+      visible: true
+    };
+  } else {
+    activeStickyNote.value = null;
+    stickyToolbarPosition.value.visible = false;
+  }
+};
+
 const updateSelectionState = () => {
   if (!canvas) {
     hasSelection.value = false;
     isMultiSelection.value = false;
     isGroupSelected.value = false;
+    activeStickyNote.value = null;
+    stickyToolbarPosition.value.visible = false;
     return;
   }
   const active = canvas.getActiveObject();
   hasSelection.value = !!active;
   isMultiSelection.value = active?.type === 'activeSelection';
   isGroupSelected.value = active?.type === 'group';
+  updateStickyToolbar();
 };
 
 // Hit-test helper: ensures selection marquee checks actual stroke/entity, not empty bounding box
@@ -371,11 +435,31 @@ const initFabric = () => {
 
     const scenePoint = canvas.getScenePoint(e);
 
+    // Sticky Note tool
+    if (currentTool.value === 'sticky') {
+      spawnStickyNote(scenePoint.x, scenePoint.y);
+      return;
+    }
+
     // Text tool
     if (currentTool.value === 'text') {
+      const target = opt.target || (canvas.findTarget(e) as any);
+      if (target && (target.type === 'i-text' || target.type === 'text' || target.type === 'textbox')) {
+        canvas.setActiveObject(target);
+        if ((target as any).enterEditing) {
+          (target as any).enterEditing();
+          (target as any).selectAll?.();
+        }
+        canvas.requestRenderAll();
+        updateSelectionState();
+        return;
+      }
+
       const text = new fabric.IText('Type here...', {
         left: scenePoint.x,
         top: scenePoint.y,
+        originX: 'left',
+        originY: 'bottom',
         fontFamily: 'Inter, sans-serif',
         fontSize: 24,
         fill: activeColor.value,
@@ -388,12 +472,12 @@ const initFabric = () => {
       text.enterEditing();
       text.selectAll();
       updateSelectionState();
-      // Keep text tool active until user switches tools!
       return;
     }
 
     // Shapes
     if (['rect', 'circle', 'triangle', 'line'].includes(currentTool.value)) {
+      canvas.selection = false;
       drawingStartPoint = { x: scenePoint.x, y: scenePoint.y };
       const options = {
         left: scenePoint.x,
@@ -409,7 +493,7 @@ const initFabric = () => {
       };
 
       if (currentTool.value === 'rect') drawingObject = new fabric.Rect({ ...options, width: 0, height: 0 });
-      else if (currentTool.value === 'circle') drawingObject = new fabric.Circle({ ...options, radius: 0 });
+      else if (currentTool.value === 'circle') drawingObject = new fabric.Circle({ ...options, radius: 0, lockUniScaling: true });
       else if (currentTool.value === 'triangle') drawingObject = new fabric.Triangle({ ...options, width: 0, height: 0 });
       else if (currentTool.value === 'line') drawingObject = new fabric.Line([scenePoint.x, scenePoint.y, scenePoint.x, scenePoint.y], { ...options });
 
@@ -445,10 +529,15 @@ const initFabric = () => {
       if (scenePoint.x < drawingStartPoint.x) drawingObject.set({ left: scenePoint.x });
       if (scenePoint.y < drawingStartPoint.y) drawingObject.set({ top: scenePoint.y });
     } else if (currentTool.value === 'circle') {
-      const radius = Math.max(Math.abs(scenePoint.x - drawingStartPoint.x), Math.abs(scenePoint.y - drawingStartPoint.y)) / 2;
-      drawingObject.set({ radius });
-      if (scenePoint.x < drawingStartPoint.x) drawingObject.set({ left: drawingStartPoint.x - radius * 2 });
-      if (scenePoint.y < drawingStartPoint.y) drawingObject.set({ top: drawingStartPoint.y - radius * 2 });
+      const dx = scenePoint.x - drawingStartPoint.x;
+      const dy = scenePoint.y - drawingStartPoint.y;
+      const side = Math.max(Math.abs(dx), Math.abs(dy));
+      const radius = side / 2;
+      drawingObject.set({
+        radius,
+        left: dx >= 0 ? drawingStartPoint.x : drawingStartPoint.x - side,
+        top: dy >= 0 ? drawingStartPoint.y : drawingStartPoint.y - side,
+      });
     } else if (currentTool.value === 'line') {
       drawingObject.set({ x2: scenePoint.x, y2: scenePoint.y });
     }
@@ -462,7 +551,7 @@ const initFabric = () => {
 
     if (isDragging) {
       isDragging = false;
-      canvas.selection = true;
+      canvas.selection = currentTool.value === 'select';
     }
 
     if (drawingObject) {
@@ -482,6 +571,13 @@ const initFabric = () => {
         canvas.requestRenderAll();
       } else {
         drawingObject.set({ selectable: true, evented: true, perPixelTargetFind: true });
+        if (currentTool.value === 'circle') {
+          drawingObject.set({ lockUniScaling: true });
+          drawingObject.setControlVisible('mt', false);
+          drawingObject.setControlVisible('mb', false);
+          drawingObject.setControlVisible('ml', false);
+          drawingObject.setControlVisible('mr', false);
+        }
         drawingObject.setCoords();
         canvas.setActiveObject(drawingObject);
         canvas.requestRenderAll();
@@ -494,6 +590,18 @@ const initFabric = () => {
       drawingStartPoint = null;
     }
   });
+
+  // Double click for sticky notes text editing
+  canvas.on('mouse:dblclick', (opt) => {
+    const target = opt.target as any;
+    if (target && target.type === 'group' && (target.isStickyNote || target.stickyColor)) {
+      openStickyEditor(target);
+    }
+  });
+
+  canvas.on('object:moving', updateStickyToolbar);
+  canvas.on('object:scaling', updateStickyToolbar);
+  canvas.on('object:rotating', updateStickyToolbar);
 
   // Handle resizing
   const resizeObserver = new ResizeObserver(() => {
@@ -633,8 +741,283 @@ const pasteSelection = async (targetPoint?: { x: number; y: number }) => {
   updateSelectionState();
 };
 
+// Sticky Note Actions
+const openStickyEditor = (group: any) => {
+  if (!canvas || !group) return;
+  const items = group.getObjects ? group.getObjects() : [];
+  const rectObj = items.find((o: any) => o.type === 'rect') as fabric.Rect;
+  const textObj = items.find((o: any) => o.type === 'i-text' || o.type === 'text' || o.type === 'textbox') as fabric.IText;
+  if (!rectObj || !textObj) return;
+
+  const bound = group.getBoundingRect();
+  const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
+  const zoom = canvas.getZoom();
+
+  const screenX = bound.left * zoom + vpt[4];
+  const screenY = bound.top * zoom + vpt[5];
+  const screenW = bound.width * zoom;
+  const screenH = bound.height * zoom;
+
+  const colorCfg = (group as any).stickyColorConfig || selectedStickyColor.value;
+
+  editingSticky.value = {
+    group,
+    textObj,
+    text: textObj.text === 'Double click to edit...' ? '' : (textObj.text || ''),
+    x: screenX,
+    y: screenY,
+    width: Math.max(120, screenW),
+    height: Math.max(120, screenH),
+    bg: colorCfg.bg,
+    textColor: colorCfg.text
+  };
+
+  nextTick(() => {
+    if (stickyTextareaRef.value) {
+      stickyTextareaRef.value.focus();
+      stickyTextareaRef.value.select();
+    }
+  });
+};
+
+const closeStickyEditor = () => {
+  if (!editingSticky.value || !canvas) return;
+  const { group, textObj, text } = editingSticky.value;
+  const trimmed = text.trim();
+  textObj.set({ text: trimmed || 'Double click to edit...' });
+  group.dirty = true;
+  canvas.requestRenderAll();
+  saveHistoryState();
+  syncToFirebase();
+  editingSticky.value = null;
+  updateStickyToolbar();
+};
+
+const spawnStickyNote = (x: number, y: number, colorCfg = selectedStickyColor.value) => {
+  if (!canvas) return;
+  const size = 180;
+  const rect = new fabric.Rect({
+    width: size,
+    height: size,
+    fill: colorCfg.bg,
+    stroke: colorCfg.border,
+    strokeWidth: 2,
+    rx: 10,
+    ry: 10,
+    originX: 'center',
+    originY: 'center',
+    shadow: new fabric.Shadow({
+      color: 'rgba(0, 0, 0, 0.12)',
+      blur: 10,
+      offsetX: 2,
+      offsetY: 4
+    })
+  });
+
+  const text = new fabric.IText('Double click to edit...', {
+    fontSize: 16,
+    fontFamily: 'Inter, sans-serif',
+    fill: colorCfg.text,
+    originX: 'center',
+    originY: 'center',
+    textAlign: 'center',
+    width: size - 32,
+    splitByGrapheme: true
+  });
+
+  const group = new fabric.Group([rect, text], {
+    left: x,
+    top: y,
+    originX: 'center',
+    originY: 'center',
+    subTargetCheck: false,
+    perPixelTargetFind: true
+  });
+
+  (group as any).lockUniScaling = true;
+  (group as any).isStickyNote = true;
+  (group as any).stickyColorConfig = colorCfg;
+  (group as any).stickyColor = colorCfg.bg;
+
+  canvas.add(group);
+  canvas.setActiveObject(group);
+  canvas.requestRenderAll();
+  saveHistoryState();
+  syncToFirebase();
+  updateSelectionState();
+
+  toggleMode(false);
+  openStickyEditor(group);
+};
+
+const changeStickyNoteColor = (group: any, colorCfg: StickyColorConfig) => {
+  if (!canvas || !group) return;
+  const items = group.getObjects ? group.getObjects() : [];
+  const rectObj = items.find((o: any) => o.type === 'rect') as fabric.Rect;
+  const textObj = items.find((o: any) => o.type === 'i-text' || o.type === 'text' || o.type === 'textbox') as fabric.IText;
+
+  if (rectObj) {
+    rectObj.set({ fill: colorCfg.bg, stroke: colorCfg.border });
+  }
+  if (textObj) {
+    textObj.set({ fill: colorCfg.text });
+  }
+  (group as any).stickyColorConfig = colorCfg;
+  (group as any).stickyColor = colorCfg.bg;
+  group.dirty = true;
+  canvas.requestRenderAll();
+  saveHistoryState();
+  syncToFirebase();
+  updateStickyToolbar();
+};
+
+const duplicateStickyNote = async (group: any) => {
+  if (!canvas || !group) return;
+  const cloned = await group.clone();
+  cloned.set({
+    left: (group.left || 0) + 24,
+    top: (group.top || 0) + 24,
+    evented: true,
+    perPixelTargetFind: true
+  });
+  (cloned as any).lockUniScaling = true;
+  (cloned as any).isStickyNote = true;
+  (cloned as any).stickyColorConfig = (group as any).stickyColorConfig;
+  (cloned as any).stickyColor = (group as any).stickyColor;
+  canvas.add(cloned);
+  canvas.setActiveObject(cloned);
+  canvas.requestRenderAll();
+  saveHistoryState();
+  syncToFirebase();
+  updateSelectionState();
+};
+
+const addSticky = (color?: StickyColorConfig) => {
+  if (color) selectedStickyColor.value = color;
+  currentTool.value = 'sticky';
+  isDrawingMode.value = false;
+  if (canvas) {
+    canvas.isDrawingMode = false;
+    canvas.selection = false;
+    canvas.discardActiveObject();
+    canvas.requestRenderAll();
+  }
+  updateSelectionState();
+};
+
+// Clipboard / Paste Actions
+const insertPastedText = (text: string, point?: { x: number; y: number }) => {
+  if (!canvas || !text) return;
+  const targetPoint = point || canvas.getVpCenter();
+  const textObj = new fabric.IText(text, {
+    left: targetPoint.x,
+    top: targetPoint.y,
+    originX: 'left',
+    originY: 'bottom',
+    fontFamily: 'Inter, sans-serif',
+    fontSize: 22,
+    fill: activeColor.value,
+    perPixelTargetFind: true
+  });
+  canvas.add(textObj);
+  canvas.setActiveObject(textObj);
+  canvas.requestRenderAll();
+  saveHistoryState();
+  syncToFirebase();
+  updateSelectionState();
+  toggleMode(false);
+};
+
+const insertPastedImage = (fileOrBlob: Blob, point?: { x: number; y: number }) => {
+  if (!canvas) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const imgUrl = e.target?.result as string;
+    fabric.Image.fromURL(imgUrl).then(img => {
+      if (!canvas) return;
+      if (img.width && img.width > 800) {
+        img.scaleToWidth(800);
+      }
+      const targetPoint = point || canvas.getVpCenter();
+      img.set({
+        left: targetPoint.x,
+        top: targetPoint.y,
+        originX: 'center',
+        originY: 'center',
+        perPixelTargetFind: true
+      });
+      canvas.add(img);
+      canvas.setActiveObject(img);
+      canvas.requestRenderAll();
+      saveHistoryState();
+      syncToFirebase();
+      updateSelectionState();
+      toggleMode(false);
+    });
+  };
+  reader.readAsDataURL(fileOrBlob);
+};
+
+const handlePasteAction = async (targetPoint?: { x: number; y: number }) => {
+  // 1. Internal Fabric clipboard
+  if (clipboard) {
+    await pasteSelection(targetPoint);
+    return;
+  }
+  // 2. System clipboard (text or image)
+  try {
+    if (navigator.clipboard?.read) {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        for (const type of item.types) {
+          if (type.startsWith('image/')) {
+            const blob = await item.getType(type);
+            insertPastedImage(blob, targetPoint);
+            return;
+          }
+        }
+      }
+    }
+    if (navigator.clipboard?.readText) {
+      const text = await navigator.clipboard.readText();
+      if (text.trim()) {
+        insertPastedText(text.trim(), targetPoint);
+        return;
+      }
+    }
+  } catch (err) {
+    console.warn('System clipboard read access not available:', err);
+  }
+};
+
+const handleGlobalPaste = (e: ClipboardEvent) => {
+  const targetTag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+  if (targetTag === 'input' || targetTag === 'textarea') return;
+  if (!canvas) return;
+
+  const items = e.clipboardData?.items;
+  if (items) {
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.indexOf('image') !== -1) {
+        const blob = item.getAsFile();
+        if (blob) {
+          e.preventDefault();
+          insertPastedImage(blob);
+          return;
+        }
+      }
+    }
+  }
+  const text = e.clipboardData?.getData('text');
+  if (text && text.trim()) {
+    e.preventDefault();
+    insertPastedText(text.trim());
+  }
+};
+
 const pasteAtContext = () => {
-  pasteSelection(contextMenuScenePoint || undefined);
+  handlePasteAction(contextMenuScenePoint || undefined);
 };
 
 const deleteSelected = () => {
@@ -813,13 +1196,17 @@ const toggleMode = (drawing: boolean) => {
   if (canvas) {
     isDrawingMode.value = drawing;
     canvas.isDrawingMode = drawing;
+    canvas.selection = !drawing;
   }
 };
 
 const addShape = (type: any) => {
   currentTool.value = type;
   isDrawingMode.value = false;
-  if (canvas) canvas.isDrawingMode = false;
+  if (canvas) {
+    canvas.isDrawingMode = false;
+    canvas.selection = false;
+  }
   canvas?.discardActiveObject();
   canvas?.requestRenderAll();
   updateSelectionState();
@@ -828,7 +1215,10 @@ const addShape = (type: any) => {
 const addText = () => {
   currentTool.value = 'text';
   isDrawingMode.value = false;
-  if (canvas) canvas.isDrawingMode = false;
+  if (canvas) {
+    canvas.isDrawingMode = false;
+    canvas.selection = false;
+  }
   canvas?.discardActiveObject();
   canvas?.requestRenderAll();
   updateSelectionState();
@@ -931,8 +1321,10 @@ const handleKeydown = (e: KeyboardEvent) => {
     e.preventDefault();
     cutSelection();
   } else if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
-    e.preventDefault();
-    pasteSelection();
+    if (clipboard) {
+      e.preventDefault();
+      pasteSelection();
+    }
   } else if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
     e.preventDefault();
     selectAll();
@@ -944,6 +1336,34 @@ const handleWindowClick = () => {
     contextMenu.value.visible = false;
   }
 };
+
+const triggerAutoSaveAsAsset = async () => {
+  if (!canvas) return;
+  const json = JSON.stringify(canvas.toJSON());
+  const dataUrl = getCanvasSnapshot(0.7);
+  emit('save-state', json, dataUrl);
+  hasUnsavedChanges.value = false;
+};
+
+const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+  if (roomStore.currentRoom?.whiteboardActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid) {
+    triggerAutoSaveAsAsset();
+    return;
+  }
+  if (hasUnsavedChanges.value) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+};
+
+defineExpose({
+  hasUnsavedChanges,
+  showCloseConfirmModal,
+  triggerAutoSaveAsAsset,
+  handleStopBroadcast,
+  getCanvasSnapshot,
+  getCanvasJson: () => canvas ? JSON.stringify(canvas.toJSON()) : ''
+});
 
 // --- AI Generator ---
 const aiPrompt = ref('');
@@ -1032,11 +1452,18 @@ const generateAIObject = async () => {
   }
 };
 
+const handleContextMenuCapture = (e: MouseEvent) => {
+  e.preventDefault();
+  e.stopPropagation();
+};
+
 onMounted(() => {
   window.addEventListener('keydown', handleKeydown);
   window.addEventListener('click', handleWindowClick);
+  window.addEventListener('paste', handleGlobalPaste);
+  window.addEventListener('beforeunload', handleBeforeUnload);
   if (wrapperRef.value) {
-    wrapperRef.value.addEventListener('contextmenu', (e) => e.preventDefault());
+    wrapperRef.value.addEventListener('contextmenu', handleContextMenuCapture, { capture: true });
   }
   nextTick(() => {
     initFabric();
@@ -1046,6 +1473,11 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown);
   window.removeEventListener('click', handleWindowClick);
+  window.removeEventListener('paste', handleGlobalPaste);
+  window.removeEventListener('beforeunload', handleBeforeUnload);
+  if (wrapperRef.value) {
+    wrapperRef.value.removeEventListener('contextmenu', handleContextMenuCapture, { capture: true });
+  }
   if (canvas) {
     canvas.dispose();
   }
@@ -1081,6 +1513,77 @@ onUnmounted(() => {
     <!-- Canvas Wrapper -->
     <div ref="wrapperRef" class="flex-1 w-full h-full relative cursor-crosshair">
       <canvas ref="canvasRef" class="w-full h-full touch-none"></canvas>
+
+      <!-- Floating Quick-Action Bar above Selected Sticky Note -->
+      <div
+        v-if="stickyToolbarPosition.visible && activeStickyNote"
+        class="absolute z-30 flex items-center gap-1.5 p-1.5 bg-slate-900/95 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl transition-all animate-in fade-in zoom-in-95 pointer-events-auto"
+        :style="{
+          left: `${stickyToolbarPosition.x}px`,
+          top: `${stickyToolbarPosition.y}px`,
+          transform: 'translate(-50%, -100%)'
+        }"
+      >
+        <div class="flex items-center gap-1 px-1">
+          <button
+            v-for="color in stickyColors"
+            :key="color.name"
+            @click="changeStickyNoteColor(activeStickyNote, color)"
+            class="w-4 h-4 rounded-full border border-black/20 hover:scale-125 transition transform cursor-pointer"
+            :style="{ backgroundColor: color.bg }"
+            :title="color.name"
+          ></button>
+        </div>
+        <div class="w-px h-4 bg-slate-700"></div>
+        <button
+          @click="openStickyEditor(activeStickyNote)"
+          class="p-1 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition cursor-pointer"
+          title="Edit Note"
+        >
+          <Pencil class="w-3.5 h-3.5" />
+        </button>
+        <button
+          @click="duplicateStickyNote(activeStickyNote)"
+          class="p-1 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition cursor-pointer"
+          title="Duplicate Note"
+        >
+          <Copy class="w-3.5 h-3.5" />
+        </button>
+        <button
+          @click="deleteSelected"
+          class="p-1 hover:bg-rose-950/60 text-rose-400 hover:text-rose-300 rounded-lg transition cursor-pointer"
+          title="Delete Note"
+        >
+          <Trash2 class="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      <!-- Inline Textarea Overlay for Sticky Note Editing -->
+      <div
+        v-if="editingSticky"
+        class="absolute z-40 pointer-events-auto shadow-2xl rounded-xl"
+        :style="{
+          left: `${editingSticky.x}px`,
+          top: `${editingSticky.y}px`,
+          width: `${editingSticky.width}px`,
+          height: `${editingSticky.height}px`
+        }"
+      >
+        <textarea
+          ref="stickyTextareaRef"
+          v-model="editingSticky.text"
+          @blur="closeStickyEditor"
+          @keydown.esc="closeStickyEditor"
+          @keydown.stop
+          class="w-full h-full p-4 resize-none border-2 rounded-xl font-medium text-sm focus:outline-none shadow-inner leading-relaxed transition-all"
+          :style="{
+            backgroundColor: editingSticky.bg,
+            color: editingSticky.textColor,
+            borderColor: 'rgba(0,0,0,0.15)'
+          }"
+          placeholder="Type note here..."
+        ></textarea>
+      </div>
     </div>
 
     <!-- Floating Unified Toolbar (Bottom Center) -->
@@ -1189,7 +1692,7 @@ onUnmounted(() => {
         </button>
         
         <div class="relative">
-          <button @click="toggleMode(true); isBrushMenuOpen = !isBrushMenuOpen" class="p-2 rounded-xl transition flex items-center gap-1" :class="currentTool !== 'select' && currentTool !== 'text' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'" title="Draw & Shapes">
+          <button @click="toggleMode(true); isBrushMenuOpen = !isBrushMenuOpen" class="p-2 rounded-xl transition flex items-center gap-1" :class="currentTool !== 'select' && currentTool !== 'text' && currentTool !== 'sticky' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'" title="Draw & Shapes">
             <Pencil class="w-4 h-4" />
           </button>
           
@@ -1212,6 +1715,32 @@ onUnmounted(() => {
         <button @click="addText" class="p-2 rounded-xl transition" :class="currentTool === 'text' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'" title="Add Text">
           <Type class="w-4 h-4" />
         </button>
+
+        <!-- Sticky Note Tool -->
+        <div class="relative">
+          <button
+            @click="addSticky(); isStickyMenuOpen = !isStickyMenuOpen"
+            class="p-2 rounded-xl transition flex items-center gap-1"
+            :class="currentTool === 'sticky' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'"
+            title="Sticky Note (便條紙)"
+          >
+            <StickyNote class="w-4 h-4" />
+          </button>
+          <div
+            v-if="isStickyMenuOpen"
+            class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-white rounded-xl shadow-xl border border-slate-200 p-2 flex items-center gap-1.5 z-20 min-w-max"
+          >
+            <button
+              v-for="color in stickyColors"
+              :key="color.name"
+              @click="addSticky(color); isStickyMenuOpen = false"
+              class="w-5 h-5 rounded-full border-2 transition transform hover:scale-110 cursor-pointer"
+              :class="selectedStickyColor.name === color.name ? 'border-indigo-500 scale-110 shadow-sm' : 'border-black/10 hover:border-black/30'"
+              :style="{ backgroundColor: color.bg }"
+              :title="color.name"
+            ></button>
+          </div>
+        </div>
         
         <div class="w-px h-6 bg-slate-200 mx-1 hidden sm:block"></div>
         
@@ -1261,10 +1790,9 @@ onUnmounted(() => {
         </button>
       </template>
 
-      <!-- Paste (always visible when clipboard has content) -->
+      <!-- Paste (always visible by default) -->
       <button
-        v-if="clipboard"
-        @click="pasteAtContext(); contextMenu.visible = false"
+        @click="handlePasteAction(contextMenuScenePoint || undefined); contextMenu.visible = false"
         class="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
       >
         <span class="flex items-center gap-2"><ClipboardPaste class="w-3.5 h-3.5 text-emerald-400" /> Paste Here</span>

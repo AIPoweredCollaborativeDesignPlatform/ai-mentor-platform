@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, nextTick, computed } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import { useRoomStore } from '../stores/room';
 import type { MessageItem } from '../types';
@@ -46,6 +46,7 @@ const authStore = useAuthStore();
 const roomStore = useRoomStore();
 
 const isWhiteboardOpen = ref(false);
+const whiteboardRef = ref<any>(null);
 const activeWhiteboardAssetId = ref<string | null>(null);
 const currentWhiteboardJson = ref<string | undefined>(undefined);
 
@@ -634,17 +635,48 @@ onMounted(async () => {
 });
 
 
-const cleanupWhiteboard = () => {
-  if (roomStore.currentRoom?.whiteboardActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid) {
+const handleWhiteboardBeforeUnload = (e: BeforeUnloadEvent) => {
+  if (isWhiteboardOpen.value && roomStore.currentRoom?.whiteboardActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid) {
+    whiteboardRef.value?.triggerAutoSaveAsAsset();
     roomStore.endWhiteboardSession();
+    return;
+  }
+  if (isWhiteboardOpen.value && whiteboardRef.value?.hasUnsavedChanges && !roomStore.currentRoom?.whiteboardActive) {
+    e.preventDefault();
+    e.returnValue = '';
   }
 };
+
+onBeforeRouteLeave(async (to, from, next) => {
+  if (isWhiteboardOpen.value && roomStore.currentRoom?.whiteboardActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid) {
+    try {
+      await whiteboardRef.value?.triggerAutoSaveAsAsset();
+      await roomStore.endWhiteboardSession();
+    } catch (err) {
+      console.error('Error auto-saving whiteboard on navigation leave:', err);
+    }
+    next();
+    return;
+  }
+  if (isWhiteboardOpen.value && whiteboardRef.value?.hasUnsavedChanges && !roomStore.currentRoom?.whiteboardActive) {
+    const confirmLeave = window.confirm('You have unsaved changes on your sketchpad. Are you sure you want to leave without saving?');
+    if (!confirmLeave) {
+      next(false);
+      return;
+    }
+  }
+  next();
+});
+
 onMounted(() => {
-  window.addEventListener('beforeunload', cleanupWhiteboard);
+  window.addEventListener('beforeunload', handleWhiteboardBeforeUnload);
 });
 onUnmounted(() => {
-  window.removeEventListener('beforeunload', cleanupWhiteboard);
-  cleanupWhiteboard();
+  window.removeEventListener('beforeunload', handleWhiteboardBeforeUnload);
+  if (roomStore.currentRoom?.whiteboardActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid) {
+    whiteboardRef.value?.triggerAutoSaveAsAsset();
+    roomStore.endWhiteboardSession();
+  }
 
   window.removeEventListener('beforeunload', handleUnload);
   window.removeEventListener('pagehide', handleUnload);
@@ -1283,6 +1315,7 @@ onUnmounted(() => {
       <!-- Collaborative Whiteboard Column -->
       <div v-if="isWhiteboardOpen" class="flex-1 h-full relative overflow-hidden bg-slate-900 shrink-0 min-w-[320px]">
         <CollaborativeWhiteboard
+          ref="whiteboardRef"
           :initialJson="currentWhiteboardJson"
           :activeAssetId="activeWhiteboardAssetId"
           @close="isWhiteboardOpen = false; activeWhiteboardAssetId = null; currentWhiteboardJson = undefined;"

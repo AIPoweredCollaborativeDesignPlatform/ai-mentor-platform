@@ -216,10 +216,5 @@ const handleGoogleSignIn = async () => {
         </div>
       </div>
     </div>
-
-    <!-- Subtle Version & Build Timestamp in normal flow -->
-    <div class="mt-4 text-center text-[10px] text-slate-600 font-mono select-none">
-      v1.7.2 · 2026-09-22 20:35
-    </div>
   </div>
 </template>

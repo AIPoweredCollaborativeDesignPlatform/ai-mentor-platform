@@ -217,6 +217,10 @@ export const useRoomStore = defineStore('room', () => {
           currentRoom.value.roomName = data.roomName;
           currentRoom.value.mentorConfig = data.mentorConfig;
           currentRoom.value.roomStatus = data.roomStatus;
+          currentRoom.value.whiteboardActive = data.whiteboardActive ?? false;
+          currentRoom.value.whiteboardHostUid = data.whiteboardHostUid || undefined;
+          currentRoom.value.whiteboardHostName = data.whiteboardHostName || undefined;
+          currentRoom.value.whiteboardState = data.whiteboardState || undefined;
         }
         if (data.mentorConfig) {
           mentorStore.config = data.mentorConfig;
@@ -354,7 +358,9 @@ export const useRoomStore = defineStore('room', () => {
       const pendingLocal = (currentRoom.value.messages || []).filter(
         local => !msgs.some(m => m.id === local.id || (m.senderUid === local.senderUid && Math.abs(m.timestamp - local.timestamp) < 3000))
       );
-      currentRoom.value.messages = [...msgs, ...pendingLocal];
+      const allMsgs = [...msgs, ...pendingLocal];
+      allMsgs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+      currentRoom.value.messages = allMsgs;
       
       // Update local cache for Dashboard
       saveToStorage(currentRoom.value);
@@ -665,6 +671,43 @@ export const useRoomStore = defineStore('room', () => {
 
     // Call Mentor Agent
     await triggerMentorAgent(text);
+  };
+
+  const sendCustomMessage = async (customPayload: Partial<MessageItem>): Promise<string | undefined> => {
+    if (!currentRoom.value) return undefined;
+
+    await setMyTyping(false);
+    const tempId = `temp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const optimisticMsg: MessageItem = {
+      id: tempId,
+      senderUid: authStore.uid,
+      senderName: authStore.displayName,
+      senderAvatar: authStore.avatar,
+      type: 'text',
+      content: '',
+      timestamp: Date.now(),
+      status: 'sending',
+      ...customPayload
+    } as MessageItem;
+
+    currentRoom.value.messages.push(optimisticMsg);
+
+    if (db) {
+      try {
+        const { status, id, ...payload } = optimisticMsg;
+        const docRef = await addDoc(collection(db, 'rooms', currentRoom.value.roomId, 'messages'), payload);
+        optimisticMsg.status = 'delivered';
+        optimisticMsg.id = docRef.id;
+        return docRef.id;
+      } catch (e) {
+        optimisticMsg.status = 'failed';
+        return undefined;
+      }
+    } else {
+      optimisticMsg.status = 'delivered';
+      saveToStorage(currentRoom.value);
+      return tempId;
+    }
   };
 
   // Retry sending a previously failed message
@@ -1223,7 +1266,11 @@ export const useRoomStore = defineStore('room', () => {
 
     if (db) {
       try {
-        const { id, status, ...payload } = aiMsg;
+        const { id, status, ...rawPayload } = aiMsg;
+        const payload: Record<string, any> = {};
+        for (const [k, v] of Object.entries(rawPayload)) {
+          if (v !== undefined) payload[k] = v;
+        }
         const docRef = await addDoc(collection(db, 'rooms', currentRoom.value.roomId, 'messages'), payload);
         aiMsg.id = docRef.id;
         const updatePayload: any = {
@@ -1320,7 +1367,7 @@ export const useRoomStore = defineStore('room', () => {
 
       if (res.success && res.modelUrl) {
         await addAiMessage(
-          `✨ 我已經為「${originalMsg.assetPayload.title}」完成了全彩高解析 PBR 材質上色與精緻化！`,
+          `✨ I have refined「${originalMsg.assetPayload.title}」with high-resolution color PBR textures and details.！`,
           'mesh_3d',
           {
             title: `${originalMsg.assetPayload.title} (Colored / PBR)`,
@@ -1344,6 +1391,91 @@ export const useRoomStore = defineStore('room', () => {
       if (db && currentRoom.value) {
         deleteDoc(doc(db, 'rooms', currentRoom.value.roomId, 'typing', 'ai_mentor_3d')).catch(() => {});
       }
+    }
+  };
+
+
+  let whiteboardSyncTimer: any = null;
+
+  const startWhiteboardSession = async (initialJson?: string) => {
+    if (!currentRoom.value || !db) return;
+    const hostName = authStore.displayName || 'Participant';
+    try {
+      await updateDoc(doc(db, 'rooms', currentRoom.value.roomId), {
+        whiteboardActive: true,
+        whiteboardHostUid: authStore.uid,
+        whiteboardHostName: hostName,
+        whiteboardState: initialJson || null
+      });
+      // Send capsule broadcast announcement to chat
+      await sendCustomMessage({
+        senderUid: 'system',
+        senderName: 'System',
+        content: `${hostName} started a collaborative whiteboard broadcast.`,
+        type: 'text'
+      });
+    } catch (e) {
+      console.error('Failed to start whiteboard:', e);
+      alert('Failed to start broadcast: ' + ((e as any).message || String(e)));
+    }
+  };
+
+  const syncWhiteboardState = async (json: string) => {
+    if (!currentRoom.value || !db || !currentRoom.value.whiteboardActive) return;
+    // Debounce syncing to avoid hitting Firestore write limits
+    clearTimeout(whiteboardSyncTimer);
+    whiteboardSyncTimer = setTimeout(async () => {
+      if (!currentRoom.value || !db || !currentRoom.value.whiteboardActive) return;
+      try {
+        await updateDoc(doc(db, 'rooms', currentRoom.value.roomId), {
+          whiteboardState: json
+        });
+      } catch (e) {
+        console.warn('Failed to sync whiteboard:', e);
+      }
+    }, 150);
+  };
+
+  const endWhiteboardSession = async () => {
+    if (!currentRoom.value || !db) return;
+    const hostName = authStore.displayName || 'Participant';
+    try {
+      await updateDoc(doc(db, 'rooms', currentRoom.value.roomId), {
+        whiteboardActive: false,
+        whiteboardHostUid: null,
+        whiteboardHostName: null,
+        whiteboardState: null
+      });
+      // Send capsule announcement to chat
+      await sendCustomMessage({
+        senderUid: 'system',
+        senderName: 'System',
+        content: `${hostName} ended the whiteboard broadcast.`,
+        type: 'text'
+      });
+    } catch (e) {
+      console.warn('Failed to end whiteboard:', e);
+    }
+  };
+
+  const updateCustomMessage = async (messageId: string, updates: Partial<MessageItem>) => {
+    if (!currentRoom.value || !db) return;
+    const now = Date.now();
+    try {
+      const msgRef = doc(db, 'rooms', currentRoom.value.roomId, 'messages', messageId);
+      const updateData: Record<string, any> = {
+        ...updates,
+        timestamp: now
+      };
+      await updateDoc(msgRef, updateData);
+
+      // Optimistically update local message and move to top
+      const localMsg = currentRoom.value.messages.find(m => m.id === messageId);
+      if (localMsg) {
+        Object.assign(localMsg, updates, { timestamp: now });
+      }
+    } catch (e) {
+      console.warn('Failed to update custom message:', e);
     }
   };
 
@@ -1380,6 +1512,8 @@ export const useRoomStore = defineStore('room', () => {
     endMeetingForAll,
     updateParticipantProfile,
     sendMessage,
+    sendCustomMessage,
+    updateCustomMessage,
     retrySendMessage,
     sendFileMessage,
     refineMeshyModel,
@@ -1389,6 +1523,9 @@ export const useRoomStore = defineStore('room', () => {
     startFirestoreListener,
     stopListening,
     abortCurrentAiGeneration,
-    syncMentorConfig
+    syncMentorConfig,
+    startWhiteboardSession,
+    syncWhiteboardState,
+    endWhiteboardSession
   };
 });

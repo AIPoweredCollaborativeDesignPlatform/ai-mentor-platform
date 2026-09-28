@@ -81,6 +81,13 @@ const initThreeScene = () => {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
+  renderer.domElement.style.width = '100%';
+  renderer.domElement.style.height = '100%';
+  renderer.domElement.style.display = 'block';
+  renderer.domElement.style.position = 'absolute';
+  renderer.domElement.style.top = '0';
+  renderer.domElement.style.left = '0';
+
   container.replaceChildren(renderer.domElement);
 
   // OrbitControls with full 360° global rotation
@@ -179,26 +186,18 @@ const loadGlbModel = (rawUrl: string) => {
       const center = box.getCenter(new THREE.Vector3());
       const size = box.getSize(new THREE.Vector3());
 
-      // Center geometry so (0,0,0) is true geometric centroid
-      root.position.x = -center.x;
-      root.position.y = -center.y;
-      root.position.z = -center.z;
-
       modelGroup.add(root);
 
       // Auto-scale model so it fits the viewport perfectly
       const maxDim = Math.max(size.x, size.y, size.z);
-      if (maxDim > 0) {
-        const targetScale = 2.0 / maxDim;
-        modelGroup.scale.set(targetScale, targetScale, targetScale);
-      } else {
-        modelGroup.scale.set(1, 1, 1);
-      }
+      const targetScale = maxDim > 0 ? 2.0 / maxDim : 1;
+      modelGroup.scale.set(targetScale, targetScale, targetScale);
 
-      // Reset camera view
+      // Reset camera view and target to the scaled center (Global Rotation)
       if (camera && controls) {
-        camera.position.set(0, 0.4, 3.4);
-        controls.target.set(0, 0, 0);
+        const scaledCenter = center.clone().multiplyScalar(targetScale);
+        camera.position.set(scaledCenter.x, scaledCenter.y + 0.4, scaledCenter.z + 3.4);
+        controls.target.copy(scaledCenter);
         controls.update();
       }
 
@@ -245,14 +244,14 @@ const handleWheel = (e: WheelEvent) => {
 // Zoom Controls (+ / -)
 const zoomIn = () => {
   if (!camera || !controls) return;
-  camera.position.multiplyScalar(0.75); // 25% zoom in
+  camera.position.multiplyScalar(0.5); // 50% zoom in
   if (camera.position.length() < 0.5) camera.position.setLength(0.5);
   controls.update();
 };
 
 const zoomOut = () => {
   if (!camera || !controls) return;
-  camera.position.multiplyScalar(1.35); // 35% zoom out
+  camera.position.multiplyScalar(2.0); // 100% zoom out
   if (camera.position.length() > 12) camera.position.setLength(12);
   controls.update();
 };
@@ -373,7 +372,6 @@ onUnmounted(() => {
         <h4 class="font-semibold text-slate-100 text-sm tracking-wide truncate">
           {{ assetData?.title || '3D Neural Mesh' }}
         </h4>
-        <span class="text-[9px] text-slate-500 font-mono border border-slate-700/50 rounded px-1.5 py-0.5 ml-1 shrink-0">v1.7.2</span>
         <span
           v-if="assetData?.isRefined"
           class="text-[10px] bg-emerald-500/20 text-emerald-300 font-mono px-2 py-0.5 rounded-full border border-emerald-500/30 flex items-center gap-1 shrink-0"
@@ -429,7 +427,7 @@ onUnmounted(() => {
       <!-- Pure Three.js WebGL Canvas Mount Node -->
       <div
         ref="canvasContainerRef"
-        class="w-full h-full block cursor-grab active:cursor-grabbing"
+        class="absolute inset-0 w-full h-full block cursor-grab active:cursor-grabbing"
       ></div>
 
       <!-- Fallback Poster (If WebGL fails or disabled) -->

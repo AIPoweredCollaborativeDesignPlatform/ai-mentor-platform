@@ -5,6 +5,7 @@ import {
   doc,
   getDocs,
   deleteDoc,
+  updateDoc,
   collection,
   query,
   where,
@@ -46,9 +47,11 @@ interface RoomHistoryItem {
 }
 
 const historyRooms = ref<RoomHistoryItem[]>([]);
+const trashRooms = ref<RoomHistoryItem[]>([]);
 const generatedAssets = ref<{ type: string; title: string; date: string; roomPin: string }[]>([]);
 
 const isManageMode = ref(false);
+const isTrashView = ref(false);
 const selectedRooms = ref(new Set<string>());
 const showDeleteModal = ref(false);
 const trashNotification = ref('');
@@ -149,7 +152,8 @@ const loadDashboardData = async () => {
   });
 
   initialRooms.sort((a, b) => b.timestamp - a.timestamp);
-  historyRooms.value = initialRooms;
+  historyRooms.value = initialRooms.filter(r => !(localMap.get(r.pin)?.deletedAt));
+  trashRooms.value = initialRooms.filter(r => localMap.get(r.pin)?.deletedAt);
   generatedAssets.value = initialAssets;
 
   // 2. Fetch remote rooms from Firestore (Multi-device synchronization)
@@ -317,7 +321,8 @@ const loadDashboardData = async () => {
     });
 
     mergedRooms.sort((a, b) => b.timestamp - a.timestamp);
-    historyRooms.value = mergedRooms;
+    historyRooms.value = mergedRooms.filter(r => !(remoteRoomsMap.get(r.pin)?.deletedAt));
+    trashRooms.value = mergedRooms.filter(r => remoteRoomsMap.get(r.pin)?.deletedAt);
     generatedAssets.value = mergedAssets;
   } catch (err) {
     console.error('Failed to sync cloud rooms:', err);
@@ -342,24 +347,24 @@ onMounted(async () => {
   await loadDashboardData();
 });
 
+
 const confirmDelete = async () => {
   const pinsToDelete = Array.from(selectedRooms.value);
   const count = pinsToDelete.length;
 
   for (const pin of pinsToDelete) {
     const rawItem = localStorage.getItem(`ai_room_${pin}`);
-    const room = historyRooms.value.find((r) => r.pin === pin);
+    const room = historyRooms.value.find((r) => r.pin === pin) || trashRooms.value.find((r) => r.pin === pin);
     const docId = room?.id || (rawItem ? JSON.parse(rawItem).roomId : `room_${pin}`);
 
-    localStorage.removeItem(`ai_room_${pin}`);
+    if (rawItem) {
+      const parsed = JSON.parse(rawItem);
+      parsed.deletedAt = Date.now();
+      localStorage.setItem(`ai_room_${pin}`, JSON.stringify(parsed));
+    }
 
     if (db) {
       try {
-        // Remove from user's personal cloud history index
-        if (authStore.uid) {
-          await deleteDoc(doc(db, 'users', authStore.uid, 'rooms', docId)).catch(() => {});
-        }
-        // If user is host, remove room from Firestore
         let isHost = false;
         if (rawItem) {
           try {
@@ -367,8 +372,14 @@ const confirmDelete = async () => {
             if (parsed.hostUid === authStore.uid) isHost = true;
           } catch (e) {}
         }
+        
         if (isHost) {
-          await deleteDoc(doc(db, 'rooms', docId)).catch(() => {});
+          await updateDoc(doc(db, 'rooms', docId), { deletedAt: Date.now() }).catch(() => {});
+        } else {
+          // If not host, just delete it from personal index
+          if (authStore.uid) {
+            await deleteDoc(doc(db, 'users', authStore.uid, 'rooms', docId)).catch(() => {});
+          }
         }
       } catch (e) {
         console.warn('Failed to delete room doc:', e);
@@ -376,8 +387,7 @@ const confirmDelete = async () => {
     }
   }
 
-  historyRooms.value = historyRooms.value.filter((r) => !selectedRooms.value.has(r.pin));
-  generatedAssets.value = generatedAssets.value.filter((a) => !selectedRooms.value.has(a.roomPin));
+  await loadDashboardData();
   selectedRooms.value = new Set();
   showDeleteModal.value = false;
   isManageMode.value = false;
@@ -389,6 +399,91 @@ const confirmDelete = async () => {
   }, 4000);
 };
 
+const restoreRooms = async () => {
+  const pinsToRestore = Array.from(selectedRooms.value);
+  const count = pinsToRestore.length;
+
+  for (const pin of pinsToRestore) {
+    const rawItem = localStorage.getItem(`ai_room_${pin}`);
+    const room = trashRooms.value.find((r) => r.pin === pin);
+    const docId = room?.id || (rawItem ? JSON.parse(rawItem).roomId : `room_${pin}`);
+
+    if (rawItem) {
+      const parsed = JSON.parse(rawItem);
+      delete parsed.deletedAt;
+      localStorage.setItem(`ai_room_${pin}`, JSON.stringify(parsed));
+    }
+
+    if (db) {
+      try {
+        let isHost = false;
+        if (rawItem) {
+          try {
+            const parsed = JSON.parse(rawItem);
+            if (parsed.hostUid === authStore.uid) isHost = true;
+          } catch (e) {}
+        }
+        if (isHost) {
+          await updateDoc(doc(db, 'rooms', docId), { deletedAt: null }).catch(() => {});
+        }
+      } catch (e) {
+        console.warn('Failed to restore room doc:', e);
+      }
+    }
+  }
+
+  await loadDashboardData();
+  selectedRooms.value = new Set();
+  isManageMode.value = false;
+
+  trashNotification.value = `Restored ${count} meeting${count > 1 ? 's' : ''}`;
+  setTimeout(() => {
+    trashNotification.value = '';
+  }, 4000);
+};
+
+const confirmPermanentDelete = async () => {
+  const pinsToDelete = Array.from(selectedRooms.value);
+  const count = pinsToDelete.length;
+
+  for (const pin of pinsToDelete) {
+    const rawItem = localStorage.getItem(`ai_room_${pin}`);
+    const room = trashRooms.value.find((r) => r.pin === pin);
+    const docId = room?.id || (rawItem ? JSON.parse(rawItem).roomId : `room_${pin}`);
+
+    localStorage.removeItem(`ai_room_${pin}`);
+
+    if (db) {
+      try {
+        if (authStore.uid) {
+          await deleteDoc(doc(db, 'users', authStore.uid, 'rooms', docId)).catch(() => {});
+        }
+        let isHost = false;
+        if (rawItem) {
+          try {
+            const parsed = JSON.parse(rawItem);
+            if (parsed.hostUid === authStore.uid) isHost = true;
+          } catch (e) {}
+        }
+        if (isHost) {
+          await deleteDoc(doc(db, 'rooms', docId)).catch(() => {});
+        }
+      } catch (e) {
+        console.warn('Failed to permanently delete room doc:', e);
+      }
+    }
+  }
+
+  await loadDashboardData();
+  selectedRooms.value = new Set();
+  showDeleteModal.value = false;
+  isManageMode.value = false;
+
+  trashNotification.value = `Permanently deleted ${count} meeting${count > 1 ? 's' : ''}`;
+  setTimeout(() => {
+    trashNotification.value = '';
+  }, 4000);
+};
 const handleLogout = async () => {
   await authStore.logoutGoogle();
   historyRooms.value = [];
@@ -453,133 +548,167 @@ const handleLogout = async () => {
 
       <!-- History Rooms -->
       <section class="mb-8">
-        <div class="flex items-center justify-between mb-3">
-          <div class="flex items-center gap-2">
-            <h2 class="text-base font-bold text-slate-100 flex items-center gap-2">
-              <Clock class="w-4 h-4 text-sky-400" /> Meeting History
-            </h2>
-            <span v-if="historyRooms.length > 0" class="text-xs text-slate-500">
-              ({{ historyRooms.length }})
-            </span>
-            <span v-if="isLoading" class="text-xs text-slate-500 flex items-center gap-1">
-              <Loader2 class="w-3 h-3 animate-spin text-sky-400" /> Syncing...
-            </span>
-          </div>
-
-          <!-- Actions on right of header -->
-          <div v-if="historyRooms.length > 0" class="flex items-center gap-2">
-            <!-- If in manage mode -->
-            <template v-if="isManageMode">
-              <button
-                @click="toggleSelectAll"
-                class="text-xs px-2.5 py-1.5 rounded-lg border border-slate-700 bg-slate-800 text-slate-300 hover:text-white transition flex items-center gap-1"
-              >
-                <CheckCheck class="w-3.5 h-3.5 text-sky-400" />
-                <span>{{ selectedRooms.size === historyRooms.length ? 'Deselect All' : 'Select All' }}</span>
-              </button>
-              <button
-                @click="showDeleteModal = true"
-                :disabled="selectedRooms.size === 0"
-                class="text-xs px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium transition flex items-center gap-1.5 shadow"
-              >
-                <Trash2 class="w-3.5 h-3.5" />
-                <span>Move to Trash ({{ selectedRooms.size }})</span>
-              </button>
-              <button
-                @click="cancelManageMode"
-                class="text-xs px-2.5 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition"
-              >
-                Done
-              </button>
-            </template>
-
-            <!-- If not in manage mode -->
-            <template v-else>
-              <button
-                @click="isManageMode = true"
-                class="text-xs px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white transition flex items-center gap-1.5"
-              >
-                <SlidersHorizontal class="w-3.5 h-3.5 text-sky-400" />
-                <span>Manage</span>
-              </button>
-            </template>
-          </div>
-        </div>
-
-        <!-- Empty State -->
-        <div
-          v-if="historyRooms.length === 0 && !isLoading"
-          class="p-8 text-center rounded-2xl bg-slate-900/50 border border-slate-800"
-        >
-          <FolderOpen class="w-10 h-10 text-slate-600 mx-auto mb-3" />
-          <p class="text-sm text-slate-400">No meetings yet</p>
-          <p class="text-xs text-slate-500 mt-1">Create or join a meeting to see your history here</p>
-        </div>
-
-        <div v-else class="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div
-            v-for="room in historyRooms"
-            :key="room.id"
-            @click="isManageMode ? toggleSelect(room.pin) : null"
-            class="p-4 rounded-xl bg-slate-900/80 border transition flex flex-col justify-between group shadow"
-            :class="[
-              isManageMode ? 'cursor-pointer' : '',
-              selectedRooms.has(room.pin)
-                ? 'border-sky-500/80 ring-1 ring-sky-500/40 bg-slate-900'
-                : 'border-slate-800 hover:border-slate-700'
-            ]"
-          >
-            <div>
-              <div class="flex items-center justify-between mb-2">
-                <div class="flex items-center gap-2">
-                  <!-- Custom Checkbox (Only visible in manage mode) -->
-                  <div
-                    v-if="isManageMode"
-                    class="w-4 h-4 rounded border flex items-center justify-center transition shrink-0"
-                    :class="
-                      selectedRooms.has(room.pin)
-                        ? 'bg-sky-500 border-sky-400 text-white shadow-xs'
-                        : 'border-slate-600 bg-slate-950'
-                    "
-                  >
-                    <Check v-if="selectedRooms.has(room.pin)" class="w-3 h-3 stroke-[3]" />
-                  </div>
-
-                  <span
-                    class="text-[11px] font-mono px-2 py-0.5 rounded-md bg-slate-800 text-sky-400 border border-slate-700"
-                  >
-                    PIN: {{ room.pin }}
-                  </span>
-                </div>
-                <span class="text-[11px] text-slate-500">{{ room.date }}</span>
-              </div>
-
-              <h3 class="font-bold text-slate-100 text-sm mb-1 group-hover:text-sky-400 transition truncate">
-                {{ room.title }}
-              </h3>
-              <p class="text-[11px] text-slate-400 mb-2">
-                {{ room.members }} members
-              </p>
-
-              <div
-                v-if="room.preview"
-                class="p-2 rounded-lg bg-slate-950/50 border border-slate-800 text-xs text-slate-300 truncate"
-              >
-                {{ room.preview }}
-              </div>
+        
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2">
+              <h2 class="text-base font-bold text-slate-100 flex items-center gap-2">
+                <Clock class="w-4 h-4 text-sky-400" /> {{ isTrashView ? 'Trash' : 'Meeting History' }}
+              </h2>
+              <span v-if="historyRooms.length > 0 || trashRooms.length > 0" class="text-xs text-slate-500">
+                ({{ isTrashView ? trashRooms.length : historyRooms.length }})
+              </span>
+              <span v-if="isLoading" class="text-xs text-slate-500 flex items-center gap-1">
+                <Loader2 class="w-3 h-3 animate-spin text-sky-400" /> Syncing...
+              </span>
             </div>
 
-            <!-- Open Button (Only in non-manage mode) -->
-            <router-link
-              v-if="!isManageMode"
-              :to="`/room/${room.id}`"
-              class="mt-3 w-full text-center py-1.5 rounded-lg bg-slate-800 hover:bg-sky-600 hover:text-white text-slate-300 text-xs font-semibold transition"
-            >
-              Open
-            </router-link>
+            <!-- Actions on right of header -->
+            <div v-if="historyRooms.length > 0 || trashRooms.length > 0" class="flex items-center gap-2">
+              <!-- If in manage mode -->
+              <template v-if="isManageMode">
+                <button
+                  @click="toggleSelectAll"
+                  class="text-xs px-2.5 py-1.5 rounded-lg border border-slate-700 bg-slate-800 text-slate-300 hover:text-white transition flex items-center gap-1"
+                >
+                  <CheckCheck class="w-3.5 h-3.5 text-sky-400" />
+                  <span>{{ selectedRooms.size === (isTrashView ? trashRooms.length : historyRooms.length) ? 'Deselect All' : 'Select All' }}</span>
+                </button>
+                <button
+                  v-if="!isTrashView"
+                  @click="showDeleteModal = true"
+                  :disabled="selectedRooms.size === 0"
+                  class="text-xs px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium transition flex items-center gap-1.5 shadow"
+                >
+                  <Trash2 class="w-3.5 h-3.5" />
+                  <span>Move to Trash ({{ selectedRooms.size }})</span>
+                </button>
+                <template v-else>
+                  <button
+                    @click="restoreRooms"
+                    :disabled="selectedRooms.size === 0"
+                    class="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium transition shadow"
+                  >
+                    Restore ({{ selectedRooms.size }})
+                  </button>
+                  <button
+                    @click="confirmPermanentDelete"
+                    :disabled="selectedRooms.size === 0"
+                    class="text-xs px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium transition shadow"
+                  >
+                    Delete Permanently ({{ selectedRooms.size }})
+                  </button>
+                </template>
+                <button
+                  @click="cancelManageMode"
+                  class="text-xs px-2.5 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition"
+                >
+                  Done
+                </button>
+              </template>
+
+              <!-- If not in manage mode -->
+              <template v-else>
+                <button
+                  @click="isTrashView = !isTrashView"
+                  class="text-xs px-3 py-1.5 rounded-lg border transition flex items-center gap-1.5"
+                  :class="isTrashView ? 'border-sky-500/50 bg-sky-900/30 text-sky-400' : 'border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300'"
+                >
+                  <Trash2 class="w-3.5 h-3.5" />
+                  <span>{{ isTrashView ? 'Exit Trash' : 'Trash' }}</span>
+                </button>
+                <button
+                  v-if="(isTrashView ? trashRooms.length : historyRooms.length) > 0"
+                  @click="isManageMode = true"
+                  class="text-xs px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white transition flex items-center gap-1.5"
+                >
+                  <SlidersHorizontal class="w-3.5 h-3.5 text-sky-400" />
+                  <span>Manage</span>
+                </button>
+              </template>
+            </div>
           </div>
-        </div>
-      </section>
+
+          <!-- Empty State -->
+          <div
+            v-if="(isTrashView ? trashRooms.length : historyRooms.length) === 0 && !isLoading"
+            class="p-8 text-center rounded-2xl bg-slate-900/50 border border-slate-800"
+          >
+            <template v-if="isTrashView">
+              <Trash2 class="w-10 h-10 text-slate-600 mx-auto mb-3" />
+              <p class="text-sm text-slate-400">Trash is empty</p>
+              <p class="text-xs text-slate-500 mt-1">Items in trash will be permanently deleted after 30 days.</p>
+            </template>
+            <template v-else>
+              <FolderOpen class="w-10 h-10 text-slate-600 mx-auto mb-3" />
+              <p class="text-sm text-slate-400">No meetings yet</p>
+              <p class="text-xs text-slate-500 mt-1">Create or join a meeting to see your history here</p>
+            </template>
+          </div>
+
+          <div v-else class="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div
+              v-for="room in (isTrashView ? trashRooms : historyRooms)"
+              :key="room.id"
+              @click="isManageMode ? toggleSelect(room.pin) : null"
+              class="p-4 rounded-xl bg-slate-900/80 border transition flex flex-col justify-between group shadow"
+              :class="[
+                isManageMode ? 'cursor-pointer' : '',
+                selectedRooms.has(room.pin)
+                  ? 'border-sky-500/80 ring-1 ring-sky-500/40 bg-slate-900'
+                  : 'border-slate-800 hover:border-slate-700'
+              ]"
+            >
+              <div>
+                <div class="flex items-center justify-between mb-2">
+                  <div class="flex items-center gap-2">
+                    <!-- Custom Checkbox (Only visible in manage mode) -->
+                    <div
+                      v-if="isManageMode"
+                      class="w-4 h-4 rounded border flex items-center justify-center transition shrink-0"
+                      :class="
+                        selectedRooms.has(room.pin)
+                          ? 'bg-sky-500 border-sky-400 text-white shadow-xs'
+                          : 'border-slate-600 bg-slate-950'
+                      "
+                    >
+                      <Check v-if="selectedRooms.has(room.pin)" class="w-3 h-3 stroke-[3]" />
+                    </div>
+
+                    <span
+                      class="text-[11px] font-mono px-2 py-0.5 rounded-md bg-slate-800 text-sky-400 border border-slate-700"
+                    >
+                      PIN: {{ room.pin }}
+                    </span>
+                  </div>
+                  <span class="text-[11px] text-slate-500">{{ room.date }}</span>
+                </div>
+
+                <h3 class="font-bold text-slate-100 text-sm mb-1 group-hover:text-sky-400 transition truncate" :class="{'line-through opacity-60': isTrashView}">
+                  {{ room.title }}
+                </h3>
+                <p class="text-[11px] text-slate-400 mb-2">
+                  {{ room.members }} members
+                </p>
+
+                <div
+                  v-if="room.preview"
+                  class="text-xs text-slate-400/80 line-clamp-2 italic border-l-2 border-slate-700 pl-2"
+                >
+                  "{{ room.preview }}"
+                </div>
+              </div>
+
+              <!-- Open Button (Only in non-manage mode) -->
+              <router-link
+                v-if="!isManageMode && !isTrashView"
+                :to="`/room/${room.id}`"
+                class="mt-3 w-full text-center py-1.5 rounded-lg bg-slate-800 hover:bg-sky-600 hover:text-white text-slate-300 text-xs font-semibold transition"
+              >
+                Open
+              </router-link>
+            </div>
+          </div>
+</section>
 
       <!-- AI Assets Gallery -->
       <section v-if="generatedAssets.length > 0">

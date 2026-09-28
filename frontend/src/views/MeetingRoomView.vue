@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import { useRoomStore } from '../stores/room';
 import type { MessageItem } from '../types';
-import {
+import { 
   Sliders,
   Send,
   Sparkles,
@@ -27,7 +27,7 @@ import {
   Eye,
   WifiOff,
   Loader2
-} from 'lucide-vue-next';
+, PenTool } from 'lucide-vue-next';
 
 import ParametricViewer3D from '../components/ParametricViewer3D.vue';
 import ModelViewerGLB from '../components/ModelViewerGLB.vue';
@@ -37,7 +37,7 @@ import DocumentModal from '../components/DocumentModal.vue';
 import HostControlDrawer from '../components/HostControlDrawer.vue';
 import AlertModal from '../components/AlertModal.vue';
 import PdfViewerModal from '../components/PdfViewerModal.vue';
-import WhiteboardModal from '../components/WhiteboardModal.vue';
+import CollaborativeWhiteboard from '../components/CollaborativeWhiteboard.vue';
 import { currentLocale, setLocale, t, type SupportedLocale } from '../i18n';
 
 const route = useRoute();
@@ -46,16 +46,90 @@ const authStore = useAuthStore();
 const roomStore = useRoomStore();
 
 const isWhiteboardOpen = ref(false);
+const activeWhiteboardAssetId = ref<string | null>(null);
+const currentWhiteboardJson = ref<string | undefined>(undefined);
+
+// Only close whiteboard if a broadcast transition from active to stopped occurred
+watch(() => roomStore.currentRoom?.whiteboardActive, (isActive, wasActive) => {
+  if (wasActive === true && isActive === false) {
+    isWhiteboardOpen.value = false;
+    activeWhiteboardAssetId.value = null;
+    currentWhiteboardJson.value = undefined;
+  }
+});
+
+const handleOpenNewWhiteboard = () => {
+  activeWhiteboardAssetId.value = null;
+  currentWhiteboardJson.value = undefined;
+  isWhiteboardOpen.value = true;
+};
 
 const handleShareWhiteboard = async (file: File) => {
   await stageFile(file);
   await handleSend();
 };
 
+const handleSaveWhiteboardState = async (json: string, previewUrl: string) => {
+  if (activeWhiteboardAssetId.value) {
+    // Update existing asset in Room Album (deduplication & moves to top via timestamp update)
+    await roomStore.updateCustomMessage(activeWhiteboardAssetId.value, {
+      fileData: {
+        type: 'image',
+        url: previewUrl,
+        name: 'whiteboard.jpg',
+        size: 0
+      },
+      metadata: { whiteboardJson: json }
+    });
+    await roomStore.sendCustomMessage({
+      senderUid: 'system',
+      senderName: 'System',
+      content: `${authStore.displayName || 'Participant'} updated a whiteboard in Room Album.`,
+      type: 'text'
+    });
+  } else {
+    // Create new whiteboard asset
+    const newId = await roomStore.sendCustomMessage({
+      type: 'whiteboard_state',
+      content: 'Whiteboard session saved',
+      fileData: {
+        type: 'image',
+        url: previewUrl,
+        name: 'whiteboard.jpg',
+        size: 0
+      },
+      metadata: { whiteboardJson: json }
+    });
+    if (newId) {
+      activeWhiteboardAssetId.value = newId;
+    }
+  }
+};
+
+const openWhiteboardState = (msg: any) => {
+  if (msg.type !== 'whiteboard_state' || !msg.metadata?.whiteboardJson) return;
+  // Open locally with asset JSON; DO NOT involuntarily trigger broadcast session!
+  activeWhiteboardAssetId.value = msg.id;
+  currentWhiteboardJson.value = msg.metadata.whiteboardJson;
+  isWhiteboardOpen.value = true;
+};
+
+// Computed property to sort album items newest first
+const albumItems = computed(() => {
+  if (!roomStore.currentRoom?.messages) return [];
+  const items = roomStore.currentRoom.messages.filter(m =>
+    m.type === 'whiteboard_state' ||
+    m.type === 'ai_asset' ||
+    (m.type === 'file' && m.fileData?.type === 'image')
+  );
+  return [...items].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+});
+
 const roomId = ref(route.params.roomId as string);
 const pin = roomId.value.replace('room_', '');
 
 const isDrawerOpen = ref(false);
+const isAssetsDrawerOpen = ref(false);
 const inputMessage = ref('');
 const copiedUrl = ref(false);
 const chatContainerRef = ref<HTMLDivElement | null>(null);
@@ -133,22 +207,37 @@ const copyInviteLink = () => {
   setTimeout(() => (copiedUrl.value = false), 2000);
 };
 
+const scrollToMessage = (id: string) => {
+  isAssetsDrawerOpen.value = false;
+  setTimeout(() => {
+    const el = document.getElementById('msg_' + id);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.add('bg-sky-500/20'); // Highlight background
+      setTimeout(() => el.classList.remove('bg-sky-500/20'), 2000);
+    }
+  }, 300); // Wait for drawer to close
+};
+
 const scrollToBottom = () => {
-  nextTick(() => {
+  const scroll = () => {
     if (chatContainerRef.value) {
       chatContainerRef.value.scrollTop = chatContainerRef.value.scrollHeight;
     }
-  });
+  };
+  nextTick(scroll);
   
-  // Progressive retry to handle heavy DOM rendering on initial load
-  [100, 300, 600, 1000].forEach(delay => {
-    setTimeout(() => {
-      if (chatContainerRef.value) {
-        chatContainerRef.value.scrollTop = chatContainerRef.value.scrollHeight;
-      }
-    }, delay);
+  // Progressive retry to handle heavy DOM rendering and image loading
+  [50, 150, 300, 600, 1000, 2000].forEach(delay => {
+    setTimeout(scroll, delay);
   });
 };
+
+watch(isVerifyingAccess, (val) => {
+  if (!val) {
+    scrollToBottom();
+  }
+});
 
 watch(() => [roomStore.isAnalyzing, roomStore.isGenerating3D], () => {
   if (roomStore.isAnalyzing || roomStore.isGenerating3D) {
@@ -491,6 +580,12 @@ onMounted(async () => {
   window.addEventListener('beforeunload', handleUnload);
   window.addEventListener('pagehide', handleUnload);
   document.addEventListener('visibilitychange', handleVisibilityChange);
+  
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && isAssetsDrawerOpen.value) {
+      isAssetsDrawerOpen.value = false;
+    }
+  });
 
   // 1. Verify meeting exists
   const check = await roomStore.checkRoomExists(pin);
@@ -538,7 +633,19 @@ onMounted(async () => {
   }, 6000);
 });
 
+
+const cleanupWhiteboard = () => {
+  if (roomStore.currentRoom?.whiteboardActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid) {
+    roomStore.endWhiteboardSession();
+  }
+};
+onMounted(() => {
+  window.addEventListener('beforeunload', cleanupWhiteboard);
+});
 onUnmounted(() => {
+  window.removeEventListener('beforeunload', cleanupWhiteboard);
+  cleanupWhiteboard();
+
   window.removeEventListener('beforeunload', handleUnload);
   window.removeEventListener('pagehide', handleUnload);
   document.removeEventListener('visibilitychange', handleVisibilityChange);
@@ -601,10 +708,9 @@ onUnmounted(() => {
           <div class="text-[10px] sm:text-[11px] text-slate-400 flex items-center gap-1.5 sm:gap-2">
             <span class="flex items-center gap-1">
               <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-              {{ roomStore.onlineParticipants.length }} / {{ roomStore.approvedParticipants.length }} 在線
+              {{ roomStore.onlineParticipants.length }} / {{ roomStore.approvedParticipants.length }} Online
             </span>
             <span v-if="roomStore.isHost" class="text-amber-400 font-medium">● Host</span>
-            <span class="text-[10px] text-slate-500 font-mono hidden sm:inline">v1.7.2</span>
           </div>
         </div>
       </div>
@@ -665,6 +771,16 @@ onUnmounted(() => {
           <span class="hidden sm:inline">{{ copiedUrl ? 'Copied!' : 'Invite' }}</span>
         </button>
 
+        <!-- Album / Assets Drawer Button -->
+        <button
+          @click="isAssetsDrawerOpen = true"
+          class="relative inline-flex items-center gap-1 text-[11px] px-2 py-1.5 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 text-amber-400 font-medium transition cursor-pointer min-h-[36px]"
+          title="Room Assets & Album"
+        >
+          <Box class="w-3.5 h-3.5" />
+          <span class="hidden sm:inline">Album</span>
+        </button>
+
         <!-- Controls Drawer Button -->
         <button
           @click="isDrawerOpen = true"
@@ -684,10 +800,32 @@ onUnmounted(() => {
       </div>
     </header>
 
-    <!-- Chat Stream Area with 3-second fading scrollbar -->
-    <main
-      ref="chatContainerRef"
-      @scroll="handleScroll"
+    <!-- Whiteboard PIP Thumbnail -->
+    <div
+      v-if="roomStore.currentRoom?.whiteboardActive && !isWhiteboardOpen"
+      @click="isWhiteboardOpen = true"
+      class="absolute top-16 right-4 sm:right-6 z-40 w-32 h-24 sm:w-48 sm:h-32 bg-white rounded-xl shadow-2xl border-2 border-indigo-500 overflow-hidden cursor-pointer group hover:scale-105 transition-transform"
+      title="Join Whiteboard Session"
+    >
+      <div class="absolute inset-0 bg-slate-900/10 flex items-center justify-center group-hover:bg-indigo-900/20 transition-colors z-10">
+        <div class="bg-indigo-600 text-white p-2 rounded-full shadow-lg group-hover:scale-110 transition-transform">
+          <Palette class="w-4 h-4 sm:w-5 sm:h-5" />
+        </div>
+      </div>
+      <!-- Mini text overlay -->
+      <div class="absolute bottom-0 left-0 right-0 bg-indigo-950/80 px-2 py-1 text-[9px] sm:text-[10px] text-white font-medium truncate flex justify-between items-center z-10">
+        <span>{{ roomStore.currentRoom?.whiteboardHostName }}'s Board</span>
+        <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+      </div>
+    </div>
+
+    <div class="flex-1 flex overflow-hidden w-full relative">
+      <div class="flex flex-col h-full transition-all duration-300 w-full"
+           :class="isWhiteboardOpen ? 'lg:w-[35%] lg:min-w-[400px] border-r border-slate-800' : 'flex-1'">
+      <!-- Chat Stream Area with 3-second fading scrollbar -->
+      <main
+        ref="chatContainerRef"
+        @scroll="handleScroll"
       class="flex-1 overflow-y-auto w-full relative custom-scrollbar"
       :class="{ 'is-scrolling': isScrolling }"
     >
@@ -695,6 +833,8 @@ onUnmounted(() => {
         <div
           v-for="msg in roomStore.currentRoom?.messages"
           :key="msg.id"
+          :id="'msg_' + msg.id"
+          class="transition-colors duration-500 rounded-xl"
         >
         <!-- Centered Subtle System Status Pill -->
         <div v-if="msg.senderUid === 'system'" class="flex justify-center my-2.5">
@@ -860,6 +1000,21 @@ onUnmounted(() => {
                 :message="msg"
                 @refine="handleRefineModel"
               />
+
+              
+              <!-- Embedded Whiteboard State -->
+              <div
+                v-if="msg.type === 'whiteboard_state'"
+                class="mt-2 rounded-xl overflow-hidden cursor-pointer group shadow relative border border-slate-700 hover:border-sky-500/50 transition"
+                @click="openWhiteboardState(msg)"
+              >
+                <img :src="msg.fileData?.url" class="w-full h-auto object-cover opacity-80 group-hover:opacity-100 transition" />
+                <div class="absolute inset-0 flex items-center justify-center bg-slate-950/40 opacity-0 group-hover:opacity-100 transition">
+                  <span class="bg-sky-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow-lg flex items-center gap-1.5">
+                    <PenTool class="w-4 h-4" /> Open in Whiteboard
+                  </span>
+                </div>
+              </div>
 
               <!-- Embedded Visual Moodboard -->
               <MoodBoardViewer
@@ -1075,12 +1230,12 @@ onUnmounted(() => {
             <Paperclip class="w-4 h-4" :class="{ 'animate-spin': isUploadingFile }" />
           </button>
 
-          <!-- Whiteboard & Sketchpad Button -->
+          <!-- Collaborative Whiteboard Button -->
           <button
-            @click="isWhiteboardOpen = true"
-            :disabled="isMeetingClosed || roomStore.currentRoom?.participants[authStore.uid]?.isMuted"
+            @click="handleOpenNewWhiteboard"
+            :disabled="isMeetingClosed || roomStore.currentRoom?.participants[authStore.uid]?.isMuted || isWhiteboardOpen"
             class="p-2.5 rounded-xl border border-indigo-500/40 bg-indigo-950/40 hover:bg-indigo-900/60 text-indigo-300 hover:text-white transition disabled:opacity-40 disabled:cursor-not-allowed shrink-0 min-h-[44px] min-w-[44px] flex items-center justify-center cursor-pointer"
-            title="Open Collaborative Design Whiteboard & Annotate"
+            title="Open Collaborative Whiteboard"
           >
             <Palette class="w-4 h-4 text-indigo-400" />
           </button>
@@ -1123,18 +1278,131 @@ onUnmounted(() => {
         </div>
       </div>
     </footer>
+      </div>
+
+      <!-- Collaborative Whiteboard Column -->
+      <div v-if="isWhiteboardOpen" class="flex-1 h-full relative overflow-hidden bg-slate-900 shrink-0 min-w-[320px]">
+        <CollaborativeWhiteboard
+          :initialJson="currentWhiteboardJson"
+          :activeAssetId="activeWhiteboardAssetId"
+          @close="isWhiteboardOpen = false; activeWhiteboardAssetId = null; currentWhiteboardJson = undefined;"
+          @share="handleShareWhiteboard"
+          @save-state="handleSaveWhiteboardState"
+        />
+      </div>
+    </div>
+
+    <!-- Assets / Album Drawer -->
+    <div
+      class="fixed inset-y-0 right-0 z-50 w-full sm:w-80 bg-slate-900 border-l border-slate-800 shadow-2xl flex flex-col transform transition-transform duration-300 ease-in-out"
+      :class="isAssetsDrawerOpen ? 'translate-x-0' : 'translate-x-full'"
+    >
+      <div class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950">
+        <h2 class="text-base font-bold text-slate-100 flex items-center gap-2">
+          <Box class="w-4 h-4 text-amber-400" />
+          Room Album
+        </h2>
+        <button
+          @click="isAssetsDrawerOpen = false"
+          class="p-2 rounded-xl hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition"
+        >
+          <X class="w-4 h-4" />
+        </button>
+      </div>
+      <div class="flex-1 overflow-y-auto p-4 space-y-4">
+        <!-- Render 3D Models & Images in a grid -->
+        <div v-if="!albumItems.length" class="text-center text-sm text-slate-500 py-10">
+          No generated assets or images yet.
+        </div>
+        <div class="grid grid-cols-3 gap-2">
+          <template v-for="msg in albumItems" :key="msg.id">
+            <!-- Whiteboard States (Editable) -->
+            <div
+              v-if="msg.type === 'whiteboard_state'"
+              class="aspect-square rounded-xl bg-slate-950 border-2 border-indigo-500/40 hover:border-indigo-400 overflow-hidden cursor-pointer transition group relative shadow-md"
+              @click="openWhiteboardState(msg); isAssetsDrawerOpen = false"
+              title="Click to edit whiteboard"
+            >
+              <img :src="msg.fileData?.url" class="w-full h-full object-cover group-hover:scale-105 transition duration-300 opacity-85" />
+              <!-- Badge -->
+              <div class="absolute top-1 left-1 bg-indigo-950/90 text-indigo-300 px-1.5 py-0.5 rounded text-[8px] font-bold border border-indigo-500/50 backdrop-blur-sm flex items-center gap-1 z-10 shadow">
+                <Palette class="w-2.5 h-2.5 text-indigo-400" />
+                <span>Whiteboard</span>
+              </div>
+              <!-- Hover Overlay -->
+              <div class="absolute inset-0 bg-indigo-950/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
+                <span class="bg-indigo-600 text-white px-2 py-0.5 rounded text-[9px] font-bold shadow flex items-center gap-1">
+                  <PenTool class="w-2.5 h-2.5" /> Edit
+                </span>
+              </div>
+            </div>
+
+            <!-- Static Image Attachments -->
+            <div
+              v-else-if="msg.type === 'file' && msg.fileData?.type === 'image'"
+              class="aspect-square rounded-xl bg-slate-950 border border-slate-800 hover:border-sky-500/50 overflow-hidden cursor-pointer transition group relative"
+              @click="scrollToMessage(msg.id)"
+              title="View image in chat"
+            >
+              <img :src="msg.fileData.url" class="w-full h-full object-cover group-hover:scale-105 transition duration-300" />
+              <!-- Badge -->
+              <div class="absolute top-1 left-1 bg-slate-900/90 text-slate-300 px-1.5 py-0.5 rounded text-[8px] font-medium border border-slate-700/60 backdrop-blur-sm flex items-center gap-1 z-10 shadow">
+                <ImageIcon class="w-2.5 h-2.5 text-sky-400" />
+                <span>Image</span>
+              </div>
+              <!-- Hover Overlay -->
+              <div class="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
+                <span class="bg-slate-800 text-slate-200 px-2 py-0.5 rounded text-[9px] font-medium shadow flex items-center gap-1">
+                  <Eye class="w-2.5 h-2.5" /> View
+                </span>
+              </div>
+            </div>
+
+            <!-- 3D Assets -->
+            <div
+              v-else-if="msg.type === 'ai_asset' && msg.assetType === 'mesh_3d'"
+              class="aspect-square rounded-xl bg-sky-950/30 border border-sky-500/30 flex flex-col items-center justify-center text-center p-2 cursor-pointer hover:bg-sky-900/50 transition relative group"
+              @click="scrollToMessage(msg.id)"
+              title="View 3D Model in chat"
+            >
+              <div class="absolute top-1 left-1 bg-sky-950/90 text-sky-300 px-1.5 py-0.5 rounded text-[8px] font-bold border border-sky-500/40 backdrop-blur-sm flex items-center gap-1">
+                <Box class="w-2.5 h-2.5 text-sky-400" />
+                <span>3D</span>
+              </div>
+              <Box class="w-6 h-6 text-sky-400 mb-1 mt-2" />
+              <span class="text-[9px] text-sky-300 font-medium truncate w-full px-1">{{ msg.assetPayload?.title || '3D Model' }}</span>
+            </div>
+
+            <!-- Moodboards -->
+            <div
+              v-else-if="msg.type === 'ai_asset' && msg.assetType === 'moodboard'"
+              class="aspect-square rounded-xl bg-amber-950/30 border border-amber-500/30 flex flex-col items-center justify-center text-center p-2 cursor-pointer hover:bg-amber-900/50 transition relative group"
+              @click="scrollToMessage(msg.id)"
+              title="View Moodboard in chat"
+            >
+              <div class="absolute top-1 left-1 bg-amber-950/90 text-amber-300 px-1.5 py-0.5 rounded text-[8px] font-bold border border-amber-500/40 backdrop-blur-sm flex items-center gap-1">
+                <Palette class="w-2.5 h-2.5 text-amber-400" />
+                <span>Moodboard</span>
+              </div>
+              <Palette class="w-6 h-6 text-amber-400 mb-1 mt-2" />
+              <span class="text-[9px] text-amber-300 font-medium truncate w-full px-1">{{ msg.assetPayload?.title || 'Moodboard' }}</span>
+            </div>
+          </template>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Overlay for Assets Drawer -->
+    <div
+      v-if="isAssetsDrawerOpen"
+      @click="isAssetsDrawerOpen = false"
+      class="fixed inset-0 z-40 bg-slate-950/50 backdrop-blur-sm"
+    ></div>
 
     <!-- Host Control Drawer -->
     <HostControlDrawer
       :isOpen="isDrawerOpen"
       @close="isDrawerOpen = false"
-    />
-
-    <!-- Design Whiteboard Modal -->
-    <WhiteboardModal
-      v-if="isWhiteboardOpen"
-      @close="isWhiteboardOpen = false"
-      @share="handleShareWhiteboard"
     />
 
     <!-- Document Preview Modal -->

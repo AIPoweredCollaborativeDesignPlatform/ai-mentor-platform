@@ -212,7 +212,7 @@ const initThree = () => {
         const phi = animation.phase ?? 0;
         const axis = animation.axis || 'y';
 
-        // 1. Simple Harmonic Motion (SHM - 簡諧運動)
+        // 1. Simple Harmonic Motion (SHM - Harmonic Motion)
         if (animation.type === 'harmonic') {
           const offset = A * Math.sin(2 * Math.PI * f * t + phi);
           if (axis === 'x') mesh.position.x = basePosition.x + offset;
@@ -224,7 +224,7 @@ const initThree = () => {
             mesh.position.z = basePosition.z + offset;
           }
         }
-        // 2. Gravitational Acceleration & Bounce (等加速度拋物線彈跳)
+        // 2. Gravitational Acceleration & Bounce (Parabolic Bounce)
         else if (animation.type === 'bounce') {
           const cycle = ((t * f + phi / (2 * Math.PI)) % 1 + 1) % 1;
           const bounceHeight = 4 * A * cycle * (1 - cycle);
@@ -232,26 +232,26 @@ const initThree = () => {
           else if (axis === 'z') mesh.position.z = basePosition.z + bounceHeight;
           else mesh.position.y = basePosition.y + bounceHeight;
         }
-        // 3. Angular Simple Harmonic Pendulum (單擺角位移)
+        // 3. Angular Simple Harmonic Pendulum (Pendulum Motion)
         else if (animation.type === 'pendulum') {
           const angle = A * Math.cos(2 * Math.PI * f * t + phi);
           if (axis === 'x') mesh.rotation.x = baseRotation.x + angle;
           else if (axis === 'y') mesh.rotation.y = baseRotation.y + angle;
           else mesh.rotation.z = baseRotation.z + angle;
         }
-        // 4. Continuous Spin (自轉 / 角加速度自轉)
+        // 4. Continuous Spin (Rotation / Angular Acceleration Spin)
         else if (animation.type === 'spin') {
           const rot = (2 * Math.PI * f) * t + phi;
           if (axis === 'x') mesh.rotation.x = baseRotation.x + rot;
           else if (axis === 'z') mesh.rotation.z = baseRotation.z + rot;
           else mesh.rotation.y = baseRotation.y + rot;
         }
-        // 5. Breathing Pulse (呼吸縮放)
+        // 5. Breathing Pulse (Breathing Scale)
         else if (animation.type === 'pulse') {
           const s = Math.max(0.1, 1 + A * Math.sin(2 * Math.PI * f * t + phi));
           mesh.scale.set(baseScale.x * s, baseScale.y * s, baseScale.z * s);
         }
-        // 6. Wave Ripple (波浪傳遞)
+        // 6. Wave Ripple (Wave Propagation)
         else if (animation.type === 'wave') {
           const waveOffset = A * Math.sin(2 * Math.PI * f * t + phi + (basePosition.x * 2 + basePosition.z * 2));
           mesh.position.y = basePosition.y + waveOffset;
@@ -481,7 +481,7 @@ onUnmounted(() => {
           class="inline-flex items-center gap-1 text-[10px] bg-emerald-500/20 text-emerald-300 font-medium px-2 py-0.5 rounded-full border border-emerald-500/30 animate-pulse"
         >
           <Activity class="w-3 h-3 text-emerald-400" />
-          動態物理模擬
+          Physics Simulation
         </span>
       </div>
 
@@ -495,13 +495,13 @@ onUnmounted(() => {
           >
             <Pause v-if="isPlaying" class="w-3.5 h-3.5 text-amber-400" />
             <Play v-else class="w-3.5 h-3.5 text-emerald-400 fill-emerald-400" />
-            <span>{{ isPlaying ? '暫停' : '播放' }}</span>
+            <span>{{ isPlaying ? 'Pause' : 'Play' }}</span>
           </button>
           
           <button
             @click="cycleSpeed"
             class="flex items-center gap-1 px-2 py-1 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 font-mono text-[11px] transition cursor-pointer"
-            title="調整動畫播放速度"
+            title="Adjust animationPlaySpeed"
           >
             <FastForward class="w-3 h-3 text-sky-400" />
             <span>{{ playbackSpeed }}x</span>
@@ -510,7 +510,7 @@ onUnmounted(() => {
           <button
             @click="resetAnimation"
             class="p-1 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition cursor-pointer"
-            title="重設運動至起始位置"
+            title="Reset motion to start position"
           >
             <RotateCcw class="w-3.5 h-3.5" />
           </button>
@@ -531,13 +531,13 @@ onUnmounted(() => {
           :class="{ 'bg-sky-950 border-sky-500 text-sky-300': autoRotate }"
         >
           <RotateCw class="w-3.5 h-3.5" />
-          自轉
+          Rotation
         </button>
         <button
           @click="resetView"
           class="px-2.5 py-1 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-300 transition cursor-pointer"
         >
-          重設視角
+          Reset Camera
         </button>
       </div>
     </div>
@@ -551,7 +551,7 @@ onUnmounted(() => {
 
       <!-- Subtle Hint Badge -->
       <div class="absolute bottom-3 left-3 px-2 py-1 rounded-lg bg-slate-950/80 border border-slate-800 text-[10px] text-slate-400 select-none pointer-events-none">
-        <span class="hidden sm:inline">Shift + 滾輪縮放 · </span>單指旋轉 · 雙指縮放
+        <span class="hidden sm:inline">Shift + Wheel zoom · </span>Single-finger rotate · Two-finger zoom
       </div>
 
       <!-- Floating Zoom Controls -->
@@ -573,7 +573,7 @@ onUnmounted(() => {
         <button
           @click="fitCameraToObject"
           class="p-1.5 rounded-lg bg-slate-900/80 hover:bg-slate-800 border border-slate-700 text-slate-200 shadow transition cursor-pointer"
-          title="置中與適配視角 (Center & Fit)"
+          title="Center and fit view (Center & Fit)"
         >
           <Focus class="w-4 h-4" />
         </button>

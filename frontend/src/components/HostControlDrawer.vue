@@ -226,12 +226,27 @@ const sensitivities: { id: SensitivityLevel; name: string; desc: string }[] = [
 </script>
 
 <template>
-  <div v-if="isOpen" class="fixed inset-0 z-40 flex justify-end bg-black/60 backdrop-blur-xs">
-    <!-- Backdrop overlay for click-outside -->
-    <div class="absolute inset-0" @click="emit('close')"></div>
+  <div>
+    <!-- Backdrop overlay with fade transition -->
+    <Transition
+      enter-active-class="transition-opacity duration-300 ease-out"
+      enter-from-class="opacity-0"
+      enter-to-class="opacity-100"
+      leave-active-class="transition-opacity duration-200 ease-in"
+      leave-from-class="opacity-100"
+      leave-to-class="opacity-0"
+    >
+      <div
+        v-if="isOpen"
+        class="fixed inset-0 z-40 bg-slate-950/60 backdrop-blur-xs"
+        @click="emit('close')"
+      ></div>
+    </Transition>
 
+    <!-- Sliding Drawer Panel -->
     <div
-      class="relative w-full max-w-md bg-slate-900 border-l border-slate-800 h-[100dvh] flex flex-col shadow-2xl transition-transform duration-300 z-10"
+      class="fixed inset-y-0 right-0 z-50 w-full max-w-md bg-slate-900 border-l border-slate-800 h-[100dvh] flex flex-col shadow-2xl transform transition-transform duration-300 ease-in-out"
+      :class="isOpen ? 'translate-x-0' : 'translate-x-full'"
     >
       <!-- Header -->
       <div class="flex items-center justify-between p-4 border-b border-slate-800 bg-slate-950/80">
@@ -603,8 +618,8 @@ const sensitivities: { id: SensitivityLevel; name: string; desc: string }[] = [
             <button
               v-for="lang in ([
                 { id: 'en', label: 'English' },
-                { id: 'zh-TW', label: '繁體中文' },
-                { id: 'ja', label: '日本語' },
+                { id: 'zh-TW', label: 'Traditional Chinese (zh-TW)' },
+                { id: 'ja', label: 'Japanese (ja)' },
                 { id: 'ko', label: '한국어' }
               ] as const)"
               :key="lang.id"

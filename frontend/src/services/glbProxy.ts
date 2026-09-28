@@ -67,7 +67,7 @@ export async function reHostGlbToFirebaseStorage(
   }
 
   try {
-    if (onProgress) onProgress('正在取得 3D 模型資料...');
+    if (onProgress) onProgress('Fetching 3D model data...');
 
     // ─── Step 1: Fetch the GLB binary ─────────────────────────────────────────
     // Use JS fetch (not WebGL fetch) — browser CORS for fetch() is separate from
@@ -175,7 +175,7 @@ export async function reHostGlbToFirebaseStorage(
     console.error('[GLB Proxy] Error:', err);
     return {
       success: false,
-      error: err.message || '處理 3D 模型時發生錯誤。'
+      error: err.message || 'Processing 3D model encountered an error。'
     };
   }
 }

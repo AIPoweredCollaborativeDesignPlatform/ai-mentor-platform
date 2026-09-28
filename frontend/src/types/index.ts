@@ -48,7 +48,7 @@ export interface MessageItem {
   senderUid: string;
   senderName: string;
   senderAvatar: string;
-  type: 'text' | 'file' | 'ai_asset';
+  type: 'text' | 'file' | 'ai_asset' | 'whiteboard_state';
   content: string;
   timestamp: number;
   status?: 'sending' | 'delivered' | 'failed';
@@ -59,7 +59,8 @@ export interface MessageItem {
     url: string;
     mimeType?: string;
   };
-  assetType?: 'parametric_3d' | 'mesh_3d' | 'moodboard' | 'summary' | 'contract' | 'fact_check';
+  metadata?: any;
+  assetType?: 'parametric_3d' | 'mesh_3d' | 'image' | 'text' | 'vector' | 'fact_check' | 'moodboard' | 'summary' | 'contract';
   assetPayload?: any;
 }
 
@@ -74,6 +75,11 @@ export interface RoomData {
   participants: Record<string, Participant>;
   messages: MessageItem[];
   assetsCount?: number;
+  whiteboardActive?: boolean;
+  whiteboardHostUid?: string;
+  whiteboardHostName?: string;
+  whiteboardState?: string;
+  deletedAt?: number;
 }
 
 export type AnimationMotionType = 'harmonic' | 'bounce' | 'pendulum' | 'spin' | 'pulse' | 'wave';

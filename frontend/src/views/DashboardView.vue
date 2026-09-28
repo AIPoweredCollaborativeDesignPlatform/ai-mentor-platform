@@ -39,6 +39,7 @@ interface RoomHistoryItem {
   id: string;
   pin: string;
   title: string;
+  emoji?: string;
   date: string;
   members: number;
   assetsCount: number;
@@ -48,7 +49,7 @@ interface RoomHistoryItem {
 
 const historyRooms = ref<RoomHistoryItem[]>([]);
 const trashRooms = ref<RoomHistoryItem[]>([]);
-const generatedAssets = ref<{ type: string; title: string; date: string; roomPin: string }[]>([]);
+
 
 const isManageMode = ref(false);
 const isTrashView = ref(false);
@@ -120,6 +121,7 @@ const loadDashboardData = async () => {
       id: item.roomId || `room_${pin}`,
       pin,
       title: item.roomName || `Meeting (${pin})`,
+      emoji: item.roomEmoji || '💡',
       date: new Date(lastActive).toLocaleString([], {
         month: 'short',
         day: 'numeric',
@@ -154,7 +156,7 @@ const loadDashboardData = async () => {
   initialRooms.sort((a, b) => b.timestamp - a.timestamp);
   historyRooms.value = initialRooms.filter(r => !(localMap.get(r.pin)?.deletedAt));
   trashRooms.value = initialRooms.filter(r => localMap.get(r.pin)?.deletedAt);
-  generatedAssets.value = initialAssets;
+
 
   // 2. Fetch remote rooms from Firestore (Multi-device synchronization)
   if (!db || !authStore.uid) {
@@ -285,6 +287,7 @@ const loadDashboardData = async () => {
         roomId,
         pin,
         roomName: roomData.roomName || roomData.title || `Meeting (${pin})`,
+        roomEmoji: roomData.roomEmoji || cached.roomEmoji || '💡',
         hostUid: roomData.hostUid || cached.hostUid || '',
         lastActive,
         createdAt: roomData.createdAt || cached.createdAt || Date.now(),
@@ -296,6 +299,7 @@ const loadDashboardData = async () => {
         id: roomId,
         pin,
         title: roomData.roomName || roomData.title || `Meeting (${pin})`,
+        emoji: roomData.roomEmoji || cached.roomEmoji || '💡',
         date: new Date(lastActive).toLocaleString([], {
           month: 'short',
           day: 'numeric',
@@ -323,7 +327,6 @@ const loadDashboardData = async () => {
     mergedRooms.sort((a, b) => b.timestamp - a.timestamp);
     historyRooms.value = mergedRooms.filter(r => !(remoteRoomsMap.get(r.pin)?.deletedAt));
     trashRooms.value = mergedRooms.filter(r => remoteRoomsMap.get(r.pin)?.deletedAt);
-    generatedAssets.value = mergedAssets;
   } catch (err) {
     console.error('Failed to sync cloud rooms:', err);
   } finally {
@@ -487,7 +490,6 @@ const confirmPermanentDelete = async () => {
 const handleLogout = async () => {
   await authStore.logoutGoogle();
   historyRooms.value = [];
-  generatedAssets.value = [];
   router.replace('/');
 };
 </script>
@@ -520,7 +522,7 @@ const handleLogout = async () => {
             </h1>
             <p class="text-xs text-slate-400 mt-0.5 truncate">
               <span class="text-sky-400 font-mono truncate block max-w-[130px] xs:max-w-[200px] sm:max-w-none">{{
-                authStore.email
+                authStore.displayName || authStore.email?.split('@')[0] || 'User'
               }}</span>
             </p>
           </div>
@@ -683,12 +685,17 @@ const handleLogout = async () => {
                   <span class="text-[11px] text-slate-500">{{ room.date }}</span>
                 </div>
 
-                <h3 class="font-bold text-slate-100 text-sm mb-1 group-hover:text-sky-400 transition truncate" :class="{'line-through opacity-60': isTrashView}">
-                  {{ room.title }}
-                </h3>
-                <p class="text-[11px] text-slate-400 mb-2">
-                  {{ room.members }} members
-                </p>
+                <div class="flex items-start gap-2.5 mb-1.5">
+                  <span class="text-2xl sm:text-3xl shrink-0 select-none leading-none mt-0.5">{{ room.emoji || '💡' }}</span>
+                  <div class="min-w-0 flex-1">
+                    <h3 class="font-bold text-slate-100 text-sm group-hover:text-sky-400 transition truncate" :class="{'line-through opacity-60': isTrashView}">
+                      {{ room.title }}
+                    </h3>
+                    <p class="text-[11px] text-slate-400">
+                      {{ room.members }} members
+                    </p>
+                  </div>
+                </div>
 
                 <div
                   v-if="room.preview"
@@ -710,38 +717,7 @@ const handleLogout = async () => {
           </div>
 </section>
 
-      <!-- AI Assets Gallery -->
-      <section v-if="generatedAssets.length > 0">
-        <h2 class="text-base font-bold text-slate-100 mb-3 flex items-center gap-2">
-          <Box class="w-4 h-4 text-amber-400" /> Generated Assets
-        </h2>
 
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div
-            v-for="(asset, idx) in generatedAssets"
-            :key="idx"
-            class="p-3 rounded-xl bg-slate-900/60 border border-slate-800/80 flex items-start gap-2.5"
-          >
-            <div
-              class="p-2 rounded-lg shrink-0"
-              :class="{
-                'bg-sky-500/20 text-sky-400': asset.type === '3d',
-                'bg-amber-500/20 text-amber-400': asset.type === 'moodboard',
-                'bg-purple-500/20 text-purple-400': asset.type === 'doc'
-              }"
-            >
-              <Box v-if="asset.type === '3d'" class="w-4 h-4" />
-              <Palette v-else-if="asset.type === 'moodboard'" class="w-4 h-4" />
-              <FileText v-else class="w-4 h-4" />
-            </div>
-            <div>
-              <h4 class="font-semibold text-xs text-slate-200 mb-0.5">{{ asset.title }}</h4>
-              <p class="text-[10px] text-slate-400">Room PIN: {{ asset.roomPin }}</p>
-              <span class="text-[10px] text-slate-500">{{ asset.date }}</span>
-            </div>
-          </div>
-        </div>
-      </section>
     </div>
 
     <!-- Custom Modal Confirmation Dialog for Trash -->
@@ -786,9 +762,6 @@ const handleLogout = async () => {
       </div>
     </div>
 
-    <!-- Version badge in normal document flow -->
-    <div class="mt-12 text-center text-[10px] text-slate-600 font-mono select-none">
-      v1.7.2 · 2026-09-22 20:35
-    </div>
+
   </div>
 </template>

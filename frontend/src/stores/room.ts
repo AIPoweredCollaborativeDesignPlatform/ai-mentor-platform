@@ -215,6 +215,7 @@ export const useRoomStore = defineStore('room', () => {
           currentRoom.value.hostUid = data.hostUid;
           currentRoom.value.pin = data.pin;
           currentRoom.value.roomName = data.roomName;
+          currentRoom.value.roomEmoji = data.roomEmoji;
           currentRoom.value.mentorConfig = data.mentorConfig;
           currentRoom.value.roomStatus = data.roomStatus;
           currentRoom.value.whiteboardActive = data.whiteboardActive ?? false;
@@ -232,6 +233,7 @@ export const useRoomStore = defineStore('room', () => {
               roomId,
               pin: data.pin || roomId.replace('room_', ''),
               roomName: data.roomName || `Meeting (${data.pin})`,
+              roomEmoji: data.roomEmoji || '💡',
               hostUid: data.hostUid,
               lastActive: (data as any).lastActive || data.createdAt || Date.now(),
               updatedAt: Date.now()
@@ -385,9 +387,10 @@ export const useRoomStore = defineStore('room', () => {
   };
 
   // Create room as Host
-  const createRoom = async (roomName?: string) => {
+  const createRoom = async (roomName?: string, roomEmoji?: string) => {
     const pin = Math.floor(100000 + Math.random() * 900000).toString();
     const roomId = `room_${pin}`;
+    const selectedEmoji = roomEmoji?.trim() || '💡';
     const hostUser: Participant = {
       uid: authStore.uid,
       displayName: authStore.displayName,
@@ -404,6 +407,7 @@ export const useRoomStore = defineStore('room', () => {
       roomId,
       pin,
       roomName: displayRoomName,
+      roomEmoji: selectedEmoji,
       hostUid: authStore.uid,
       createdAt: Date.now(),
       roomStatus: 'active',
@@ -416,7 +420,7 @@ export const useRoomStore = defineStore('room', () => {
           senderName: 'System',
           senderAvatar: '🏛️',
           type: 'text',
-          content: `Room "${displayRoomName}" created · PIN: ${pin}`,
+          content: `${selectedEmoji} Room "${displayRoomName}" created · PIN: ${pin}`,
           timestamp: Date.now()
         }
       ]
@@ -431,6 +435,7 @@ export const useRoomStore = defineStore('room', () => {
           roomId,
           pin,
           roomName: displayRoomName,
+          roomEmoji: selectedEmoji,
           hostUid: authStore.uid,
           participantUids: [authStore.uid],
           createdAt: Date.now(),
@@ -446,6 +451,7 @@ export const useRoomStore = defineStore('room', () => {
             roomId,
             pin,
             roomName: displayRoomName,
+            roomEmoji: selectedEmoji,
             hostUid: authStore.uid,
             role: 'host',
             createdAt: Date.now(),

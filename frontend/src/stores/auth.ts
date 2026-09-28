@@ -18,14 +18,27 @@ import {
 export const useAuthStore = defineStore('auth', () => {
   const isConfigured = ref(isFirebaseConfigured());
 
+  // Pool of diverse, fun emoji avatars to prevent repeated avatars
+  const AVATAR_POOL = [
+    '🦊', '🐼', '🐨', '🦁', '🐯', '🐙', '🦉', '🦄', '🐲', '🐧',
+    '🤖', '🧙‍♂️', '🧑‍🚀', '🐱', '🐶', '🐺', '🐵', '🐸', '🐹', '🐰',
+    '🦝', '🦥', '🦦', '🦔', '🦖', '🐬', '🦚', '🦋', '🐝', '👾',
+    '🚀', '🎨', '⚡', '🌟', '🧁', '🍕'
+  ];
+  const getRandomAvatar = () => AVATAR_POOL[Math.floor(Math.random() * AVATAR_POOL.length)];
+
   // Default guest values
   const storedUid = localStorage.getItem('ai_mentor_uid') || `guest_${Math.random().toString(36).substring(2, 9)}`;
   const storedName = localStorage.getItem('ai_mentor_name') || 'Guest';
-  const storedAvatar = localStorage.getItem('ai_mentor_avatar') || '🦊';
+  let initialAvatar = localStorage.getItem('ai_mentor_avatar');
+  if (!initialAvatar) {
+    initialAvatar = getRandomAvatar();
+    localStorage.setItem('ai_mentor_avatar', initialAvatar);
+  }
 
   const uid = ref(storedUid);
   const displayName = ref(storedName);
-  const avatar = ref(storedAvatar);
+  const avatar = ref(initialAvatar);
   const email = ref(localStorage.getItem('ai_mentor_email') || '');
   const isGoogleLinked = ref(localStorage.getItem('ai_mentor_google_linked') === 'true');
   const firebaseUser = ref<User | null>(null);

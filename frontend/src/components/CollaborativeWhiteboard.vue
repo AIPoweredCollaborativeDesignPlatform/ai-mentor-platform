@@ -140,8 +140,19 @@ const updateSelectionState = () => {
   }
   const active = canvas.getActiveObject() as any;
   hasSelection.value = !!active;
-  isMultiSelection.value = active?.type === 'activeSelection';
-  isGroupSelected.value = active?.type === 'group';
+  isMultiSelection.value = !!(
+    active && (
+      active.type?.toLowerCase() === 'activeselection' ||
+      active instanceof fabric.ActiveSelection ||
+      (active._objects && active._objects.length > 1 && active.type?.toLowerCase() !== 'group')
+    )
+  );
+  isGroupSelected.value = !!(
+    active && (
+      active.type?.toLowerCase() === 'group' ||
+      active instanceof fabric.Group
+    ) && !active.isStickyNote
+  );
   isObjectLocked.value = !!(active && active.isLocked);
   updateStickyToolbar();
 };
@@ -234,10 +245,10 @@ const getCanvasSnapshot = (quality = 0.7): string => {
     }
   }
 
-  // 3. Draw fabric lower canvas elements
+  // 3. Draw fabric lower canvas elements with precise Retina / high-DPI scaling
   const lowerCanvas = canvas.lowerCanvasEl;
   if (lowerCanvas) {
-    ctx.drawImage(lowerCanvas, 0, 0);
+    ctx.drawImage(lowerCanvas, 0, 0, lowerCanvas.width, lowerCanvas.height, 0, 0, width, height);
   }
 
   return offscreen.toDataURL('image/jpeg', quality);
@@ -248,6 +259,63 @@ let drawingStartPoint: { x: number; y: number } | null = null;
 let isDragging = false;
 let lastPosX = 0;
 let lastPosY = 0;
+
+// Procreate-style QuickShape (Pencil Hold-to-Straighten / Smooth)
+let pencilHoldTimer: any = null;
+let pencilStrokePoints: Array<{ x: number; y: number }> = [];
+let isPencilHolding = false;
+let pendingQuickShape: any = null;
+let lastPencilMovePos: { x: number; y: number } | null = null;
+
+const onPencilHoldDetected = () => {
+  if (!canvas || !isDrawingMode.value || pencilStrokePoints.length < 5) return;
+  isPencilHolding = true;
+
+  const p0 = pencilStrokePoints[0];
+  const pn = pencilStrokePoints[pencilStrokePoints.length - 1];
+  const endDist = Math.hypot(pn.x - p0.x, pn.y - p0.y);
+
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const pt of pencilStrokePoints) {
+    if (pt.x < minX) minX = pt.x;
+    if (pt.x > maxX) maxX = pt.x;
+    if (pt.y < minY) minY = pt.y;
+    if (pt.y > maxY) maxY = pt.y;
+  }
+  const w = maxX - minX;
+  const h = maxY - minY;
+  const maxDim = Math.max(w, h);
+
+  // Closed loop detection: endpoints are close to each other
+  if (endDist < Math.max(40, maxDim * 0.28) && pencilStrokePoints.length >= 8 && maxDim > 20) {
+    const rx = Math.max(10, w / 2);
+    const ry = Math.max(10, h / 2);
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    pendingQuickShape = new fabric.Ellipse({
+      left: cx,
+      top: cy,
+      rx,
+      ry,
+      originX: 'center',
+      originY: 'center',
+      stroke: activeColor.value,
+      strokeWidth: strokeWidth.value,
+      fill: 'transparent',
+      perPixelTargetFind: true
+    });
+    displayToast('Snapped to Circle / Ellipse ✨');
+  } else {
+    // Open path: snap to straight line from start to end
+    pendingQuickShape = new fabric.Line([p0.x, p0.y, pn.x, pn.y], {
+      stroke: activeColor.value,
+      strokeWidth: strokeWidth.value,
+      strokeLineCap: 'round',
+      perPixelTargetFind: true
+    });
+    displayToast('Snapped to straight line ✨');
+  }
+};
 
 const initFabric = () => {
   if (!canvasRef.value || !wrapperRef.value) return;
@@ -382,12 +450,20 @@ const initFabric = () => {
 
   // Sync and history on changes
   canvas.on('path:created', (e: any) => {
-    if (e.path) {
+    if (isPencilHolding && pendingQuickShape) {
+      if (e.path) canvas?.remove(e.path);
+      canvas?.add(pendingQuickShape);
+      canvas?.setActiveObject(pendingQuickShape);
+      canvas?.requestRenderAll();
+      pendingQuickShape = null;
+      isPencilHolding = false;
+    } else if (e.path) {
       e.path.set({ perPixelTargetFind: true });
     }
     if (!isInternalChange) {
       saveHistoryState();
       syncToFirebase();
+      updateSelectionState();
     }
   });
 
@@ -450,6 +526,7 @@ const initFabric = () => {
     if (!canvas) return;
     const e = opt.e as MouseEvent;
     isBrushMenuOpen.value = false;
+    isStickyMenuOpen.value = false;
 
     // Middle click pan
     if (e.button === 1) {
@@ -472,7 +549,9 @@ const initFabric = () => {
       const target = opt.target || (canvas.findTarget(e) as any)?.target || null;
       const activeObj = canvas.getActiveObject();
 
-      if (activeObj && target && (activeObj === target || (activeObj as any).contains?.(target))) {
+      if (activeObj && !target) {
+        // Right-clicked on empty canvas: keep activeObj so user can group / copy / cut from anywhere!
+      } else if (activeObj && target && (activeObj === target || (activeObj as any).contains?.(target))) {
         // Kept within existing active selection
       } else if (target) {
         canvas.setActiveObject(target);
@@ -494,6 +573,18 @@ const initFabric = () => {
     if (e.button !== 0) return;
 
     const scenePoint = canvas.getScenePoint(e);
+
+    // Pencil drawing mode: start tracking for Procreate-style QuickShape hold
+    if (isDrawingMode.value) {
+      pencilStrokePoints = [scenePoint];
+      lastPencilMovePos = { x: scenePoint.x, y: scenePoint.y };
+      isPencilHolding = false;
+      pendingQuickShape = null;
+      if (pencilHoldTimer) clearTimeout(pencilHoldTimer);
+      pencilHoldTimer = setTimeout(() => {
+        onPencilHoldDetected();
+      }, 650);
+    }
 
     // Sticky Note tool
     if (currentTool.value === 'sticky') {
@@ -579,6 +670,20 @@ const initFabric = () => {
       return;
     }
 
+    // Pencil QuickShape hold detection during move
+    if (isDrawingMode.value && lastPencilMovePos) {
+      const scenePoint = canvas.getScenePoint(e);
+      pencilStrokePoints.push(scenePoint);
+      const moveDist = Math.hypot(scenePoint.x - lastPencilMovePos.x, scenePoint.y - lastPencilMovePos.y);
+      if (moveDist > 5) {
+        lastPencilMovePos = { x: scenePoint.x, y: scenePoint.y };
+        if (pencilHoldTimer) clearTimeout(pencilHoldTimer);
+        pencilHoldTimer = setTimeout(() => {
+          onPencilHoldDetected();
+        }, 650);
+      }
+    }
+
     if (!drawingObject || !drawingStartPoint) return;
     const scenePoint = canvas.getScenePoint(e);
 
@@ -609,6 +714,12 @@ const initFabric = () => {
   canvas.on('mouse:up', (opt) => {
     if (!canvas) return;
     const e = opt.e as MouseEvent;
+
+    if (pencilHoldTimer) {
+      clearTimeout(pencilHoldTimer);
+      pencilHoldTimer = null;
+    }
+    lastPencilMovePos = null;
 
     if (isDragging) {
       isDragging = false;
@@ -734,6 +845,15 @@ const loadFromFirebase = async (json: string) => {
   await canvas.loadFromJSON(json);
   canvas.getObjects().forEach((o: any) => {
     o.set({ perPixelTargetFind: true });
+    if (o.isStickyNote || (o.type === 'textbox' && (o.stickyColorConfig || o.backgroundColor))) {
+      o.isStickyNote = true;
+      o.minHeight = 180;
+      const orig = o.calcTextHeight.bind(o);
+      o.calcTextHeight = function() {
+        return Math.max(orig(), (this as any).minHeight || 180);
+      };
+      o.initDimensions();
+    }
   });
   canvas.requestRenderAll();
 
@@ -845,6 +965,15 @@ const spawnStickyNote = (x: number, y: number, colorCfg = selectedStickyColor.va
 
   (note as any).isStickyNote = true;
   (note as any).stickyColorConfig = colorCfg;
+  (note as any).minHeight = 180;
+
+  // Guarantee square baseline and auto dynamic height expansion on multi-line text
+  const origCalcTextHeight = note.calcTextHeight.bind(note);
+  note.calcTextHeight = function() {
+    const actualH = origCalcTextHeight();
+    return Math.max(actualH, (this as any).minHeight || 180);
+  };
+  note.initDimensions();
 
   canvas.add(note);
   canvas.setActiveObject(note);
@@ -1111,8 +1240,17 @@ const pasteAtContext = () => {
 const deleteSelected = () => {
   if (!canvas) return;
   const activeObjects = canvas.getActiveObjects();
-  if (activeObjects.length) {
-    activeObjects.forEach(obj => canvas?.remove(obj));
+  if (!activeObjects.length) return;
+
+  const lockedObjects = activeObjects.filter((obj: any) => obj.isLocked || obj.lockMovementX);
+  const deletable = activeObjects.filter((obj: any) => !obj.isLocked && !obj.lockMovementX);
+
+  if (lockedObjects.length > 0) {
+    displayToast('Locked objects cannot be deleted (Unlock with Ctrl+L first)');
+  }
+
+  if (deletable.length) {
+    deletable.forEach(obj => canvas?.remove(obj));
     canvas.discardActiveObject();
     canvas.requestRenderAll();
     saveHistoryState();
@@ -1192,11 +1330,18 @@ const sendBackwards = () => {
 
 const groupObjects = () => {
   if (!canvas) return;
-  const activeObj = canvas.getActiveObject();
-  if (activeObj && activeObj.type === 'activeSelection') {
-    const items = (activeObj as fabric.ActiveSelection).getObjects();
+  const activeObj = canvas.getActiveObject() as any;
+  if (!activeObj) return;
+
+  const isMulti = activeObj.type?.toLowerCase() === 'activeselection' ||
+                  activeObj instanceof fabric.ActiveSelection ||
+                  (activeObj._objects && activeObj.type?.toLowerCase() !== 'group');
+
+  if (isMulti) {
+    const items = activeObj.getObjects ? activeObj.getObjects() : (activeObj._objects || []);
+    if (!items.length) return;
     canvas.discardActiveObject();
-    items.forEach(item => canvas?.remove(item));
+    items.forEach((item: any) => canvas?.remove(item));
     const group = new fabric.Group(items, {
       canvas,
       subTargetCheck: false,
@@ -1208,13 +1353,17 @@ const groupObjects = () => {
     saveHistoryState();
     syncToFirebase();
     updateSelectionState();
+    displayToast('Objects grouped (Ctrl+G)');
   }
 };
 
 const ungroupObjects = () => {
   if (!canvas) return;
-  const activeObj = canvas.getActiveObject();
-  if (activeObj && activeObj.type === 'group') {
+  const activeObj = canvas.getActiveObject() as any;
+  if (!activeObj) return;
+
+  const isGrp = activeObj.type?.toLowerCase() === 'group' || activeObj instanceof fabric.Group;
+  if (isGrp && !activeObj.isStickyNote) {
     const items = (activeObj as fabric.Group).removeAll();
     canvas.remove(activeObj);
     items.forEach(item => {
@@ -1227,6 +1376,7 @@ const ungroupObjects = () => {
     saveHistoryState();
     syncToFirebase();
     updateSelectionState();
+    displayToast('Objects ungrouped (Ctrl+Shift+G)');
   }
 };
 
@@ -1428,6 +1578,7 @@ const handleKeydown = (e: KeyboardEvent) => {
     selectAll();
   } else if ((e.ctrlKey || e.metaKey) && (e.key === 'g' || e.key === 'G')) {
     e.preventDefault();
+    e.stopPropagation();
     if (e.shiftKey) {
       ungroupObjects();
     } else {
@@ -1438,6 +1589,7 @@ const handleKeydown = (e: KeyboardEvent) => {
     toggleLockSelected();
   } else if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
     e.preventDefault();
+    e.stopPropagation();
     handleQuickSave();
   }
 };
@@ -1650,7 +1802,7 @@ onUnmounted(() => {
       </button>
     </div>
     
-    <div class="absolute top-4 right-4 z-10 flex items-center gap-2">
+    <div class="absolute top-4 right-4 z-10 flex items-center gap-2 transition-opacity duration-300" :class="{ 'opacity-20 pointer-events-none': isHoveringSend }">
       <button v-if="roomStore.currentRoom?.whiteboardActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid" @click="handleStopBroadcast()" class="px-3 py-1.5 rounded-xl bg-rose-500/90 hover:bg-rose-600 text-white shadow-sm transition text-xs font-semibold flex items-center gap-1 cursor-pointer">
         <X class="w-3.5 h-3.5" /> Stop Broadcast
       </button>
@@ -1684,7 +1836,7 @@ onUnmounted(() => {
     <div
       ref="wrapperRef"
       class="flex-1 w-full h-full relative cursor-crosshair transition-all duration-300"
-      :class="{ 'ring-4 ring-sky-400/80 shadow-[0_0_35px_rgba(56,189,248,0.35)]': isHoveringSend }"
+      :class="{ 'ring-4 ring-inset ring-sky-400/90 shadow-[inset_0_0_40px_rgba(56,189,248,0.35)]': isHoveringSend }"
     >
       <canvas ref="canvasRef" class="w-full h-full touch-none"></canvas>
 
@@ -1806,14 +1958,14 @@ onUnmounted(() => {
     </transition>
 
     <!-- Controls hint -->
-    <div class="absolute bottom-20 left-1/2 -translate-x-1/2 text-[10px] text-slate-400/60 pointer-events-none text-center whitespace-nowrap">
+    <div class="absolute bottom-20 left-1/2 -translate-x-1/2 text-[10px] text-slate-400/60 pointer-events-none text-center whitespace-nowrap transition-opacity duration-300" :class="{ 'opacity-0': isHoveringSend }">
       Ctrl+Wheel: Zoom • Alt+Wheel / Mid-click: Pan • Right-Click: Context Menu
     </div>
 
     <div class="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 sm:gap-4 transition-all w-max max-w-[95%]">
       
       <!-- AI Input -->
-      <div class="flex flex-col gap-2 w-[190px] sm:w-[240px]">
+      <div class="flex flex-col gap-2 w-[190px] sm:w-[240px] transition-opacity duration-300" :class="{ 'opacity-20 pointer-events-none': isHoveringSend }">
         <div v-if="isGeneratingSvg" class="h-11 sm:h-12 px-3 bg-slate-900/95 text-sky-400 text-xs font-medium rounded-2xl flex items-center justify-between gap-2 backdrop-blur border border-slate-700 shadow-xl">
           <span class="flex items-center gap-1.5 min-w-0 truncate">
             <Loader2 class="w-4 h-4 animate-spin text-sky-400 shrink-0" />
@@ -1836,74 +1988,76 @@ onUnmounted(() => {
 
       <!-- Main Tools -->
       <div class="h-11 sm:h-12 bg-white/95 backdrop-blur-md rounded-2xl shadow-xl border border-slate-200 p-1.5 sm:p-2 flex items-center gap-1 sm:gap-2">
-        <button @click="toggleMode(false)" class="p-2 rounded-xl transition cursor-pointer" :class="currentTool === 'select' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'" title="Select / Move">
-          <MousePointer2 class="w-4 h-4" />
-        </button>
-        
-        <div class="relative">
-          <button @click="toggleMode(true); isBrushMenuOpen = !isBrushMenuOpen" class="p-2 rounded-xl transition flex items-center gap-1 cursor-pointer" :class="currentTool !== 'select' && currentTool !== 'text' && currentTool !== 'sticky' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'" title="Draw & Shapes">
-            <Pencil class="w-4 h-4" />
+        <div class="flex items-center gap-1 sm:gap-2 transition-opacity duration-300" :class="{ 'opacity-20 pointer-events-none': isHoveringSend }">
+          <button @click="toggleMode(false)" class="p-2 rounded-xl transition cursor-pointer" :class="currentTool === 'select' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'" title="Select / Move">
+            <MousePointer2 class="w-4 h-4" />
           </button>
           
-          <div v-if="isBrushMenuOpen && isDrawingMode" class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-white rounded-xl shadow-xl border border-slate-200 p-3 flex flex-col gap-3 min-w-[140px]">
-            <div class="flex items-center justify-between gap-1">
-              <button v-for="size in strokeSizes" :key="size.value" @click="strokeWidth = size.value; isBrushMenuOpen = false" class="px-2 py-1 rounded-lg text-[10px] font-bold transition flex-1 cursor-pointer" :class="strokeWidth === size.value ? 'bg-indigo-100 text-indigo-700' : 'text-slate-400 hover:text-slate-600 bg-slate-50'">
-                {{ size.label }}
-              </button>
-            </div>
-            <div class="h-px bg-slate-100"></div>
-            <div class="flex items-center gap-1 justify-between">
-              <button @click="addShape('rect')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Rectangle"><Square class="w-4 h-4" /></button>
-              <button @click="addShape('circle')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Circle / Ellipse"><Circle class="w-4 h-4" /></button>
-              <button @click="addShape('triangle')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Triangle"><Triangle class="w-4 h-4" /></button>
-              <button @click="addShape('line')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Line"><Minus class="w-4 h-4" /></button>
+          <div class="relative">
+            <button @click="toggleMode(true); isBrushMenuOpen = !isBrushMenuOpen" class="p-2 rounded-xl transition flex items-center gap-1 cursor-pointer" :class="currentTool !== 'select' && currentTool !== 'text' && currentTool !== 'sticky' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'" title="Draw & Shapes">
+              <Pencil class="w-4 h-4" />
+            </button>
+            
+            <div v-if="isBrushMenuOpen && isDrawingMode" class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-white rounded-xl shadow-xl border border-slate-200 p-3 flex flex-col gap-3 min-w-[140px]">
+              <div class="flex items-center justify-between gap-1">
+                <button v-for="size in strokeSizes" :key="size.value" @click="strokeWidth = size.value; isBrushMenuOpen = false" class="px-2 py-1 rounded-lg text-[10px] font-bold transition flex-1 cursor-pointer" :class="strokeWidth === size.value ? 'bg-indigo-100 text-indigo-700' : 'text-slate-400 hover:text-slate-600 bg-slate-50'">
+                  {{ size.label }}
+                </button>
+              </div>
+              <div class="h-px bg-slate-100"></div>
+              <div class="flex items-center gap-1 justify-between">
+                <button @click="addShape('rect')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Rectangle"><Square class="w-4 h-4" /></button>
+                <button @click="addShape('circle')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Circle / Ellipse"><Circle class="w-4 h-4" /></button>
+                <button @click="addShape('triangle')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Triangle"><Triangle class="w-4 h-4" /></button>
+                <button @click="addShape('line')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Line"><Minus class="w-4 h-4" /></button>
+              </div>
             </div>
           </div>
-        </div>
-        
-        <button @click="addText" class="p-2 rounded-xl transition cursor-pointer" :class="currentTool === 'text' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'" title="Add Text">
-          <Type class="w-4 h-4" />
-        </button>
-
-        <!-- Sticky Note Tool -->
-        <div class="relative">
-          <button
-            @click="addSticky(); isStickyMenuOpen = !isStickyMenuOpen"
-            class="p-2 rounded-xl transition flex items-center gap-1 cursor-pointer"
-            :class="currentTool === 'sticky' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'"
-            title="Sticky Note (便條紙)"
-          >
-            <StickyNote class="w-4 h-4" />
+          
+          <button @click="addText" class="p-2 rounded-xl transition cursor-pointer" :class="currentTool === 'text' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'" title="Add Text">
+            <Type class="w-4 h-4" />
           </button>
-          <div
-            v-if="isStickyMenuOpen"
-            class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-white rounded-xl shadow-xl border border-slate-200 p-2 flex items-center gap-1.5 z-20 min-w-max"
-          >
+
+          <!-- Sticky Note Tool -->
+          <div class="relative">
             <button
-              v-for="color in stickyColors"
-              :key="color.name"
-              @click="addSticky(color); isStickyMenuOpen = false"
-              class="w-5 h-5 rounded-full border-2 transition transform hover:scale-110 cursor-pointer"
-              :class="selectedStickyColor.name === color.name ? 'border-indigo-500 scale-110 shadow-sm' : 'border-black/10 hover:border-black/30'"
-              :style="{ backgroundColor: color.bg }"
-              :title="color.name"
-            ></button>
+              @click="addSticky(); isStickyMenuOpen = !isStickyMenuOpen"
+              class="p-2 rounded-xl transition flex items-center gap-1 cursor-pointer"
+              :class="currentTool === 'sticky' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'"
+              title="Sticky Note (便條紙)"
+            >
+              <StickyNote class="w-4 h-4" />
+            </button>
+            <div
+              v-if="isStickyMenuOpen"
+              class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-white rounded-xl shadow-xl border border-slate-200 p-2 flex items-center gap-1.5 z-20 min-w-max"
+            >
+              <button
+                v-for="color in stickyColors"
+                :key="color.name"
+                @click="addSticky(color); isStickyMenuOpen = false"
+                class="w-5 h-5 rounded-full border-2 transition transform hover:scale-110 cursor-pointer"
+                :class="selectedStickyColor.name === color.name ? 'border-indigo-500 scale-110 shadow-sm' : 'border-black/10 hover:border-black/30'"
+                :style="{ backgroundColor: color.bg }"
+                :title="color.name"
+              ></button>
+            </div>
           </div>
-        </div>
-        
-        <div class="w-px h-6 bg-slate-200 mx-1 hidden sm:block"></div>
-        
-        <div class="flex items-center gap-1">
-          <button v-for="color in colors" :key="color" @click="applyColorToSelected(color)" class="w-4 h-4 sm:w-5 sm:h-5 rounded-full border-2 transition transform hover:scale-110 cursor-pointer" :class="activeColor === color ? 'border-indigo-400 scale-110 shadow-sm' : 'border-transparent opacity-80 hover:opacity-100'" :style="{ backgroundColor: color }"></button>
-        </div>
-        
-        <div class="w-px h-6 bg-slate-200 mx-1 hidden sm:block"></div>
-        
-        <div class="flex items-center gap-1">
-          <input ref="fileInputRef" type="file" accept="image/*" class="hidden" @change="handleImageUpload" />
-          <button @click="fileInputRef?.click()" class="p-1.5 rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" title="Add Image"><ImageIcon class="w-4 h-4" /></button>
-          <button @click="undo" class="p-1.5 rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" title="Undo (Ctrl+Z)" :disabled="historyStack.length <= 1" :class="{'opacity-50 cursor-not-allowed': historyStack.length <= 1}"><Undo2 class="w-4 h-4" /></button>
-          <button @click="deleteSelected" class="p-1.5 rounded-xl hover:bg-rose-100 text-rose-500 transition cursor-pointer" title="Delete Selected (Del)"><Trash2 class="w-4 h-4" /></button>
+          
+          <div class="w-px h-6 bg-slate-200 mx-1 hidden sm:block"></div>
+          
+          <div class="flex items-center gap-1">
+            <button v-for="color in colors" :key="color" @click="applyColorToSelected(color)" class="w-4 h-4 sm:w-5 sm:h-5 rounded-full border-2 transition transform hover:scale-110 cursor-pointer" :class="activeColor === color ? 'border-indigo-400 scale-110 shadow-sm' : 'border-transparent opacity-80 hover:opacity-100'" :style="{ backgroundColor: color }"></button>
+          </div>
+          
+          <div class="w-px h-6 bg-slate-200 mx-1 hidden sm:block"></div>
+          
+          <div class="flex items-center gap-1">
+            <input ref="fileInputRef" type="file" accept="image/*" class="hidden" @change="handleImageUpload" />
+            <button @click="fileInputRef?.click()" class="p-1.5 rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" title="Add Image"><ImageIcon class="w-4 h-4" /></button>
+            <button @click="undo" class="p-1.5 rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" title="Undo (Ctrl+Z)" :disabled="historyStack.length <= 1" :class="{'opacity-50 cursor-not-allowed': historyStack.length <= 1}"><Undo2 class="w-4 h-4" /></button>
+            <button @click="deleteSelected" class="p-1.5 rounded-xl hover:bg-rose-100 text-rose-500 transition cursor-pointer" title="Delete Selected (Del)"><Trash2 class="w-4 h-4" /></button>
+          </div>
         </div>
         
         <div class="w-px h-6 bg-slate-200 mx-1"></div>
@@ -1912,10 +2066,10 @@ onUnmounted(() => {
           @click="handleSendToChat"
           @mouseenter="isHoveringSend = true"
           @mouseleave="isHoveringSend = false"
-          class="p-1.5 px-3 rounded-xl bg-sky-500 hover:bg-sky-600 text-white transition flex items-center gap-1.5 text-xs font-medium cursor-pointer shadow-xs"
-          title="Send viewport image to chat"
+          class="p-1.5 px-3 rounded-xl bg-sky-500 hover:bg-sky-600 text-white transition flex items-center gap-1.5 text-xs font-medium cursor-pointer shadow-xs shrink-0"
+          title="Send visible viewport area to chat"
         >
-          <Send class="w-3.5 h-3.5" /> <span class="hidden sm:inline">Send</span>
+          <Send class="w-3.5 h-3.5" /> <span class="hidden sm:inline">Send Viewport</span>
         </button>
       </div>
     </div>

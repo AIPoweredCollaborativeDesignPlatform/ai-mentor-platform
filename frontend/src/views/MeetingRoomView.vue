@@ -741,6 +741,7 @@ onUnmounted(() => {
 
         <div class="min-w-0">
           <div class="flex items-center gap-1.5">
+            <span class="text-base sm:text-lg select-none shrink-0">{{ roomStore.currentRoom?.roomEmoji || '💡' }}</span>
             <h1 class="font-bold text-xs sm:text-base text-white truncate max-w-[110px] xs:max-w-[160px] sm:max-w-xs">
               {{ roomStore.currentRoom?.roomName || 'Meeting' }}
             </h1>

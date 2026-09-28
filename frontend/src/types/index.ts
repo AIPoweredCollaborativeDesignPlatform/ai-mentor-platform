@@ -68,6 +68,7 @@ export interface RoomData {
   roomId: string;
   pin: string;
   roomName?: string;
+  roomEmoji?: string;
   hostUid: string;
   createdAt: number;
   roomStatus?: 'active' | 'ended';

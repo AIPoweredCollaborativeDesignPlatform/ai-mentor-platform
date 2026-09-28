@@ -1005,13 +1005,13 @@ onUnmounted(() => {
               <!-- Embedded Whiteboard State -->
               <div
                 v-if="msg.type === 'whiteboard_state'"
-                class="mt-2 rounded-xl overflow-hidden cursor-pointer group shadow relative border border-slate-700 hover:border-sky-500/50 transition"
+                class="mt-2 rounded-xl overflow-hidden cursor-pointer group shadow relative border border-slate-700/80 hover:border-indigo-500/50 transition max-w-[240px] sm:max-w-[280px]"
                 @click="openWhiteboardState(msg)"
               >
-                <img :src="msg.fileData?.url" class="w-full h-auto object-cover opacity-80 group-hover:opacity-100 transition" />
+                <img :src="msg.fileData?.url" class="w-full h-auto max-h-48 object-cover opacity-85 group-hover:opacity-100 transition" />
                 <div class="absolute inset-0 flex items-center justify-center bg-slate-950/40 opacity-0 group-hover:opacity-100 transition">
-                  <span class="bg-sky-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow-lg flex items-center gap-1.5">
-                    <PenTool class="w-4 h-4" /> Open in Whiteboard
+                  <span class="bg-indigo-600 text-white px-2.5 py-1 rounded-lg text-xs font-bold shadow-lg flex items-center gap-1.5">
+                    <PenTool class="w-3.5 h-3.5" /> Open in Whiteboard
                   </span>
                 </div>
               </div>

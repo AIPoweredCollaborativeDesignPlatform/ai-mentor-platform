@@ -6,6 +6,7 @@ import * as fabric from 'fabric';
 import {
   X, Pencil, Image as ImageIcon, Undo2, Trash2, Maximize, Minimize, Check, Loader2, Sparkles, Send, Radio, Settings2, MousePointer2, Type, Square, Circle, Triangle, Minus, Group, Ungroup, BringToFront, SendToBack, MoveUp, MoveDown, Copy, Scissors, ClipboardPaste, AlertTriangle, AlertCircle, RefreshCw, ChevronDown, ChevronUp
 } from 'lucide-vue-next';
+import { generateSvgForWhiteboard } from '../services/ai';
 
 const props = defineProps<{
   initialJson?: string;
@@ -34,16 +35,6 @@ const activeColor = ref('#0f172a'); // Dark slate for drawing on light backgroun
 const strokeWidth = ref(4);
 const isDrawingMode = ref(true);
 
-const colorPalette = [
-  '#0f172a', // Dark slate
-  '#38bdf8', // Sky
-  '#818cf8', // Indigo
-  '#ec4899', // Pink
-  '#10b981', // Emerald
-  '#f59e0b', // Amber
-  '#ef4444', // Red
-];
-
 const colors = ['#0f172a', '#38bdf8', '#818cf8', '#e879f9', '#34d399', '#fbbf24', '#f87171'];
 const strokeSizes = [
   { label: 'S', value: 2 },
@@ -53,24 +44,172 @@ const strokeSizes = [
 ];
 
 const isBrushMenuOpen = ref(false);
+const currentTool = ref('draw'); // 'select', 'draw', 'text', 'rect', 'circle', 'triangle', 'line'
 
 let isInternalChange = false;
 const historyStack = ref<string[]>([]);
 
+// Selection & Context Menu state
+let clipboard: any = null;
+let contextMenuScenePoint: { x: number; y: number } | null = null;
+const contextMenu = ref({ visible: false, x: 0, y: 0 });
+const hasSelection = ref(false);
+const isMultiSelection = ref(false);
+const isGroupSelected = ref(false);
+
+const updateSelectionState = () => {
+  if (!canvas) {
+    hasSelection.value = false;
+    isMultiSelection.value = false;
+    isGroupSelected.value = false;
+    return;
+  }
+  const active = canvas.getActiveObject();
+  hasSelection.value = !!active;
+  isMultiSelection.value = active?.type === 'activeSelection';
+  isGroupSelected.value = active?.type === 'group';
+};
+
+// Hit-test helper: ensures selection marquee checks actual stroke/entity, not empty bounding box
+const isObjectHitByRect = (canvasObj: fabric.Canvas, obj: any, rect: { left: number; top: number; width: number; height: number }): boolean => {
+  if (obj.isType?.('image') || obj.isType?.('i-text') || obj.isType?.('text') || obj.isType?.('textbox')) {
+    return true;
+  }
+  const fill = obj.get?.('fill') || obj.fill;
+  if (fill && fill !== 'transparent' && fill !== 'rgba(0,0,0,0)' && fill !== 'none') {
+    return true;
+  }
+
+  const objRect = obj.getBoundingRect ? obj.getBoundingRect() : { left: obj.left, top: obj.top, width: obj.width, height: obj.height };
+  const overlapX = Math.max(rect.left, objRect.left);
+  const overlapY = Math.max(rect.top, objRect.top);
+  const overlapRight = Math.min(rect.left + rect.width, objRect.left + objRect.width);
+  const overlapBottom = Math.min(rect.top + rect.height, objRect.top + objRect.height);
+
+  const overlapW = overlapRight - overlapX;
+  const overlapH = overlapBottom - overlapY;
+
+  if (overlapW <= 0 || overlapH <= 0) return false;
+
+  const checkW = Math.min(48, Math.ceil(overlapW));
+  const checkH = Math.min(48, Math.ceil(overlapH));
+
+  const testCanvas = document.createElement('canvas');
+  testCanvas.width = checkW;
+  testCanvas.height = checkH;
+  const ctx = testCanvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return true;
+
+  ctx.save();
+  ctx.scale(checkW / overlapW, checkH / overlapH);
+  ctx.translate(-overlapX, -overlapY);
+  try {
+    obj.render(ctx);
+  } catch {
+    ctx.restore();
+    return true;
+  }
+  ctx.restore();
+
+  const imgData = ctx.getImageData(0, 0, checkW, checkH).data;
+  for (let i = 3; i < imgData.length; i += 4) {
+    if (imgData[i] > 10) {
+      return true;
+    }
+  }
+  return false;
+};
+
+// Snapshot helper: guarantees a light background (#f8fafc) and dot grid for JPEG exports
+const getCanvasSnapshot = (quality = 0.7): string => {
+  if (!canvas) return '';
+  const width = canvas.getWidth();
+  const height = canvas.getHeight();
+
+  const offscreen = document.createElement('canvas');
+  offscreen.width = width;
+  offscreen.height = height;
+  const ctx = offscreen.getContext('2d');
+  if (!ctx) return canvas.toDataURL({ format: 'jpeg', quality, multiplier: 1 });
+
+  // 1. Fill light background
+  ctx.fillStyle = '#f8fafc';
+  ctx.fillRect(0, 0, width, height);
+
+  // 2. Draw dot grid matching the canvas view
+  const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
+  const zoom = canvas.getZoom();
+  const panX = vpt[4];
+  const panY = vpt[5];
+  const baseSpacing = 28;
+  const screenSpacing = baseSpacing * zoom;
+
+  if (screenSpacing >= 8) {
+    ctx.fillStyle = '#cbd5e1';
+    const dotRadius = Math.max(0.75, Math.min(2.0, 1.1 * Math.sqrt(zoom)));
+    const startX = ((panX % screenSpacing) + screenSpacing) % screenSpacing;
+    const startY = ((panY % screenSpacing) + screenSpacing) % screenSpacing;
+    for (let x = startX; x < width; x += screenSpacing) {
+      for (let y = startY; y < height; y += screenSpacing) {
+        ctx.beginPath();
+        ctx.arc(x, y, dotRadius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  // 3. Draw fabric lower canvas elements
+  const lowerCanvas = canvas.lowerCanvasEl;
+  if (lowerCanvas) {
+    ctx.drawImage(lowerCanvas, 0, 0);
+  }
+
+  return offscreen.toDataURL('image/jpeg', quality);
+};
+
+let drawingObject: any = null;
+let drawingStartPoint: { x: number; y: number } | null = null;
+let isDragging = false;
+let lastPosX = 0;
+let lastPosY = 0;
+
 const initFabric = () => {
   if (!canvasRef.value || !wrapperRef.value) return;
-  
+
   canvas = new fabric.Canvas(canvasRef.value, {
     selectionFullyContained: false,
     perPixelTargetFind: true,
-    targetFindTolerance: 4,
+    targetFindTolerance: 6,
     fireRightClick: true,
     stopContextMenu: true,
     isDrawingMode: true,
-    backgroundColor: 'transparent',
+    backgroundColor: '#f8fafc',
     width: wrapperRef.value.clientWidth,
     height: wrapperRef.value.clientHeight
   });
+
+  // Override collectObjects for precise entity-level marquee selection
+  const originalCollectObjects = (canvas as any).collectObjects;
+  (canvas as any).collectObjects = function(rect: any, options: any = {}) {
+    const candidates = originalCollectObjects.call(this, rect, options);
+    if (!candidates || candidates.length === 0) return [];
+
+    const rectObj = {
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height
+    };
+
+    return candidates.filter((obj: any) => {
+      const tl = new fabric.Point(rect.left, rect.top);
+      const br = tl.add(new fabric.Point(rect.width, rect.height));
+      if (obj.isContainedWithinRect && obj.isContainedWithinRect(tl, br)) {
+        return true;
+      }
+      return isObjectHitByRect(this, obj, rectObj);
+    });
+  };
 
   // Render light dot grid that scales and pans with zoom and pan
   canvas.on('before:render', () => {
@@ -95,7 +234,7 @@ const initFabric = () => {
     const screenSpacing = baseSpacing * zoom;
 
     if (screenSpacing >= 8) {
-      ctx.fillStyle = '#cbd5e1'; // light slate-300 dots
+      ctx.fillStyle = '#cbd5e1';
       const dotRadius = Math.max(0.75, Math.min(2.0, 1.1 * Math.sqrt(zoom)));
 
       const startX = ((panX % screenSpacing) + screenSpacing) % screenSpacing;
@@ -115,160 +254,47 @@ const initFabric = () => {
   updateBrush();
   saveHistoryState(); // Initial empty state
 
-  // Listen to local changes to sync to Firestore and save history
-  
-    
-    const handleObjectModification = (e: any) => {
-      if (!isInternalChange) {
-        saveHistoryState();
-        syncToFirebase();
-      }
-    };
+  // Selection change listeners
+  canvas.on('selection:created', updateSelectionState);
+  canvas.on('selection:updated', updateSelectionState);
+  canvas.on('selection:cleared', updateSelectionState);
 
-    canvas.on('path:created', () => {
-      if (!isInternalChange) {
-        saveHistoryState();
-        syncToFirebase();
-      }
-    });
-    
-    canvas.on('object:modified', handleObjectModification);
-    
-    canvas.on('text:editing:exited', (e) => {
-      if (!canvas) return;
-      const textObj = e.target as any;
-      if (!textObj.text.trim() || textObj.text === 'Type here...') {
-        canvas.remove(textObj);
-        if(canvas) canvas.requestRenderAll();
-        saveHistoryState();
-        syncToFirebase();
-      }
-    });
+  // Sync and history on changes
+  canvas.on('path:created', (e: any) => {
+    if (e.path) {
+      e.path.set({ perPixelTargetFind: true });
+    }
+    if (!isInternalChange) {
+      saveHistoryState();
+      syncToFirebase();
+    }
+  });
 
-    canvas.on('mouse:down', (e) => {
-      if (!canvas) return;
-      isBrushMenuOpen.value = false;
+  canvas.on('object:modified', () => {
+    if (!isInternalChange) {
+      saveHistoryState();
+      syncToFirebase();
+    }
+  });
 
-      // Right click context menu
-      if ((e.e as MouseEvent).button === 2) {
-        const target = e.target;
-        if (isDrawingMode.value) {
-          toggleMode(false);
-        }
-        
-        const activeObj = canvas.getActiveObject();
-        // If clicked on an existing active selection, just show menu
-        if (activeObj && target && (activeObj as any).contains(target)) {
-           selectedObjForContext = activeObj;
-           contextMenu.value = { visible: true, x: (e as any).viewportPoint.x || 0, y: (e as any).viewportPoint.y || 0 };
-        } 
-        // If clicked on a specific object not selected, select it
-        else if (target) {
-          canvas.setActiveObject(target);
-          if(canvas) canvas.requestRenderAll();
-          selectedObjForContext = target;
-          contextMenu.value = { visible: true, x: (e as any).viewportPoint.x || 0, y: (e as any).viewportPoint.y || 0 };
-        } 
-        // If clicked empty space but have selection (Goal 5)
-        else if (activeObj) {
-           selectedObjForContext = activeObj;
-           contextMenu.value = { visible: true, x: (e as any).viewportPoint.x || 0, y: (e as any).viewportPoint.y || 0 };
-        } else {
-           contextMenu.value.visible = false;
-        }
-        return;
-      }
+  canvas.on('text:editing:exited', (e) => {
+    if (!canvas) return;
+    const textObj = e.target as any;
+    if (!textObj.text.trim() || textObj.text === 'Type here...') {
+      canvas.remove(textObj);
+      canvas.requestRenderAll();
+      saveHistoryState();
+      syncToFirebase();
+      updateSelectionState();
+    }
+  });
 
-      // Close menu on left click
-      if ((e.e as MouseEvent).button === 0 && !e.target && contextMenu.value.visible) {
-        contextMenu.value.visible = false;
-      }
-
-      if ((e.e as MouseEvent).button !== 0) return; // Only process left click for drawing
-
-      const pointer = canvas.getViewportPoint(e.e);
-
-      // Handle spawning text
-      if (currentTool.value === 'text') {
-        const text = new fabric.IText('Type here...', {
-          left: pointer.x,
-          top: pointer.y,
-          fontFamily: 'Inter, sans-serif',
-          fontSize: 24,
-          fill: activeColor.value,
-        });
-        canvas.add(text);
-        canvas.setActiveObject(text);
-        saveHistoryState();
-        syncToFirebase();
-        text.enterEditing();
-        text.selectAll();
-        currentTool.value = 'select'; // revert to select after spawning
-        return;
-      }
-
-      // Handle drawing shapes
-      if (['rect', 'circle', 'triangle', 'line'].includes(currentTool.value)) {
-        drawingStartPoint = pointer;
-        const options = { 
-          left: pointer.x, top: pointer.y, 
-          fill: 'transparent', stroke: activeColor.value, strokeWidth: strokeWidth.value,
-          originX: 'left' as const, originY: 'top' as const, selectable: false, evented: false 
-        };
-
-        if (currentTool.value === 'rect') drawingObject = new fabric.Rect({ ...options, width: 0, height: 0 });
-        else if (currentTool.value === 'circle') drawingObject = new fabric.Circle({ ...options, radius: 0 });
-        else if (currentTool.value === 'triangle') drawingObject = new fabric.Triangle({ ...options, width: 0, height: 0 });
-        else if (currentTool.value === 'line') drawingObject = new fabric.Line([pointer.x, pointer.y, pointer.x, pointer.y], { ...options });
-
-        if (drawingObject) canvas.add(drawingObject);
-      }
-    });
-
-    canvas.on('mouse:move', (e) => {
-      if (!canvas || !drawingObject || !drawingStartPoint) return;
-      const pointer = canvas.getViewportPoint(e.e);
-      
-      if (currentTool.value === 'rect' || currentTool.value === 'triangle') {
-        drawingObject.set({
-          width: Math.abs(pointer.x - drawingStartPoint.x),
-          height: Math.abs(pointer.y - drawingStartPoint.y),
-        });
-        if (pointer.x < drawingStartPoint.x) drawingObject.set({ left: pointer.x });
-        if (pointer.y < drawingStartPoint.y) drawingObject.set({ top: pointer.y });
-      } else if (currentTool.value === 'circle') {
-        const radius = Math.max(Math.abs(pointer.x - drawingStartPoint.x), Math.abs(pointer.y - drawingStartPoint.y)) / 2;
-        drawingObject.set({ radius });
-        if (pointer.x < drawingStartPoint.x) drawingObject.set({ left: drawingStartPoint.x - radius * 2 });
-        if (pointer.y < drawingStartPoint.y) drawingObject.set({ top: drawingStartPoint.y - radius * 2 });
-      } else if (currentTool.value === 'line') {
-        drawingObject.set({ x2: pointer.x, y2: pointer.y });
-      }
-      if(canvas) canvas.requestRenderAll();
-    });
-
-    canvas.on('mouse:up', () => {
-      if (drawingObject) {
-        drawingObject.set({ selectable: true, evented: true });
-        drawingObject.setCoords();
-        if(canvas) canvas.setActiveObject(drawingObject);
-        if(canvas) canvas.requestRenderAll();
-        saveHistoryState();
-        syncToFirebase();
-        drawingObject = null;
-        drawingStartPoint = null;
-      }
-    });
-
-
-
-  // Implement Pan & Zoom
+  // Pan & Zoom via wheel
   canvas.on('mouse:wheel', function(opt) {
     if (!canvas) return;
     const delta = opt.e.deltaY;
-    
+
     if (opt.e.ctrlKey) {
-      // Zoom
       let zoom = canvas.getZoom();
       zoom *= 0.999 ** delta;
       if (zoom > 20) zoom = 20;
@@ -277,67 +303,195 @@ const initFabric = () => {
       opt.e.preventDefault();
       opt.e.stopPropagation();
     } else if (opt.e.altKey) {
-      // Pan X
       const vpt = canvas.viewportTransform;
       if (vpt) {
         vpt[4] -= delta;
-        canvas?.requestRenderAll();
+        canvas.requestRenderAll();
       }
       opt.e.preventDefault();
       opt.e.stopPropagation();
     } else {
-      // Pan Y
       const vpt = canvas.viewportTransform;
       if (vpt) {
         vpt[5] -= delta;
-        canvas?.requestRenderAll();
+        canvas.requestRenderAll();
       }
       opt.e.preventDefault();
       opt.e.stopPropagation();
     }
   });
 
-  let isDragging = false;
-  let lastPosX = 0;
-  let lastPosY = 0;
-
-  canvas.on('mouse:down', function(opt) {
+  // Unified Mouse Down
+  canvas.on('mouse:down', (opt) => {
+    if (!canvas) return;
     const e = opt.e as MouseEvent;
-    if (e.button === 1) { // Middle click
+    isBrushMenuOpen.value = false;
+
+    // Middle click pan
+    if (e.button === 1) {
       isDragging = true;
-      if (canvas) canvas.selection = false;
+      canvas.selection = false;
       lastPosX = e.clientX;
       lastPosY = e.clientY;
-    } else if (e.button === 2) { // Right click
-      if (opt.target && canvas) {
-        canvas?.setActiveObject(opt.target);
-        selectedObjForContext = opt.target;
-        contextMenu.value = { visible: true, x: e.clientX, y: e.clientY };
-      } else {
-        contextMenu.value.visible = false;
+      return;
+    }
+
+    // Right click context menu
+    if (e.button === 2) {
+      e.preventDefault();
+      if (isDrawingMode.value) {
+        toggleMode(false);
       }
-    } else {
+      const scenePoint = canvas.getScenePoint(e);
+      contextMenuScenePoint = { x: scenePoint.x, y: scenePoint.y };
+
+      const target = opt.target || (canvas.findTarget(e) as any)?.target || null;
+      const activeObj = canvas.getActiveObject();
+
+      if (activeObj && target && (activeObj === target || (activeObj as any).contains?.(target))) {
+        // Kept within existing active selection
+      } else if (target) {
+        canvas.setActiveObject(target);
+        canvas.requestRenderAll();
+      }
+      updateSelectionState();
+
+      const clientX = Math.min(e.clientX, window.innerWidth - 220);
+      const clientY = Math.min(e.clientY, window.innerHeight - 340);
+      contextMenu.value = { visible: true, x: clientX, y: clientY };
+      return;
+    }
+
+    // Left click dismisses context menu
+    if (contextMenu.value.visible) {
       contextMenu.value.visible = false;
     }
+
+    if (e.button !== 0) return;
+
+    const scenePoint = canvas.getScenePoint(e);
+
+    // Text tool
+    if (currentTool.value === 'text') {
+      const text = new fabric.IText('Type here...', {
+        left: scenePoint.x,
+        top: scenePoint.y,
+        fontFamily: 'Inter, sans-serif',
+        fontSize: 24,
+        fill: activeColor.value,
+        perPixelTargetFind: true
+      });
+      canvas.add(text);
+      canvas.setActiveObject(text);
+      saveHistoryState();
+      syncToFirebase();
+      text.enterEditing();
+      text.selectAll();
+      updateSelectionState();
+      // Keep text tool active until user switches tools!
+      return;
+    }
+
+    // Shapes
+    if (['rect', 'circle', 'triangle', 'line'].includes(currentTool.value)) {
+      drawingStartPoint = { x: scenePoint.x, y: scenePoint.y };
+      const options = {
+        left: scenePoint.x,
+        top: scenePoint.y,
+        fill: 'transparent',
+        stroke: activeColor.value,
+        strokeWidth: strokeWidth.value,
+        originX: 'left' as const,
+        originY: 'top' as const,
+        selectable: false,
+        evented: false,
+        perPixelTargetFind: true
+      };
+
+      if (currentTool.value === 'rect') drawingObject = new fabric.Rect({ ...options, width: 0, height: 0 });
+      else if (currentTool.value === 'circle') drawingObject = new fabric.Circle({ ...options, radius: 0 });
+      else if (currentTool.value === 'triangle') drawingObject = new fabric.Triangle({ ...options, width: 0, height: 0 });
+      else if (currentTool.value === 'line') drawingObject = new fabric.Line([scenePoint.x, scenePoint.y, scenePoint.x, scenePoint.y], { ...options });
+
+      if (drawingObject) canvas.add(drawingObject);
+    }
   });
-  canvas.on('mouse:move', function(opt) {
-    if (isDragging && canvas) {
-      const e = opt.e as MouseEvent;
+
+  // Unified Mouse Move
+  canvas.on('mouse:move', (opt) => {
+    if (!canvas) return;
+    const e = opt.e as MouseEvent;
+
+    if (isDragging) {
       const vpt = canvas.viewportTransform;
       if (vpt) {
         vpt[4] += e.clientX - lastPosX;
         vpt[5] += e.clientY - lastPosY;
-        canvas?.requestRenderAll();
+        canvas.requestRenderAll();
       }
       lastPosX = e.clientX;
       lastPosY = e.clientY;
+      return;
     }
+
+    if (!drawingObject || !drawingStartPoint) return;
+    const scenePoint = canvas.getScenePoint(e);
+
+    if (currentTool.value === 'rect' || currentTool.value === 'triangle') {
+      drawingObject.set({
+        width: Math.abs(scenePoint.x - drawingStartPoint.x),
+        height: Math.abs(scenePoint.y - drawingStartPoint.y),
+      });
+      if (scenePoint.x < drawingStartPoint.x) drawingObject.set({ left: scenePoint.x });
+      if (scenePoint.y < drawingStartPoint.y) drawingObject.set({ top: scenePoint.y });
+    } else if (currentTool.value === 'circle') {
+      const radius = Math.max(Math.abs(scenePoint.x - drawingStartPoint.x), Math.abs(scenePoint.y - drawingStartPoint.y)) / 2;
+      drawingObject.set({ radius });
+      if (scenePoint.x < drawingStartPoint.x) drawingObject.set({ left: drawingStartPoint.x - radius * 2 });
+      if (scenePoint.y < drawingStartPoint.y) drawingObject.set({ top: drawingStartPoint.y - radius * 2 });
+    } else if (currentTool.value === 'line') {
+      drawingObject.set({ x2: scenePoint.x, y2: scenePoint.y });
+    }
+    canvas.requestRenderAll();
   });
-  canvas.on('mouse:up', function(opt) {
+
+  // Unified Mouse Up
+  canvas.on('mouse:up', (opt) => {
+    if (!canvas) return;
     const e = opt.e as MouseEvent;
-    if (e.button === 1) {
+
+    if (isDragging) {
       isDragging = false;
-      if (canvas) canvas.selection = true;
+      canvas.selection = true;
+    }
+
+    if (drawingObject) {
+      let isTooSmall = false;
+      if (currentTool.value === 'rect' || currentTool.value === 'triangle') {
+        isTooSmall = (drawingObject.width || 0) < 5 || (drawingObject.height || 0) < 5;
+      } else if (currentTool.value === 'circle') {
+        isTooSmall = (drawingObject.radius || 0) < 3;
+      } else if (currentTool.value === 'line') {
+        const dx = (drawingObject.x2 || 0) - (drawingObject.x1 || 0);
+        const dy = (drawingObject.y2 || 0) - (drawingObject.y1 || 0);
+        isTooSmall = Math.hypot(dx, dy) < 5;
+      }
+
+      if (isTooSmall) {
+        canvas.remove(drawingObject);
+        canvas.requestRenderAll();
+      } else {
+        drawingObject.set({ selectable: true, evented: true, perPixelTargetFind: true });
+        drawingObject.setCoords();
+        canvas.setActiveObject(drawingObject);
+        canvas.requestRenderAll();
+        saveHistoryState();
+        syncToFirebase();
+        updateSelectionState();
+      }
+
+      drawingObject = null;
+      drawingStartPoint = null;
     }
   });
 
@@ -348,12 +502,12 @@ const initFabric = () => {
         width: wrapperRef.value.clientWidth,
         height: wrapperRef.value.clientHeight
       });
-      canvas?.requestRenderAll();
+      canvas.requestRenderAll();
     }
   });
   resizeObserver.observe(wrapperRef.value);
 
-  // Load initial state from props (when opened from album) or active broadcast
+  // Load initial state
   if (props.initialJson) {
     loadFromFirebase(props.initialJson);
     hasUnsavedChanges.value = false;
@@ -396,18 +550,19 @@ const loadFromFirebase = async (json: string) => {
   if (!canvas || !json) return;
   isInternalChange = true;
   await canvas.loadFromJSON(json);
-  canvas?.requestRenderAll();
-  
-  // Maintain history synchronization loosely for remote viewers
+  canvas.getObjects().forEach((o: any) => {
+    o.set({ perPixelTargetFind: true });
+  });
+  canvas.requestRenderAll();
+
   if (historyStack.value[historyStack.value.length - 1] !== json) {
     historyStack.value.push(json);
     if (historyStack.value.length > 50) historyStack.value.shift();
   }
-  
+
   isInternalChange = false;
 };
 
-// Listen for remote updates
 watch(() => roomStore.currentRoom?.whiteboardState, (newState, oldState) => {
   if (newState && newState !== oldState && roomStore.currentRoom?.whiteboardActive) {
     loadFromFirebase(newState);
@@ -421,9 +576,7 @@ watch(() => props.initialJson, (newJson) => {
   }
 });
 
-
-let clipboard: any = null;
-
+// Context Menu & Selection Actions
 const copySelection = async () => {
   if (!canvas) return;
   const activeObj = canvas.getActiveObject();
@@ -437,35 +590,51 @@ const cutSelection = async () => {
   deleteSelected();
 };
 
-const pasteSelection = async () => {
+const pasteSelection = async (targetPoint?: { x: number; y: number }) => {
   if (!canvas || !clipboard) return;
-  
+
   const clonedObj = await clipboard.clone();
-  if(canvas) canvas.discardActiveObject();
-  
-  clonedObj.set({
-    left: clonedObj.left + 10,
-    top: clonedObj.top + 10,
-    evented: true,
-  });
-  
-  if (clonedObj.type === 'activeSelection') {
+  canvas.discardActiveObject();
+
+  if (targetPoint) {
+    clonedObj.set({
+      left: targetPoint.x,
+      top: targetPoint.y,
+      evented: true,
+      perPixelTargetFind: true
+    });
+  } else {
+    clonedObj.set({
+      left: (clonedObj.left || 0) + 16,
+      top: (clonedObj.top || 0) + 16,
+      evented: true,
+      perPixelTargetFind: true
+    });
+    clipboard.top = (clipboard.top || 0) + 16;
+    clipboard.left = (clipboard.left || 0) + 16;
+  }
+
+  if (clonedObj.type === 'activeSelection' || clonedObj.type === 'activeselection') {
     clonedObj.canvas = canvas;
-    clonedObj.forEachObject(function(obj: any) {
-      if (canvas) canvas.add(obj);
+    clonedObj.forEachObject((obj: any) => {
+      obj.set({ selectable: true, evented: true, perPixelTargetFind: true });
+      canvas?.add(obj);
     });
     clonedObj.setCoords();
   } else {
+    clonedObj.set({ selectable: true, evented: true, perPixelTargetFind: true });
     canvas.add(clonedObj);
   }
-  
-  clipboard.top += 10;
-  clipboard.left += 10;
-  
-  if (canvas) if (canvas) canvas.setActiveObject(clonedObj);
-  if(canvas) canvas.requestRenderAll();
+
+  canvas.setActiveObject(clonedObj);
+  canvas.requestRenderAll();
   saveHistoryState();
   syncToFirebase();
+  updateSelectionState();
+};
+
+const pasteAtContext = () => {
+  pasteSelection(contextMenuScenePoint || undefined);
 };
 
 const deleteSelected = () => {
@@ -473,10 +642,120 @@ const deleteSelected = () => {
   const activeObjects = canvas.getActiveObjects();
   if (activeObjects.length) {
     activeObjects.forEach(obj => canvas?.remove(obj));
-    if(canvas) canvas.discardActiveObject();
-    canvas?.requestRenderAll();
+    canvas.discardActiveObject();
+    canvas.requestRenderAll();
     saveHistoryState();
     syncToFirebase();
+    updateSelectionState();
+  }
+};
+
+const selectAll = () => {
+  if (!canvas) return;
+  const objects = canvas.getObjects().filter(o => o.selectable && o.visible);
+  if (!objects.length) return;
+  canvas.discardActiveObject();
+  const sel = new fabric.ActiveSelection(objects, { canvas });
+  canvas.setActiveObject(sel);
+  canvas.requestRenderAll();
+  updateSelectionState();
+};
+
+const bringToFront = () => {
+  if (!canvas) return;
+  const activeObj = canvas.getActiveObject();
+  if (!activeObj) return;
+  if (activeObj.type === 'activeSelection') {
+    (activeObj as fabric.ActiveSelection).getObjects().forEach(obj => canvas?.bringObjectToFront(obj));
+  } else {
+    canvas.bringObjectToFront(activeObj);
+  }
+  canvas.requestRenderAll();
+  saveHistoryState();
+  syncToFirebase();
+};
+
+const sendToBack = () => {
+  if (!canvas) return;
+  const activeObj = canvas.getActiveObject();
+  if (!activeObj) return;
+  if (activeObj.type === 'activeSelection') {
+    const objs = [...(activeObj as fabric.ActiveSelection).getObjects()].reverse();
+    objs.forEach(obj => canvas?.sendObjectToBack(obj));
+  } else {
+    canvas.sendObjectToBack(activeObj);
+  }
+  canvas.requestRenderAll();
+  saveHistoryState();
+  syncToFirebase();
+};
+
+const bringForward = () => {
+  if (!canvas) return;
+  const activeObj = canvas.getActiveObject();
+  if (!activeObj) return;
+  if (activeObj.type === 'activeSelection') {
+    const objs = [...(activeObj as fabric.ActiveSelection).getObjects()].reverse();
+    objs.forEach(obj => canvas?.bringObjectForward(obj));
+  } else {
+    canvas.bringObjectForward(activeObj);
+  }
+  canvas.requestRenderAll();
+  saveHistoryState();
+  syncToFirebase();
+};
+
+const sendBackwards = () => {
+  if (!canvas) return;
+  const activeObj = canvas.getActiveObject();
+  if (!activeObj) return;
+  if (activeObj.type === 'activeSelection') {
+    (activeObj as fabric.ActiveSelection).getObjects().forEach(obj => canvas?.sendObjectBackwards(obj));
+  } else {
+    canvas.sendObjectBackwards(activeObj);
+  }
+  canvas.requestRenderAll();
+  saveHistoryState();
+  syncToFirebase();
+};
+
+const groupObjects = () => {
+  if (!canvas) return;
+  const activeObj = canvas.getActiveObject();
+  if (activeObj && activeObj.type === 'activeSelection') {
+    const items = (activeObj as fabric.ActiveSelection).getObjects();
+    canvas.discardActiveObject();
+    items.forEach(item => canvas?.remove(item));
+    const group = new fabric.Group(items, {
+      canvas,
+      subTargetCheck: false,
+      perPixelTargetFind: true
+    });
+    canvas.add(group);
+    canvas.setActiveObject(group);
+    canvas.requestRenderAll();
+    saveHistoryState();
+    syncToFirebase();
+    updateSelectionState();
+  }
+};
+
+const ungroupObjects = () => {
+  if (!canvas) return;
+  const activeObj = canvas.getActiveObject();
+  if (activeObj && activeObj.type === 'group') {
+    const items = (activeObj as fabric.Group).removeAll();
+    canvas.remove(activeObj);
+    items.forEach(item => {
+      item.set({ selectable: true, evented: true, perPixelTargetFind: true });
+      canvas?.add(item);
+    });
+    const sel = new fabric.ActiveSelection(items, { canvas });
+    canvas.setActiveObject(sel);
+    canvas.requestRenderAll();
+    saveHistoryState();
+    syncToFirebase();
+    updateSelectionState();
   }
 };
 
@@ -486,8 +765,12 @@ const undo = async () => {
   historyStack.value.pop(); // remove current state
   const previousState = historyStack.value[historyStack.value.length - 1];
   await canvas.loadFromJSON(previousState);
-  canvas?.requestRenderAll();
+  canvas.getObjects().forEach((o: any) => {
+    o.set({ perPixelTargetFind: true });
+  });
+  canvas.requestRenderAll();
   syncToFirebase();
+  updateSelectionState();
   isInternalChange = false;
 };
 
@@ -500,23 +783,23 @@ const handleImageUpload = (e: Event) => {
   reader.onload = (event) => {
     const imgUrl = event.target?.result as string;
     fabric.Image.fromURL(imgUrl).then(img => {
-      // Compress/Scale image
       if (img.width && img.width > 800) {
         img.scaleToWidth(800);
       }
       if (canvas && wrapperRef.value) {
-        // Reset viewport transform before calculating center to spawn where user is looking
         const center = canvas.getVpCenter();
         img.set({
           left: center.x,
           top: center.y,
           originX: 'center',
-          originY: 'center'
+          originY: 'center',
+          perPixelTargetFind: true
         });
         canvas.add(img);
-        canvas?.setActiveObject(img);
+        canvas.setActiveObject(img);
         saveHistoryState();
         syncToFirebase();
+        updateSelectionState();
         toggleMode(false);
       }
     });
@@ -525,28 +808,58 @@ const handleImageUpload = (e: Event) => {
   target.value = '';
 };
 
-const toggleMode = (drawing: boolean) => { currentTool.value = drawing ? 'draw' : 'select'; 
+const toggleMode = (drawing: boolean) => {
+  currentTool.value = drawing ? 'draw' : 'select';
   if (canvas) {
     isDrawingMode.value = drawing;
     canvas.isDrawingMode = drawing;
   }
 };
 
+const addShape = (type: any) => {
+  currentTool.value = type;
+  isDrawingMode.value = false;
+  if (canvas) canvas.isDrawingMode = false;
+  canvas?.discardActiveObject();
+  canvas?.requestRenderAll();
+  updateSelectionState();
+};
+
+const addText = () => {
+  currentTool.value = 'text';
+  isDrawingMode.value = false;
+  if (canvas) canvas.isDrawingMode = false;
+  canvas?.discardActiveObject();
+  canvas?.requestRenderAll();
+  updateSelectionState();
+};
+
+const applyColorToSelected = (color: string) => {
+  activeColor.value = color;
+  if (!canvas) return;
+  const activeObj = canvas.getActiveObject();
+  if (activeObj) {
+    if (activeObj.isType('path')) {
+      activeObj.set({ stroke: color });
+    } else if (activeObj.isType('i-text')) {
+      activeObj.set({ fill: color });
+    } else if (activeObj.isType('rect') || activeObj.isType('circle') || activeObj.isType('triangle')) {
+      activeObj.set({ stroke: color });
+    }
+    canvas.requestRenderAll();
+    saveHistoryState();
+    syncToFirebase();
+  } else if (isDrawingMode.value) {
+    updateBrush();
+  }
+};
+
 const handleSendToChat = async () => {
   if (!canvas) return;
-  
-  // Reset zoom/pan temporarily to capture full canvas correctly if needed, or just capture current view.
-  // We'll just capture what's visible for now, which is standard.
-  const dataUrl = canvas.toDataURL({
-    format: 'jpeg',
-    quality: 0.85,
-    multiplier: 1
-  });
-  
+  const dataUrl = getCanvasSnapshot(0.85);
   const res = await fetch(dataUrl);
   const blob = await res.blob();
   const file = new File([blob], `Whiteboard_${Date.now()}.jpg`, { type: 'image/jpeg' });
-  
   emit('share', file);
   emit('close');
 };
@@ -560,8 +873,7 @@ const handleBroadcast = () => {
 const handleStopBroadcast = async () => {
   if (!canvas) return;
   const json = JSON.stringify(canvas.toJSON());
-  const dataUrl = canvas.toDataURL({ format: 'jpeg', quality: 0.6, multiplier: 1 });
-  
+  const dataUrl = getCanvasSnapshot(0.7);
   emit('save-state', json, dataUrl);
   hasUnsavedChanges.value = false;
   roomStore.endWhiteboardSession();
@@ -570,11 +882,9 @@ const handleStopBroadcast = async () => {
 
 const handleCloseRequest = () => {
   if (roomStore.currentRoom?.whiteboardActive) {
-    // If broadcast is active, closing simply hides the whiteboard panel locally
     emit('close');
     return;
   }
-
   if (hasUnsavedChanges.value) {
     showCloseConfirmModal.value = true;
   } else {
@@ -591,64 +901,51 @@ const handleConfirmDiscard = () => {
 const handleConfirmSave = () => {
   if (!canvas) return;
   const json = JSON.stringify(canvas.toJSON());
-  const dataUrl = canvas.toDataURL({ format: 'jpeg', quality: 0.6, multiplier: 1 });
+  const dataUrl = getCanvasSnapshot(0.7);
   emit('save-state', json, dataUrl);
   hasUnsavedChanges.value = false;
   showCloseConfirmModal.value = false;
   emit('close');
 };
 
+// Keyboard Shortcuts
+const handleKeydown = (e: KeyboardEvent) => {
+  const activeObj = canvas?.getActiveObject() as any;
+  if (activeObj?.isEditing) return;
 
-  
-  const handleKeydown = (e: any) => {
-    if ((e.key === 'Delete' || e.key === 'Backspace') && !e.target?.matches('input, textarea')) {
-      const activeObj = canvas?.getActiveObject();
-      if (activeObj && !(activeObj as any).isEditing) {
-        deleteSelected();
-      }
-    }
-    if ((e.ctrlKey || e.metaKey) && e.key === 'c' && !e.target?.matches('input, textarea')) {
-      copySelection();
-    }
-    if ((e.ctrlKey || e.metaKey) && e.key === 'x' && !e.target?.matches('input, textarea')) {
-      cutSelection();
-    }
-    if ((e.ctrlKey || e.metaKey) && e.key === 'v' && !e.target?.matches('input, textarea')) {
-      pasteSelection();
-    }
-  };
+  const targetTag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+  if (targetTag === 'input' || targetTag === 'textarea') return;
 
-  
-  
-const currentTool = ref('select'); // 'select', 'draw', 'text', 'rect', 'circle', 'triangle', 'line'
-let drawingObject: any = null;
-let drawingStartPoint: any = null;
-
-const addShape = (type: any) => {
-  currentTool.value = type;
-  isDrawingMode.value = false;
-  if (canvas) canvas.isDrawingMode = false;
-  canvas?.discardActiveObject();
-  canvas?.requestRenderAll();
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    if (activeObj) {
+      e.preventDefault();
+      deleteSelected();
+    }
+  } else if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+    e.preventDefault();
+    undo();
+  } else if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
+    e.preventDefault();
+    copySelection();
+  } else if ((e.ctrlKey || e.metaKey) && (e.key === 'x' || e.key === 'X')) {
+    e.preventDefault();
+    cutSelection();
+  } else if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
+    e.preventDefault();
+    pasteSelection();
+  } else if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
+    e.preventDefault();
+    selectAll();
+  }
 };
 
-const addText = () => {
-  currentTool.value = 'text';
-  isDrawingMode.value = false;
-  if (canvas) canvas.isDrawingMode = false;
-  canvas?.discardActiveObject();
-  canvas?.requestRenderAll();
+const handleWindowClick = () => {
+  if (contextMenu.value.visible) {
+    contextMenu.value.visible = false;
+  }
 };
-onMounted(() => {
-    window.addEventListener('keydown', handleKeydown);
-
-  nextTick(() => {
-    initFabric();
-  });
-});
 
 // --- AI Generator ---
-import { generateSvgForWhiteboard } from '../services/ai';
 const aiPrompt = ref('');
 const isGeneratingSvg = ref(false);
 
@@ -681,144 +978,74 @@ const retryGenerateAIObject = () => {
   }
 };
 
-
 const generateAIObject = async () => {
-    if (!aiPrompt.value.trim() || !canvas || isGeneratingSvg.value) return;
-    const currentPrompt = aiPrompt.value.trim();
-    lastFailedPrompt.value = currentPrompt;
-    isGeneratingSvg.value = true;
-    aiError.value = null;
-    showAiErrorDetails.value = false;
+  if (!aiPrompt.value.trim() || !canvas || isGeneratingSvg.value) return;
+  const currentPrompt = aiPrompt.value.trim();
+  lastFailedPrompt.value = currentPrompt;
+  isGeneratingSvg.value = true;
+  aiError.value = null;
+  showAiErrorDetails.value = false;
 
-    try {
-      const svgString = await generateSvgForWhiteboard(currentPrompt, roomStore.currentRoom!.mentorConfig);
-      const { objects, options } = await fabric.loadSVGFromString(svgString);
-      if (!canvas) return;
-      const validObjects = objects.filter((o): o is fabric.FabricObject => o !== null);
-      const obj = fabric.util.groupSVGElements(validObjects, options);
-      const center = canvas.getVpCenter();
-      obj.set({
-        left: center.x,
-        top: center.y,
-        originX: 'center',
-        originY: 'center',
-        scaleX: 2,
-        scaleY: 2
-      });
-      if (canvas) canvas.add(obj);
-      canvas?.setActiveObject(obj);
-      saveHistoryState();
-      syncToFirebase();
-      aiPrompt.value = '';
-      toggleMode(false);
-    } catch (e: any) {
-      console.error('Whiteboard AI Generation Error:', e);
-      if (e?.isAiError) {
-        aiError.value = {
-          title: e.title,
-          category: e.category,
-          suggestion: e.suggestion,
-          attempts: e.attempts,
-          rawMessage: e.rawMessage
-        };
-      } else {
-        aiError.value = {
-          title: 'AI Vector Generation Failed',
-          category: 'UNKNOWN',
-          suggestion: e.message || 'An unexpected error occurred while generating vector graphics.',
-          rawMessage: String(e)
-        };
-      }
-    } finally {
-      isGeneratingSvg.value = false;
+  try {
+    const svgString = await generateSvgForWhiteboard(currentPrompt, roomStore.currentRoom!.mentorConfig);
+    const { objects, options } = await fabric.loadSVGFromString(svgString);
+    if (!canvas) return;
+    const validObjects = objects.filter((o): o is fabric.FabricObject => o !== null);
+    const obj = fabric.util.groupSVGElements(validObjects, options);
+    const center = canvas.getVpCenter();
+    obj.set({
+      left: center.x,
+      top: center.y,
+      originX: 'center',
+      originY: 'center',
+      scaleX: 2,
+      scaleY: 2,
+      perPixelTargetFind: true
+    });
+    canvas.add(obj);
+    canvas.setActiveObject(obj);
+    saveHistoryState();
+    syncToFirebase();
+    updateSelectionState();
+    aiPrompt.value = '';
+    toggleMode(false);
+  } catch (e: any) {
+    console.error('Whiteboard AI Generation Error:', e);
+    if (e?.isAiError) {
+      aiError.value = {
+        title: e.title,
+        category: e.category,
+        suggestion: e.suggestion,
+        attempts: e.attempts,
+        rawMessage: e.rawMessage
+      };
+    } else {
+      aiError.value = {
+        title: 'AI Vector Generation Failed',
+        category: 'UNKNOWN',
+        suggestion: e.message || 'An unexpected error occurred while generating vector graphics.',
+        rawMessage: String(e)
+      };
     }
-  };
-
-// --- Context Menu (Right Click) ---
-const contextMenu = ref({ visible: false, x: 0, y: 0 });
-let selectedObjForContext: fabric.Object | null = null;
+  } finally {
+    isGeneratingSvg.value = false;
+  }
+};
 
 onMounted(() => {
+  window.addEventListener('keydown', handleKeydown);
+  window.addEventListener('click', handleWindowClick);
   if (wrapperRef.value) {
-    // Disable native context menu
     wrapperRef.value.addEventListener('contextmenu', (e) => e.preventDefault());
   }
+  nextTick(() => {
+    initFabric();
+  });
 });
 
-
-const bringToFront = () => {
-  if (selectedObjForContext && canvas) {
-    canvas.bringObjectToFront(selectedObjForContext);
-    saveHistoryState();
-    syncToFirebase();
-  }
-};
-const sendToBack = () => {
-  if (selectedObjForContext && canvas) {
-    canvas.sendObjectToBack(selectedObjForContext);
-    saveHistoryState();
-    syncToFirebase();
-  }
-};
-const groupObjects = () => {
-  if (!canvas) return;
-  const activeObj = canvas?.getActiveObject();
-  if (activeObj && activeObj.type === 'activeSelection') {
-    (activeObj as any).toGroup();
-    canvas?.requestRenderAll();
-    saveHistoryState();
-    syncToFirebase();
-  }
-};
-const ungroupObjects = () => {
-  if (!canvas) return;
-  const activeObj = canvas?.getActiveObject();
-  if (activeObj && activeObj.type === 'group') {
-    (activeObj as any).toActiveSelection();
-    canvas?.requestRenderAll();
-    saveHistoryState();
-    syncToFirebase();
-  }
-};
-
-const bringForward = () => {
-  if (selectedObjForContext && canvas) {
-    canvas.bringObjectForward(selectedObjForContext);
-    saveHistoryState();
-    syncToFirebase();
-  }
-};
-
-const sendBackwards = () => {
-  if (selectedObjForContext && canvas) {
-    canvas.sendObjectBackwards(selectedObjForContext);
-    saveHistoryState();
-    syncToFirebase();
-  }
-};
-
-const applyColorToSelected = (color: string) => {
-  activeColor.value = color;
-  if (!canvas) return;
-  const activeObj = canvas?.getActiveObject();
-  if (activeObj) {
-    if (activeObj.isType('path')) {
-      activeObj.set({ stroke: color });
-    } else if (activeObj.isType('i-text')) {
-      activeObj.set({ fill: color });
-    }
-    canvas?.requestRenderAll();
-    saveHistoryState();
-    syncToFirebase();
-  } else if (isDrawingMode.value) {
-    updateBrush();
-  }
-};
-
-
-
 onUnmounted(() => {
-    window.removeEventListener('keydown', handleKeydown);
+  window.removeEventListener('keydown', handleKeydown);
+  window.removeEventListener('click', handleWindowClick);
   if (canvas) {
     canvas.dispose();
   }
@@ -1007,6 +1234,112 @@ onUnmounted(() => {
           <Send class="w-3.5 h-3.5" /> <span class="hidden sm:inline">Send</span>
         </button>
       </div>
+    </div>
+
+    <!-- Right-Click Context Menu -->
+    <div
+      v-if="contextMenu.visible"
+      :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
+      class="fixed z-50 min-w-[200px] bg-slate-900/95 backdrop-blur-md border border-slate-700/80 rounded-2xl shadow-2xl p-1.5 text-xs text-slate-200 select-none animate-in fade-in zoom-in-95 duration-100"
+      @click.stop
+    >
+      <!-- When selection is active -->
+      <template v-if="hasSelection">
+        <button
+          @click="copySelection(); contextMenu.visible = false"
+          class="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+        >
+          <span class="flex items-center gap-2"><Copy class="w-3.5 h-3.5 text-sky-400" /> Copy</span>
+          <span class="text-[10px] text-slate-400 font-mono">Ctrl+C</span>
+        </button>
+        <button
+          @click="cutSelection(); contextMenu.visible = false"
+          class="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+        >
+          <span class="flex items-center gap-2"><Scissors class="w-3.5 h-3.5 text-amber-400" /> Cut</span>
+          <span class="text-[10px] text-slate-400 font-mono">Ctrl+X</span>
+        </button>
+      </template>
+
+      <!-- Paste (always visible when clipboard has content) -->
+      <button
+        v-if="clipboard"
+        @click="pasteAtContext(); contextMenu.visible = false"
+        class="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+      >
+        <span class="flex items-center gap-2"><ClipboardPaste class="w-3.5 h-3.5 text-emerald-400" /> Paste Here</span>
+        <span class="text-[10px] text-slate-400 font-mono">Ctrl+V</span>
+      </button>
+
+      <div v-if="hasSelection" class="my-1 border-t border-slate-800"></div>
+
+      <!-- Layer Ordering -->
+      <template v-if="hasSelection">
+        <button
+          @click="bringToFront(); contextMenu.visible = false"
+          class="w-full flex items-center gap-2 px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+        >
+          <BringToFront class="w-3.5 h-3.5 text-indigo-400" /> Bring to Front
+        </button>
+        <button
+          @click="bringForward(); contextMenu.visible = false"
+          class="w-full flex items-center gap-2 px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+        >
+          <MoveUp class="w-3.5 h-3.5 text-indigo-400" /> Move Forward
+        </button>
+        <button
+          @click="sendBackwards(); contextMenu.visible = false"
+          class="w-full flex items-center gap-2 px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+        >
+          <MoveDown class="w-3.5 h-3.5 text-indigo-400" /> Move Backward
+        </button>
+        <button
+          @click="sendToBack(); contextMenu.visible = false"
+          class="w-full flex items-center gap-2 px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+        >
+          <SendToBack class="w-3.5 h-3.5 text-indigo-400" /> Send to Back
+        </button>
+
+        <div class="my-1 border-t border-slate-800"></div>
+
+        <!-- Group / Ungroup -->
+        <button
+          v-if="isMultiSelection"
+          @click="groupObjects(); contextMenu.visible = false"
+          class="w-full flex items-center gap-2 px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+        >
+          <Group class="w-3.5 h-3.5 text-violet-400" /> Group Objects
+        </button>
+        <button
+          v-if="isGroupSelected"
+          @click="ungroupObjects(); contextMenu.visible = false"
+          class="w-full flex items-center gap-2 px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+        >
+          <Ungroup class="w-3.5 h-3.5 text-violet-400" /> Ungroup
+        </button>
+
+        <div class="my-1 border-t border-slate-800"></div>
+
+        <!-- Delete -->
+        <button
+          @click="deleteSelected(); contextMenu.visible = false"
+          class="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-rose-950/50 text-rose-400 hover:text-rose-300 transition cursor-pointer"
+        >
+          <span class="flex items-center gap-2"><Trash2 class="w-3.5 h-3.5" /> Delete</span>
+          <span class="text-[10px] text-rose-400/70 font-mono">Del</span>
+        </button>
+      </template>
+
+      <!-- If no object selected -->
+      <template v-if="!hasSelection">
+        <button
+          @click="selectAll(); contextMenu.visible = false"
+          class="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
+        >
+          <span class="flex items-center gap-2"><MousePointer2 class="w-3.5 h-3.5 text-slate-400" /> Select All</span>
+          <span class="text-[10px] text-slate-400 font-mono">Ctrl+A</span>
+        </button>
+      </template>
     </div>
 
     <!-- Unsaved Changes Confirmation Modal (English) -->

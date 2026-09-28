@@ -450,22 +450,9 @@ const initFabric = () => {
     fireRightClick: true,
     stopContextMenu: true,
     isDrawingMode: true,
-    backgroundColor: '#f8fafc',
+    backgroundColor: '',
     width: wrapperRef.value.clientWidth,
     height: wrapperRef.value.clientHeight
-  });
-
-  // Strict boundary clipping on canvas to keep drawing and objects inside workspace
-  canvas.clipPath = new fabric.Rect({
-    left: 0,
-    top: 0,
-    width: WORKSPACE_WIDTH,
-    height: WORKSPACE_HEIGHT,
-    originX: 'left',
-    originY: 'top',
-    selectable: false,
-    evented: false,
-    excludeFromExport: true
   });
 
   // Guard against browser native context menu anywhere on upper canvas
@@ -513,7 +500,7 @@ const initFabric = () => {
     vpt[5] = Math.min(maxY, Math.max(minY, vpt[5]));
   };
 
-  // Render workspace background with dark gray mask outside boundary
+  // Render workspace background with dark uneditable area outside boundary
   canvas.on('before:render', () => {
     if (!canvas) return;
     const ctx = canvas.getContext();
@@ -521,9 +508,9 @@ const initFabric = () => {
     const width = canvas.getWidth();
     const height = canvas.getHeight();
 
-    // 1. Fill outer space with dark slate mask
+    // 1. Fill outer space with dark slate mask (#0f172a)
     ctx.save();
-    ctx.fillStyle = '#1e293b';
+    ctx.fillStyle = '#0f172a';
     ctx.fillRect(0, 0, width, height);
 
     // 2. Calculate workspace boundary on screen
@@ -534,7 +521,7 @@ const initFabric = () => {
     const screenW = WORKSPACE_WIDTH * zoom;
     const screenH = WORKSPACE_HEIGHT * zoom;
 
-    // 3. Fill bounded workspace with light background
+    // 3. Fill bounded workspace with soft light background (#f8fafc)
     ctx.fillStyle = '#f8fafc';
     ctx.fillRect(screenX, screenY, screenW, screenH);
 
@@ -548,8 +535,8 @@ const initFabric = () => {
       ctx.rect(screenX, screenY, screenW, screenH);
       ctx.clip();
 
-      ctx.fillStyle = '#cbd5e1';
-      const dotRadius = Math.max(0.75, Math.min(2.0, 1.1 * Math.sqrt(zoom)));
+      ctx.fillStyle = '#94a3b8';
+      const dotRadius = Math.max(1.0, Math.min(2.5, 1.2 * Math.sqrt(zoom)));
 
       const startX = screenX + (((0 - screenX) % screenSpacing + screenSpacing) % screenSpacing);
       const startY = screenY + (((0 - screenY) % screenSpacing + screenSpacing) % screenSpacing);
@@ -565,6 +552,49 @@ const initFabric = () => {
     }
 
     // 5. Draw subtle workspace boundary border
+    ctx.strokeStyle = '#94a3b8';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(screenX, screenY, screenW, screenH);
+
+    ctx.restore();
+  });
+
+  // After objects render, neatly mask any objects/strokes that extend into the outer uneditable zone
+  canvas.on('after:render', () => {
+    if (!canvas) return;
+    const ctx = canvas.getContext();
+    if (!ctx) return;
+    const width = canvas.getWidth();
+    const height = canvas.getHeight();
+
+    const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
+    const zoom = canvas.getZoom();
+    const screenX = vpt[4];
+    const screenY = vpt[5];
+    const screenW = WORKSPACE_WIDTH * zoom;
+    const screenH = WORKSPACE_HEIGHT * zoom;
+
+    ctx.save();
+    ctx.fillStyle = '#0f172a';
+
+    // Top outer strip
+    if (screenY > 0) {
+      ctx.fillRect(0, 0, width, screenY);
+    }
+    // Bottom outer strip
+    if (screenY + screenH < height) {
+      ctx.fillRect(0, screenY + screenH, width, height - (screenY + screenH));
+    }
+    // Left outer strip
+    if (screenX > 0) {
+      ctx.fillRect(0, Math.max(0, screenY), screenX, screenH);
+    }
+    // Right outer strip
+    if (screenX + screenW < width) {
+      ctx.fillRect(screenX + screenW, Math.max(0, screenY), width - (screenX + screenW), screenH);
+    }
+
+    // Crisp workspace outline on top
     ctx.strokeStyle = '#94a3b8';
     ctx.lineWidth = 1.5;
     ctx.strokeRect(screenX, screenY, screenW, screenH);
@@ -926,48 +956,55 @@ const initFabric = () => {
     }
   });
 
-  // Clamp moving objects within workspace boundary using actual corner coordinates
+  // Clamp moving objects strictly within workspace boundary using stable bounding rect
   canvas.on('object:moving', (e: any) => {
     const obj = e.target;
-    if (obj) {
-      const coords = obj.getCoords ? obj.getCoords(true, true) : (obj.aCoords ? Object.values(obj.aCoords) : null);
-      if (coords && coords.length > 0) {
-        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-        for (const p of coords) {
-          if (p.x < minX) minX = p.x;
-          if (p.x > maxX) maxX = p.x;
-          if (p.y < minY) minY = p.y;
-          if (p.y > maxY) maxY = p.y;
-        }
+    if (!obj) return;
 
-        if (minX < 0) {
-          obj.left += (0 - minX);
-        } else if (maxX > WORKSPACE_WIDTH) {
-          obj.left -= (maxX - WORKSPACE_WIDTH);
-        }
+    // Use true absolute bounding box in canvas workspace space
+    const bound = obj.getBoundingRect ? obj.getBoundingRect(true) : null;
+    if (bound) {
+      const diffX = obj.left - bound.left;
+      const diffY = obj.top - bound.top;
 
-        if (minY < 0) {
-          obj.top += (0 - minY);
-        } else if (maxY > WORKSPACE_HEIGHT) {
-          obj.top -= (maxY - WORKSPACE_HEIGHT);
-        }
-        obj.setCoords();
+      let targetLeft = bound.left;
+      let targetTop = bound.top;
+
+      if (bound.width >= WORKSPACE_WIDTH) {
+        targetLeft = 0;
+      } else {
+        targetLeft = Math.max(0, Math.min(WORKSPACE_WIDTH - bound.width, bound.left));
       }
+
+      if (bound.height >= WORKSPACE_HEIGHT) {
+        targetTop = 0;
+      } else {
+        targetTop = Math.max(0, Math.min(WORKSPACE_HEIGHT - bound.height, bound.top));
+      }
+
+      obj.left = targetLeft + diffX;
+      obj.top = targetTop + diffY;
+      obj.setCoords();
     }
     updateStickyToolbar();
   });
   canvas.on('object:scaling', updateStickyToolbar);
   canvas.on('object:rotating', updateStickyToolbar);
 
-  // Handle resizing
+  // Handle resizing with rAF throttling and synchronous renderAll to avoid blank flashing
+  let resizeRafId: number | null = null;
   const resizeObserver = new ResizeObserver(() => {
-    if (canvas && wrapperRef.value) {
-      canvas.setDimensions({
-        width: wrapperRef.value.clientWidth,
-        height: wrapperRef.value.clientHeight
-      });
-      canvas.requestRenderAll();
-    }
+    if (resizeRafId) cancelAnimationFrame(resizeRafId);
+    resizeRafId = requestAnimationFrame(() => {
+      if (canvas && wrapperRef.value) {
+        const w = wrapperRef.value.clientWidth;
+        const h = wrapperRef.value.clientHeight;
+        if (canvas.getWidth() !== w || canvas.getHeight() !== h) {
+          canvas.setDimensions({ width: w, height: h });
+          canvas.renderAll();
+        }
+      }
+    });
   });
   resizeObserver.observe(wrapperRef.value);
 

@@ -924,8 +924,11 @@ onUnmounted(() => {
       <!-- Fullscreen drag overlay to prevent canvas mouse capture while resizing -->
       <div v-if="isResizingWhiteboard" class="fixed inset-0 z-50 cursor-col-resize pointer-events-auto"></div>
 
-      <div class="flex flex-col h-full transition-all duration-75 w-full min-w-0"
-           :class="isWhiteboardOpen ? 'flex-1 min-w-[320px]' : 'flex-1'">
+      <div class="flex flex-col h-full w-full min-w-0"
+           :class="[
+             isResizingWhiteboard ? 'transition-none' : 'transition-all duration-75',
+             isWhiteboardOpen ? 'flex-1 min-w-[320px]' : 'flex-1'
+           ]">
       <!-- Chat Stream Area with 3-second fading scrollbar -->
       <main
         ref="chatContainerRef"
@@ -1414,6 +1417,7 @@ onUnmounted(() => {
       <div
         v-if="isWhiteboardOpen"
         class="h-full relative overflow-hidden bg-slate-900 shrink-0 w-full lg:w-auto"
+        :class="{ 'transition-none': isResizingWhiteboard }"
         :style="whiteboardWidth ? { width: `${whiteboardWidth}px` } : { width: '68%' }"
       >
         <CollaborativeWhiteboard
@@ -1527,11 +1531,11 @@ onUnmounted(() => {
       </div>
     </div>
     
-    <!-- Overlay for Assets Drawer -->
+    <!-- Overlay for Assets Drawer (Dimmed without blur) -->
     <div
       v-if="isAssetsDrawerOpen"
       @click="isAssetsDrawerOpen = false"
-      class="fixed inset-0 z-40 bg-slate-950/50 backdrop-blur-sm"
+      class="fixed inset-0 z-40 bg-black/60 transition-opacity"
     ></div>
 
     <!-- Host Control Drawer -->

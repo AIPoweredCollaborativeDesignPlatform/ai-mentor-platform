@@ -1,13 +1,11 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import { auth, db, isFirebaseConfigured } from '../firebase/config';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import {
   signInAnonymously,
   signInWithPopup,
   signInWithRedirect,
-  linkWithPopup,
-  linkWithRedirect,
   getRedirectResult,
   GoogleAuthProvider,
   signOut,
@@ -53,26 +51,14 @@ export const useAuthStore = defineStore('auth', () => {
 
   // Attach real Firebase listener if configured
   if (auth) {
-    // Check if we just came back from a redirect login/link
-    getRedirectResult(auth!).then((result) => {
+    // Check if we just came back from a redirect login
+    getRedirectResult(auth).then((result) => {
       if (result?.user) {
-        // If it was a redirect login/link, and we are here, it was successful.
-        // We will let onAuthStateChanged handle the state updates.
+        console.log('[Auth] Redirect sign-in success:', result.user.uid);
       }
-    }).catch(async (err) => {
-      console.warn('Redirect sign-in error:', err);
-      if (err?.code === 'auth/credential-already-in-use') {
-         // The Google account is already used by another user.
-         // We must sign out of the anonymous account and sign in with the Google credential.
-         const credential = GoogleAuthProvider.credentialFromError(err);
-         if (credential && auth) {
-            // Need to sign out first to use the existing account
-            await signOut(auth);
-            // Sign in directly since we have the credential
-            // Actually, in redirect flow, getting credential from error requires prompt...
-            // the safest bet is to redirect again but as signIn instead of link.
-            await signInWithRedirect(auth, new GoogleAuthProvider());
-         }
+    }).catch((err) => {
+      if (err?.code !== 'auth/popup-closed-by-user') {
+        console.warn('[Auth] Redirect sign-in error:', err);
       }
     });
 
@@ -88,35 +74,59 @@ export const useAuthStore = defineStore('auth', () => {
           // Real Google account
           isGoogleLinked.value = true;
           email.value = user.email || '';
-          displayName.value = user.displayName || displayName.value;
+          displayName.value = user.displayName || displayName.value || user.email?.split('@')[0] || 'User';
           localStorage.setItem('ai_mentor_google_linked', 'true');
           localStorage.setItem('ai_mentor_email', email.value);
           localStorage.setItem('ai_mentor_name', displayName.value);
         }
 
-        // Restore cloud-synced API keys from Firestore user profile across devices
+        // Restore and sync cloud-synced API keys from Firestore user profile across devices
         if (db) {
           try {
             const userDocRef = doc(db, 'users', user.uid);
             const snap = await getDoc(userDocRef);
+            const localGemini = localStorage.getItem('ai_gemini_api_key') || '';
+            const localTripo = localStorage.getItem('ai_tripo_api_key') || '';
+            const localMeshy = localStorage.getItem('ai_meshy_api_key') || '';
+            const localEngine = localStorage.getItem('ai_3d_engine') || '';
+
             if (snap.exists()) {
               const data = snap.data();
               if (data.geminiApiKey) {
                 localStorage.setItem('ai_gemini_api_key', data.geminiApiKey);
                 (window as any).__SHARED_GEMINI_KEY__ = data.geminiApiKey;
+              } else if (localGemini) {
+                await setDoc(userDocRef, { geminiApiKey: localGemini }, { merge: true });
               }
+
               if (data.tripoApiKey) {
                 localStorage.setItem('ai_tripo_api_key', data.tripoApiKey);
+              } else if (localTripo) {
+                await setDoc(userDocRef, { tripoApiKey: localTripo }, { merge: true });
               }
+
               if (data.meshyApiKey) {
                 localStorage.setItem('ai_meshy_api_key', data.meshyApiKey);
+              } else if (localMeshy) {
+                await setDoc(userDocRef, { meshyApiKey: localMeshy }, { merge: true });
               }
+
               if (data.engine3D) {
                 localStorage.setItem('ai_3d_engine', data.engine3D);
+              } else if (localEngine) {
+                await setDoc(userDocRef, { engine3D: localEngine }, { merge: true });
               }
+            } else if (localGemini || localTripo || localMeshy || localEngine) {
+              await setDoc(userDocRef, {
+                geminiApiKey: localGemini || undefined,
+                tripoApiKey: localTripo || undefined,
+                meshyApiKey: localMeshy || undefined,
+                engine3D: localEngine || undefined,
+                updatedAt: Date.now()
+              }, { merge: true });
             }
           } catch (err) {
-            console.warn('[Auth] Failed to load user profile API keys:', err);
+            console.warn('[Auth] Failed to load/sync user profile API keys:', err);
           }
         }
       }
@@ -154,54 +164,87 @@ export const useAuthStore = defineStore('auth', () => {
       : null;
 
     let user: User | null = null;
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
     try {
-      if (auth.currentUser && auth.currentUser.isAnonymous) {
-        const result = await linkWithPopup(auth.currentUser, provider);
-        user = result.user;
-      } else {
-        const result = await signInWithPopup(auth, provider);
-        user = result.user;
-      }
+      // Directly call signInWithPopup to honor user click activation
+      const result = await signInWithPopup(auth, provider);
+      user = result.user;
     } catch (err: any) {
-      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-      
-      if (err?.code === 'auth/credential-already-in-use') {
-        // If the Google account is already linked to another Firebase user, fallback to sign in
-        try {
-           const result = await signInWithPopup(auth, provider);
-           user = result.user;
-        } catch (innerErr: any) {
-           if (innerErr?.code === 'auth/popup-blocked' || isMobile) {
-              await signInWithRedirect(auth, provider);
-              return { success: true, user: auth.currentUser, previousAnonUid }; // Execution stops, page redirects
-           }
-           throw innerErr;
-        }
-      } else if (err?.code === 'auth/popup-blocked' || err?.code === 'auth/cancelled-popup-request' || isMobile) {
-        console.warn('Popup blocked or mobile device detected, using redirect instead...', err);
-        if (auth.currentUser && auth.currentUser.isAnonymous) {
-           await linkWithRedirect(auth.currentUser, provider);
-        } else {
-           await signInWithRedirect(auth, provider);
-        }
-        return { success: true, user: auth.currentUser, previousAnonUid }; // Execution stops, page redirects
-      } else {
+      if (err?.code === 'auth/popup-closed-by-user' || err?.code === 'auth/cancelled-popup-request') {
+        // User closed the popup intentionally
         throw err;
       }
+
+      if (err?.code === 'auth/popup-blocked' || isMobile) {
+        console.warn('Popup blocked or mobile browser detected, redirecting...', err);
+        await signInWithRedirect(auth, provider);
+        return { success: true, user: auth.currentUser, previousAnonUid };
+      }
+
+      throw err;
     }
-    
+
     if (!user) return { success: false };
 
     firebaseUser.value = user;
     uid.value = user.uid;
     email.value = user.email || '';
-    displayName.value = user.displayName || 'Google User';
+    displayName.value = user.displayName || displayName.value || user.email?.split('@')[0] || 'User';
     isGoogleLinked.value = true;
 
     localStorage.setItem('ai_mentor_uid', user.uid);
     localStorage.setItem('ai_mentor_google_linked', 'true');
     localStorage.setItem('ai_mentor_email', email.value);
     localStorage.setItem('ai_mentor_name', displayName.value);
+
+    // If upgrading from an anonymous account, migrate local rooms and Firestore rooms
+    if (previousAnonUid && previousAnonUid !== user.uid) {
+      // 1. Migrate local storage rooms
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith('ai_room_')) {
+            const raw = localStorage.getItem(key);
+            if (raw) {
+              const item = JSON.parse(raw);
+              let changed = false;
+              if (item.hostUid === previousAnonUid) {
+                item.hostUid = user.uid;
+                changed = true;
+              }
+              if (item.participants && item.participants[previousAnonUid]) {
+                const p = item.participants[previousAnonUid];
+                p.uid = user.uid;
+                p.displayName = displayName.value;
+                item.participants[user.uid] = p;
+                delete item.participants[previousAnonUid];
+                changed = true;
+              }
+              if (changed) {
+                localStorage.setItem(key, JSON.stringify(item));
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[Auth] Error migrating localStorage rooms:', err);
+      }
+
+      // 2. Migrate Firestore rooms where host was previousAnonUid
+      if (db) {
+        try {
+          const roomsQuery = query(collection(db, 'rooms'), where('hostUid', '==', previousAnonUid));
+          const snap = await getDocs(roomsQuery);
+          for (const docSnap of snap.docs) {
+            await updateDoc(docSnap.ref, { hostUid: user.uid });
+          }
+        } catch (err) {
+          console.warn('[Auth] Error migrating Firestore rooms:', err);
+        }
+      }
+    }
+
     return { success: true, user, previousAnonUid };
   };
 

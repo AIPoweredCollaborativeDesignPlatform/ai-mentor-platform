@@ -29,7 +29,8 @@ import {
   Zap,
   Cpu,
   Globe,
-  Check
+  Check,
+  Loader2
 } from 'lucide-vue-next';
 
 import { ref, onMounted, onUnmounted } from 'vue';
@@ -93,10 +94,14 @@ const handleSaveTripoKey = () => {
   setTimeout(() => (engineSavedMsg.value = ''), 2500);
 };
 
+const isGoogleSigningIn = ref(false);
+
 const handleGoogleSignIn = async () => {
+  if (isGoogleSigningIn.value) return;
+  isGoogleSigningIn.value = true;
   try {
     const res = await authStore.upgradeWithGoogle();
-    if (res.previousAnonUid && roomStore.currentRoom) {
+    if (res?.previousAnonUid && roomStore.currentRoom) {
       await roomStore.transferHostOwnership(res.previousAnonUid, authStore.uid);
     } else if (roomStore.currentRoom && db) {
       await updateDoc(doc(db, 'rooms', roomStore.currentRoom.roomId), {
@@ -106,10 +111,12 @@ const handleGoogleSignIn = async () => {
     }
     roomStore.pushToast('Signed In', `Signed in as ${authStore.displayName}`, 'success');
   } catch (err: any) {
-    if (err?.code !== 'auth/popup-closed-by-user') {
+    if (err?.code !== 'auth/popup-closed-by-user' && err?.code !== 'auth/cancelled-popup-request') {
       console.warn('Google sign-in error:', err);
       roomStore.pushToast('Sign-In Failed', err?.message || 'Could not complete Google Sign-in', 'error');
     }
+  } finally {
+    isGoogleSigningIn.value = false;
   }
 };
 
@@ -762,9 +769,12 @@ const sensitivities: { id: SensitivityLevel; name: string; desc: string }[] = [
           </p>
           <button
             @click="handleGoogleSignIn"
-            class="w-full py-1.5 px-3 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold transition flex items-center justify-center gap-1.5 shadow"
+            :disabled="isGoogleSigningIn"
+            class="w-full py-1.5 px-3 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold transition flex items-center justify-center gap-1.5 shadow cursor-pointer disabled:opacity-50"
           >
-            <LogIn class="w-3.5 h-3.5" /> Sign in with Google to Save Room
+            <Loader2 v-if="isGoogleSigningIn" class="w-3.5 h-3.5 animate-spin" />
+            <LogIn v-else class="w-3.5 h-3.5" />
+            {{ isGoogleSigningIn ? 'Signing in...' : 'Sign in with Google to Save Room' }}
           </button>
         </div>
 

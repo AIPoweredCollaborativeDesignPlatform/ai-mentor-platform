@@ -3,7 +3,7 @@ import { ref, onMounted, onUnmounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import { useRoomStore } from '../stores/room';
-import { Clock, ShieldAlert, ArrowLeft, RotateCcw, Sparkles, LogIn, Edit2, Check } from 'lucide-vue-next';
+import { Clock, ShieldAlert, ArrowLeft, RotateCcw, Sparkles, LogIn, Edit2, Check, Loader2 } from 'lucide-vue-next';
 
 const route = useRoute();
 const router = useRouter();
@@ -77,14 +77,25 @@ const handleSaveIdentity = () => {
   }
 };
 
+const isGoogleSigningIn = ref(false);
+
 const handleGoogleSignIn = async () => {
+  if (isGoogleSigningIn.value) return;
+  isGoogleSigningIn.value = true;
   try {
-    await authStore.upgradeWithGoogle();
+    const res = await authStore.upgradeWithGoogle();
     customName.value = authStore.displayName;
     customAvatar.value = authStore.avatar;
+    if (res?.previousAnonUid && roomStore.currentRoom) {
+      await roomStore.transferHostOwnership(res.previousAnonUid, authStore.uid);
+    }
     roomStore.applyToJoin(pin);
   } catch (err: any) {
-    alert(`Sign-in error: ${err.message || err}`);
+    if (err?.code !== 'auth/popup-closed-by-user' && err?.code !== 'auth/cancelled-popup-request') {
+      alert(`Sign-in error: ${err.message || err}`);
+    }
+  } finally {
+    isGoogleSigningIn.value = false;
   }
 };
 
@@ -275,9 +286,12 @@ onUnmounted(() => {
           <div v-if="!authStore.isGoogleLinked && !isEditingIdentity" class="mt-3 pt-2.5 border-t border-slate-800/80">
             <button
               @click="handleGoogleSignIn"
-              class="w-full py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-medium transition flex items-center justify-center gap-1.5"
+              :disabled="isGoogleSigningIn"
+              class="w-full py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-medium transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
             >
-              <LogIn class="w-3.5 h-3.5 text-sky-400" /> Sign in with Google instead
+              <Loader2 v-if="isGoogleSigningIn" class="w-3.5 h-3.5 animate-spin text-sky-400" />
+              <LogIn v-else class="w-3.5 h-3.5 text-sky-400" />
+              {{ isGoogleSigningIn ? 'Signing in...' : 'Sign in with Google instead' }}
             </button>
           </div>
         </div>

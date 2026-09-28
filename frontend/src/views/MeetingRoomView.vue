@@ -198,17 +198,22 @@ const openPdfPreview = (title: string, url: string) => {
   };
 };
 
+const isGoogleSigningIn = ref(false);
 const handleGoogleSignInProfile = async () => {
+  if (isGoogleSigningIn.value) return;
+  isGoogleSigningIn.value = true;
   try {
     const res = await authStore.upgradeWithGoogle();
-    if (res.previousAnonUid && roomStore.currentRoom) {
+    if (res?.previousAnonUid && roomStore.currentRoom) {
       await roomStore.transferHostOwnership(res.previousAnonUid, authStore.uid);
     }
     roomStore.pushToast('Signed In', `Signed in as ${authStore.displayName}`, 'success');
   } catch (err: any) {
-    if (err?.code !== 'auth/popup-closed-by-user') {
+    if (err?.code !== 'auth/popup-closed-by-user' && err?.code !== 'auth/cancelled-popup-request') {
       roomStore.pushToast('Sign-In Failed', err?.message || 'Could not complete sign in', 'error');
     }
+  } finally {
+    isGoogleSigningIn.value = false;
   }
 };
 
@@ -1552,10 +1557,12 @@ onUnmounted(() => {
             <button
               type="button"
               @click="handleGoogleSignInProfile"
-              class="w-full py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 text-xs font-semibold transition flex items-center justify-center gap-2"
+              :disabled="isGoogleSigningIn"
+              class="w-full py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 text-xs font-semibold transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
             >
-              <LogIn class="w-3.5 h-3.5 text-sky-400" />
-              <span>Sign in with Google</span>
+              <Loader2 v-if="isGoogleSigningIn" class="w-3.5 h-3.5 animate-spin text-sky-400" />
+              <LogIn v-else class="w-3.5 h-3.5 text-sky-400" />
+              <span>{{ isGoogleSigningIn ? 'Signing in...' : 'Sign in with Google' }}</span>
             </button>
           </div>
         </div>

@@ -11,7 +11,8 @@ import {
   ArrowRight,
   LayoutDashboard,
   Search,
-  X
+  X,
+  Loader2
 } from 'lucide-vue-next';
 import { computed } from 'vue';
 
@@ -194,17 +195,33 @@ const handleJoinRoom = async () => {
   }
 };
 
+const isGoogleSigningIn = ref(false);
 const authErrorMsg = ref('');
 
 const handleGoogleSignIn = async () => {
+  if (isGoogleSigningIn.value) return;
+  isGoogleSigningIn.value = true;
   authErrorMsg.value = '';
   try {
-    await authStore.upgradeWithGoogle();
+    const res = await authStore.upgradeWithGoogle();
+    if (res?.success) {
+      inputName.value = authStore.displayName;
+    }
   } catch (err: any) {
-    if (err?.code !== 'auth/popup-closed-by-user') {
-      authErrorMsg.value = err?.message || 'Google sign-in failed. Please try again.';
+    if (err?.code !== 'auth/popup-closed-by-user' && err?.code !== 'auth/cancelled-popup-request') {
+      let friendlyMsg = err?.message || 'Google sign-in failed. Please try again.';
+      if (err?.code === 'auth/popup-blocked') {
+        friendlyMsg = 'Popup was blocked by your browser. Please allow popups for this site and try again.';
+      } else if (err?.code === 'auth/unauthorized-domain') {
+        friendlyMsg = 'This domain is not authorized in Firebase Auth. Please verify Firebase settings.';
+      } else if (err?.code === 'auth/network-request-failed') {
+        friendlyMsg = 'Network connection error. Please check your internet connection.';
+      }
+      authErrorMsg.value = friendlyMsg;
       console.warn('Google sign-in error:', err);
     }
+  } finally {
+    isGoogleSigningIn.value = false;
   }
 };
 </script>
@@ -257,9 +274,12 @@ const handleGoogleSignIn = async () => {
             <span class="text-xs text-slate-400">Sign in for cross-device sync</span>
             <button
               @click="handleGoogleSignIn"
-              class="inline-flex items-center gap-1.5 text-xs text-sky-400 hover:text-sky-300 font-medium px-3 py-1.5 rounded-xl border border-sky-500/30 bg-sky-500/10 hover:bg-sky-500/20 transition"
+              :disabled="isGoogleSigningIn"
+              class="inline-flex items-center gap-1.5 text-xs text-sky-400 hover:text-sky-300 font-medium px-3 py-1.5 rounded-xl border border-sky-500/30 bg-sky-500/10 hover:bg-sky-500/20 transition cursor-pointer disabled:opacity-50"
             >
-              <LogIn class="w-3.5 h-3.5" /> Sign in with Google
+              <Loader2 v-if="isGoogleSigningIn" class="w-3.5 h-3.5 animate-spin" />
+              <LogIn v-else class="w-3.5 h-3.5" />
+              {{ isGoogleSigningIn ? 'Signing in...' : 'Sign in with Google' }}
             </button>
           </div>
           <p v-if="authErrorMsg" class="text-[11px] text-rose-400 mt-2 bg-rose-950/40 p-2 rounded-lg border border-rose-900/60 leading-relaxed">

@@ -240,6 +240,58 @@ const handleWheel = (e: WheelEvent) => {
   controls.update();
 };
 
+const cropTransparentCanvas = (sourceCanvas: HTMLCanvasElement): HTMLCanvasElement => {
+  const w = sourceCanvas.width;
+  const h = sourceCanvas.height;
+  const tempCanvas = document.createElement('canvas');
+  tempCanvas.width = w;
+  tempCanvas.height = h;
+  const ctx = tempCanvas.getContext('2d');
+  if (!ctx) return sourceCanvas;
+
+  ctx.drawImage(sourceCanvas, 0, 0);
+  let imgData: ImageData;
+  try {
+    imgData = ctx.getImageData(0, 0, w, h);
+  } catch {
+    return sourceCanvas;
+  }
+  const data = imgData.data;
+
+  let minX = w, minY = h, maxX = 0, maxY = 0;
+  let found = false;
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const alpha = data[(y * w + x) * 4 + 3];
+      if (alpha > 10) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+        found = true;
+      }
+    }
+  }
+
+  if (!found) return sourceCanvas;
+
+  const padding = 16;
+  const cropX = Math.max(0, minX - padding);
+  const cropY = Math.max(0, minY - padding);
+  const cropW = Math.min(w - cropX, (maxX - minX) + padding * 2);
+  const cropH = Math.min(h - cropY, (maxY - minY) + padding * 2);
+
+  const croppedCanvas = document.createElement('canvas');
+  croppedCanvas.width = cropW;
+  croppedCanvas.height = cropH;
+  const croppedCtx = croppedCanvas.getContext('2d');
+  if (!croppedCtx) return sourceCanvas;
+
+  croppedCtx.drawImage(sourceCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+  return croppedCanvas;
+};
+
 const isCopyingImage = ref(false);
 const copyTransparentImage = async () => {
   if (!renderer || !scene || !camera) return;
@@ -250,16 +302,18 @@ const copyTransparentImage = async () => {
     renderer.render(scene, camera);
 
     const domCanvas = renderer.domElement;
-    domCanvas.toBlob(async (blob) => {
-      if (scene) scene.background = origBg;
-      if (renderer && scene && camera) renderer.render(scene, camera);
+    const cropped = cropTransparentCanvas(domCanvas);
 
+    if (scene) scene.background = origBg;
+    if (renderer && scene && camera) renderer.render(scene, camera);
+
+    cropped.toBlob(async (blob) => {
       if (blob) {
         try {
           await navigator.clipboard.write([
             new ClipboardItem({ 'image/png': blob })
           ]);
-          roomStore.pushToast('Image Copied', 'Transparent 3D render copied to clipboard', 'success');
+          roomStore.pushToast('Image Copied', 'Tightly cropped 3D preview copied to clipboard', 'success');
         } catch (err) {
           console.error('Clipboard write error:', err);
           roomStore.pushToast('Copy Failed', 'Clipboard access denied or unsupported', 'error');

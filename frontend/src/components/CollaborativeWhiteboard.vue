@@ -111,17 +111,33 @@ const updateStickyToolbar = () => {
   const active = canvas.getActiveObject() as any;
   if (active && (active.isStickyNote || (active.type === 'textbox' && active.stickyColorConfig))) {
     activeStickyNote.value = active;
-    const bound = active.getBoundingRect();
+    active.setCoords();
     const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
-    const zoom = canvas.getZoom();
-    const screenX = bound.left * zoom + vpt[4];
-    const screenY = bound.top * zoom + vpt[5];
-    const screenW = bound.width * zoom;
-    stickyToolbarPosition.value = {
-      x: screenX + screenW / 2,
-      y: Math.max(10, screenY - 50), // Position higher to not block top rotation handle (mtr)
-      visible: true
-    };
+    const coords = active.getCoords ? active.getCoords(true, true) : null;
+    if (coords && coords.length >= 4) {
+      const minSceneX = Math.min(coords[0].x, coords[1].x, coords[2].x, coords[3].x);
+      const maxSceneX = Math.max(coords[0].x, coords[1].x, coords[2].x, coords[3].x);
+      const minSceneY = Math.min(coords[0].y, coords[1].y, coords[2].y, coords[3].y);
+      const midSceneX = (minSceneX + maxSceneX) / 2;
+
+      const screenX = midSceneX * vpt[0] + vpt[4];
+      const screenY = minSceneY * vpt[3] + vpt[5];
+
+      stickyToolbarPosition.value = {
+        x: screenX,
+        y: Math.max(20, screenY - 72), // Well clear of the top rotation handle (mtr)
+        visible: true
+      };
+    } else {
+      const bound = active.getBoundingRect(true);
+      const screenX = (bound.left + bound.width / 2) * vpt[0] + vpt[4];
+      const screenY = bound.top * vpt[3] + vpt[5];
+      stickyToolbarPosition.value = {
+        x: screenX,
+        y: Math.max(20, screenY - 72),
+        visible: true
+      };
+    }
   } else {
     activeStickyNote.value = null;
     stickyToolbarPosition.value.visible = false;
@@ -153,7 +169,12 @@ const updateSelectionState = () => {
       active instanceof fabric.Group
     ) && !active.isStickyNote
   );
-  isObjectLocked.value = !!(active && active.isLocked);
+  if (active && (active.type?.toLowerCase() === 'activeselection' || active._objects)) {
+    const targets = active.getObjects ? active.getObjects() : active._objects;
+    isObjectLocked.value = targets.length > 0 && targets.every((o: any) => o.isLocked);
+  } else {
+    isObjectLocked.value = !!(active && active.isLocked);
+  }
   updateStickyToolbar();
 };
 
@@ -210,6 +231,13 @@ const isObjectHitByRect = (canvasObj: fabric.Canvas, obj: any, rect: { left: num
 // Snapshot helper: guarantees a light background (#f8fafc) and dot grid for JPEG exports
 const getCanvasSnapshot = (quality = 0.7): string => {
   if (!canvas) return '';
+  // Deselect active object temporarily so nodes and handles are never in the exported picture
+  const activeObj = canvas.getActiveObject();
+  if (activeObj) {
+    canvas.discardActiveObject();
+    canvas.renderAll();
+  }
+
   const width = canvas.getWidth();
   const height = canvas.getHeight();
 
@@ -217,7 +245,13 @@ const getCanvasSnapshot = (quality = 0.7): string => {
   offscreen.width = width;
   offscreen.height = height;
   const ctx = offscreen.getContext('2d');
-  if (!ctx) return canvas.toDataURL({ format: 'jpeg', quality, multiplier: 1 });
+  if (!ctx) {
+    if (activeObj) {
+      canvas.setActiveObject(activeObj);
+      canvas.renderAll();
+    }
+    return canvas.toDataURL({ format: 'jpeg', quality, multiplier: 1 });
+  }
 
   // 1. Fill light background
   ctx.fillStyle = '#f8fafc';
@@ -251,6 +285,12 @@ const getCanvasSnapshot = (quality = 0.7): string => {
     ctx.drawImage(lowerCanvas, 0, 0, lowerCanvas.width, lowerCanvas.height, 0, 0, width, height);
   }
 
+  // Restore selection
+  if (activeObj) {
+    canvas.setActiveObject(activeObj);
+    canvas.renderAll();
+  }
+
   return offscreen.toDataURL('image/jpeg', quality);
 };
 
@@ -260,23 +300,21 @@ let isDragging = false;
 let lastPosX = 0;
 let lastPosY = 0;
 
-// Procreate-style QuickShape (Pencil Hold-to-Straighten / Smooth)
+// Procreate-style QuickShape (Pencil Hold-to-Straighten / Smooth with Catmull-Rom Bezier Spline)
 let pencilHoldTimer: any = null;
 let pencilStrokePoints: Array<{ x: number; y: number }> = [];
 let isPencilHolding = false;
 let pendingQuickShape: any = null;
 let lastPencilMovePos: { x: number; y: number } | null = null;
 
-const onPencilHoldDetected = () => {
-  if (!canvas || !isDrawingMode.value || pencilStrokePoints.length < 5) return;
-  isPencilHolding = true;
-
-  const p0 = pencilStrokePoints[0];
-  const pn = pencilStrokePoints[pencilStrokePoints.length - 1];
+const createSmoothedShape = (pts: Array<{ x: number; y: number }>) => {
+  if (pts.length < 2) return null;
+  const p0 = pts[0];
+  const pn = pts[pts.length - 1];
   const endDist = Math.hypot(pn.x - p0.x, pn.y - p0.y);
 
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (const pt of pencilStrokePoints) {
+  for (const pt of pts) {
     if (pt.x < minX) minX = pt.x;
     if (pt.x > maxX) maxX = pt.x;
     if (pt.y < minY) minY = pt.y;
@@ -286,13 +324,14 @@ const onPencilHoldDetected = () => {
   const h = maxY - minY;
   const maxDim = Math.max(w, h);
 
-  // Closed loop detection: endpoints are close to each other
-  if (endDist < Math.max(40, maxDim * 0.28) && pencilStrokePoints.length >= 8 && maxDim > 20) {
+  // 1. Closed loop check (Circle / Ellipse)
+  if (endDist < Math.max(40, maxDim * 0.28) && pts.length >= 8 && maxDim > 25) {
     const rx = Math.max(10, w / 2);
     const ry = Math.max(10, h / 2);
     const cx = (minX + maxX) / 2;
     const cy = (minY + maxY) / 2;
-    pendingQuickShape = new fabric.Ellipse({
+    displayToast('Snapped to Circle / Ellipse ✨');
+    return new fabric.Ellipse({
       left: cx,
       top: cy,
       rx,
@@ -304,17 +343,101 @@ const onPencilHoldDetected = () => {
       fill: 'transparent',
       perPixelTargetFind: true
     });
-    displayToast('Snapped to Circle / Ellipse ✨');
-  } else {
-    // Open path: snap to straight line from start to end
-    pendingQuickShape = new fabric.Line([p0.x, p0.y, pn.x, pn.y], {
+  }
+
+  // 2. Straight line check: perpendicular deviation from chord p0 -> pn
+  const lineLen = Math.hypot(pn.x - p0.x, pn.y - p0.y);
+  let maxDev = 0;
+  if (lineLen > 1) {
+    for (const pt of pts) {
+      const dist = Math.abs((pn.y - p0.y) * pt.x - (pn.x - p0.x) * pt.y + pn.x * p0.y - pn.y * p0.x) / lineLen;
+      if (dist > maxDev) maxDev = dist;
+    }
+  }
+
+  if (maxDev < Math.max(15, lineLen * 0.08)) {
+    displayToast('Snapped to straight line ✨');
+    return new fabric.Line([p0.x, p0.y, pn.x, pn.y], {
       stroke: activeColor.value,
       strokeWidth: strokeWidth.value,
       strokeLineCap: 'round',
       perPixelTargetFind: true
     });
-    displayToast('Snapped to straight line ✨');
   }
+
+  // 3. User drew a curve! Smooth hand-drawn points using Catmull-Rom cubic Bezier spline
+  displayToast('Smoothed curve ✨');
+
+  const sampled: Array<{ x: number; y: number }> = [pts[0]];
+  let accumDist = 0;
+  const targetStep = Math.max(16, lineLen / 12);
+  for (let i = 1; i < pts.length; i++) {
+    const d = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    accumDist += d;
+    if (accumDist >= targetStep) {
+      sampled.push(pts[i]);
+      accumDist = 0;
+    }
+  }
+  if (sampled[sampled.length - 1] !== pn) {
+    sampled.push(pn);
+  }
+
+  if (sampled.length < 3) {
+    return new fabric.Line([p0.x, p0.y, pn.x, pn.y], {
+      stroke: activeColor.value,
+      strokeWidth: strokeWidth.value,
+      strokeLineCap: 'round',
+      perPixelTargetFind: true
+    });
+  }
+
+  let pathD = `M ${sampled[0].x.toFixed(1)} ${sampled[0].y.toFixed(1)}`;
+  const m = sampled.length - 1;
+  for (let i = 0; i < m; i++) {
+    const pPrev = sampled[Math.max(0, i - 1)];
+    const pCur = sampled[i];
+    const pNext = sampled[i + 1];
+    const pAfter = sampled[Math.min(m, i + 2)];
+
+    const cp1x = pCur.x + (pNext.x - pPrev.x) / 6;
+    const cp1y = pCur.y + (pNext.y - pPrev.y) / 6;
+    const cp2x = pNext.x - (pAfter.x - pCur.x) / 6;
+    const cp2y = pNext.y - (pAfter.y - pCur.y) / 6;
+
+    pathD += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${pNext.x.toFixed(1)} ${pNext.y.toFixed(1)}`;
+  }
+
+  return new fabric.Path(pathD, {
+    stroke: activeColor.value,
+    strokeWidth: strokeWidth.value,
+    fill: 'transparent',
+    strokeLineCap: 'round',
+    strokeLineJoin: 'round',
+    perPixelTargetFind: true
+  });
+};
+
+const onPencilHoldDetected = () => {
+  if (!canvas || !isDrawingMode.value || pencilStrokePoints.length < 5) return;
+  isPencilHolding = true;
+
+  const shape = createSmoothedShape(pencilStrokePoints);
+  if (!shape) return;
+
+  // Clear in-progress brush line from contextTop
+  canvas.clearContext(canvas.contextTop);
+  if ((canvas.freeDrawingBrush as any)?._points) {
+    (canvas.freeDrawingBrush as any)._points = [];
+  }
+
+  canvas.add(shape);
+  canvas.setActiveObject(shape);
+  canvas.requestRenderAll();
+  saveHistoryState();
+  syncToFirebase();
+  updateSelectionState();
+  pendingQuickShape = null;
 };
 
 const initFabric = () => {
@@ -331,6 +454,24 @@ const initFabric = () => {
     width: wrapperRef.value.clientWidth,
     height: wrapperRef.value.clientHeight
   });
+
+  // Strict boundary clipping on canvas to keep drawing and objects inside workspace
+  canvas.clipPath = new fabric.Rect({
+    left: 0,
+    top: 0,
+    width: WORKSPACE_WIDTH,
+    height: WORKSPACE_HEIGHT,
+    originX: 'left',
+    originY: 'top',
+    selectable: false,
+    evented: false,
+    excludeFromExport: true
+  });
+
+  // Guard against browser native context menu anywhere on upper canvas
+  canvas.upperCanvasEl.addEventListener('contextmenu', (e: MouseEvent) => {
+    e.preventDefault();
+  }, { capture: true });
 
   // Override collectObjects for precise entity-level marquee selection
   const originalCollectObjects = (canvas as any).collectObjects;
@@ -363,10 +504,11 @@ const initFabric = () => {
     const zoom = canvas.getZoom();
     const w = wrapperRef.value.clientWidth;
     const h = wrapperRef.value.clientHeight;
-    const minX = w - WORKSPACE_WIDTH * zoom - 150;
-    const maxX = 150;
-    const minY = h - WORKSPACE_HEIGHT * zoom - 150;
-    const maxY = 150;
+    const margin = Math.max(160, Math.min(w, h) * 0.45);
+    const minX = w - WORKSPACE_WIDTH * zoom - margin;
+    const maxX = margin;
+    const minY = h - WORKSPACE_HEIGHT * zoom - margin;
+    const maxY = margin;
     vpt[4] = Math.min(maxX, Math.max(minX, vpt[4]));
     vpt[5] = Math.min(maxY, Math.max(minY, vpt[5]));
   };
@@ -495,9 +637,12 @@ const initFabric = () => {
       let zoom = canvas.getZoom();
       zoom *= 0.999 ** delta;
       if (zoom > 5) zoom = 5;
-      if (zoom < 0.2) zoom = 0.2;
+      if (zoom < 0.08) zoom = 0.08;
       canvas.zoomToPoint({ x: opt.e.offsetX, y: opt.e.offsetY } as fabric.Point, zoom);
       clampViewportPan();
+      const activeObj = canvas.getActiveObject();
+      if (activeObj) activeObj.setCoords();
+      updateStickyToolbar();
       opt.e.preventDefault();
       opt.e.stopPropagation();
     } else if (opt.e.altKey) {
@@ -505,6 +650,10 @@ const initFabric = () => {
       if (vpt) {
         vpt[4] -= delta;
         clampViewportPan();
+        canvas.setViewportTransform(vpt);
+        const activeObj = canvas.getActiveObject();
+        if (activeObj) activeObj.setCoords();
+        updateStickyToolbar();
         canvas.requestRenderAll();
       }
       opt.e.preventDefault();
@@ -514,6 +663,10 @@ const initFabric = () => {
       if (vpt) {
         vpt[5] -= delta;
         clampViewportPan();
+        canvas.setViewportTransform(vpt);
+        const activeObj = canvas.getActiveObject();
+        if (activeObj) activeObj.setCoords();
+        updateStickyToolbar();
         canvas.requestRenderAll();
       }
       opt.e.preventDefault();
@@ -663,6 +816,10 @@ const initFabric = () => {
         vpt[4] += e.clientX - lastPosX;
         vpt[5] += e.clientY - lastPosY;
         clampViewportPan();
+        canvas.setViewportTransform(vpt);
+        const activeObj = canvas.getActiveObject();
+        if (activeObj) activeObj.setCoords();
+        updateStickyToolbar();
         canvas.requestRenderAll();
       }
       lastPosX = e.clientX;
@@ -769,18 +926,32 @@ const initFabric = () => {
     }
   });
 
-  // Clamp moving objects within workspace boundary
+  // Clamp moving objects within workspace boundary using actual corner coordinates
   canvas.on('object:moving', (e: any) => {
     const obj = e.target;
     if (obj) {
-      const bound = obj.getBoundingRect(true);
-      if (obj.left < 0) obj.left = 0;
-      if (obj.top < 0) obj.top = 0;
-      if (obj.left + (bound.width || 0) > WORKSPACE_WIDTH) {
-        obj.left = Math.max(0, WORKSPACE_WIDTH - (bound.width || 0));
-      }
-      if (obj.top + (bound.height || 0) > WORKSPACE_HEIGHT) {
-        obj.top = Math.max(0, WORKSPACE_HEIGHT - (bound.height || 0));
+      const coords = obj.getCoords ? obj.getCoords(true, true) : (obj.aCoords ? Object.values(obj.aCoords) : null);
+      if (coords && coords.length > 0) {
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        for (const p of coords) {
+          if (p.x < minX) minX = p.x;
+          if (p.x > maxX) maxX = p.x;
+          if (p.y < minY) minY = p.y;
+          if (p.y > maxY) maxY = p.y;
+        }
+
+        if (minX < 0) {
+          obj.left += (0 - minX);
+        } else if (maxX > WORKSPACE_WIDTH) {
+          obj.left -= (maxX - WORKSPACE_WIDTH);
+        }
+
+        if (minY < 0) {
+          obj.top += (0 - minY);
+        } else if (maxY > WORKSPACE_HEIGHT) {
+          obj.top -= (maxY - WORKSPACE_HEIGHT);
+        }
+        obj.setCoords();
       }
     }
     updateStickyToolbar();
@@ -848,9 +1019,16 @@ const loadFromFirebase = async (json: string) => {
     if (o.isStickyNote || (o.type === 'textbox' && (o.stickyColorConfig || o.backgroundColor))) {
       o.isStickyNote = true;
       o.minHeight = 180;
+      o.textAlign = 'center';
       const orig = o.calcTextHeight.bind(o);
       o.calcTextHeight = function() {
         return Math.max(orig(), (this as any).minHeight || 180);
+      };
+      (o as any)._getTopOffset = function() {
+        const linesH = orig();
+        const h = (this as any).height || 180;
+        const extraOffset = Math.max(0, (h - linesH) / 2);
+        return -h / 2 + extraOffset;
       };
       o.initDimensions();
     }
@@ -947,7 +1125,7 @@ const spawnStickyNote = (x: number, y: number, colorCfg = selectedStickyColor.va
     fontFamily: 'Inter, sans-serif',
     backgroundColor: colorCfg.bg,
     fill: colorCfg.text,
-    textAlign: 'left',
+    textAlign: 'center',
     splitByGrapheme: true,
     padding: 14,
     rx: 0,
@@ -967,11 +1145,17 @@ const spawnStickyNote = (x: number, y: number, colorCfg = selectedStickyColor.va
   (note as any).stickyColorConfig = colorCfg;
   (note as any).minHeight = 180;
 
-  // Guarantee square baseline and auto dynamic height expansion on multi-line text
+  // Guarantee square baseline, auto dynamic height expansion on multi-line text, and centered text/cursor
   const origCalcTextHeight = note.calcTextHeight.bind(note);
   note.calcTextHeight = function() {
     const actualH = origCalcTextHeight();
     return Math.max(actualH, (this as any).minHeight || 180);
+  };
+  (note as any)._getTopOffset = function() {
+    const linesH = origCalcTextHeight();
+    const h = (this as any).height || 180;
+    const extraOffset = Math.max(0, (h - linesH) / 2);
+    return -h / 2 + extraOffset;
   };
   note.initDimensions();
 
@@ -1082,25 +1266,46 @@ const exitGroupIsolation = () => {
   updateSelectionState();
 };
 
-// Object Lock Action
+// Object Lock Action (Supports single objects, groups, and multi-selection ActiveSelection)
 const toggleLockSelected = () => {
   if (!canvas) return;
   const activeObj = canvas.getActiveObject() as any;
   if (!activeObj) return;
-  const newLocked = !activeObj.isLocked;
-  activeObj.set({
-    lockMovementX: newLocked,
-    lockMovementY: newLocked,
-    lockRotation: newLocked,
-    lockScalingX: newLocked,
-    lockScalingY: newLocked,
-    hasControls: !newLocked,
-    isLocked: newLocked
+
+  const isMulti = activeObj.type?.toLowerCase() === 'activeselection' || !!activeObj._objects;
+  const targets: any[] = isMulti && activeObj.getObjects ? activeObj.getObjects() : (activeObj._objects ? activeObj._objects : [activeObj]);
+
+  const newLocked = !targets.every((o: any) => o.isLocked);
+
+  targets.forEach((obj: any) => {
+    obj.set({
+      lockMovementX: newLocked,
+      lockMovementY: newLocked,
+      lockRotation: newLocked,
+      lockScalingX: newLocked,
+      lockScalingY: newLocked,
+      hasControls: !newLocked,
+      isLocked: newLocked
+    });
   });
+
+  if (isMulti) {
+    activeObj.set({
+      lockMovementX: newLocked,
+      lockMovementY: newLocked,
+      lockRotation: newLocked,
+      lockScalingX: newLocked,
+      lockScalingY: newLocked,
+      hasControls: !newLocked,
+      isLocked: newLocked
+    });
+  }
+
   isObjectLocked.value = newLocked;
   canvas.requestRenderAll();
   saveHistoryState();
   syncToFirebase();
+  updateSelectionState();
 };
 
 // Quick save action (Ctrl+S)
@@ -1622,6 +1827,7 @@ const handleBeforeUnload = (e: BeforeUnloadEvent) => {
 defineExpose({
   hasUnsavedChanges,
   showCloseConfirmModal,
+  handleCloseRequest,
   triggerAutoSaveAsAsset,
   handleStopBroadcast,
   getCanvasSnapshot,
@@ -1837,13 +2043,28 @@ onUnmounted(() => {
       ref="wrapperRef"
       class="flex-1 w-full h-full relative cursor-crosshair transition-all duration-300"
       :class="{ 'ring-4 ring-inset ring-sky-400/90 shadow-[inset_0_0_40px_rgba(56,189,248,0.35)]': isHoveringSend }"
+      @contextmenu.prevent
     >
       <canvas ref="canvasRef" class="w-full h-full touch-none"></canvas>
+
+      <!-- Send Viewport Capture Framing Guide / Viewfinder -->
+      <div
+        v-if="isHoveringSend"
+        class="absolute inset-4 sm:inset-8 border-2 border-dashed border-sky-400 pointer-events-none rounded-2xl z-20 flex flex-col justify-between p-3 animate-in fade-in duration-200"
+      >
+        <div class="flex justify-between items-center text-[11px] font-mono font-medium text-sky-400 bg-sky-950/80 px-2.5 py-1 rounded-lg w-max border border-sky-500/40">
+          <span>📷 Viewport Snapshot Area</span>
+        </div>
+        <div class="text-right text-[10px] font-mono text-sky-300/80 bg-slate-900/80 px-2 py-0.5 rounded self-end border border-slate-700">
+          Full visible screen will be captured to chat
+        </div>
+      </div>
 
       <!-- Floating Quick-Action Bar above Selected Sticky Note -->
       <div
         v-if="stickyToolbarPosition.visible && activeStickyNote"
         class="absolute z-30 flex items-center gap-1.5 p-1.5 bg-slate-900/95 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl transition-all animate-in fade-in zoom-in-95 pointer-events-auto"
+        @mousedown.prevent
         :style="{
           left: `${stickyToolbarPosition.x}px`,
           top: `${stickyToolbarPosition.y}px`,
@@ -1854,6 +2075,7 @@ onUnmounted(() => {
           <button
             v-for="color in stickyColors"
             :key="color.name"
+            @mousedown.prevent
             @click="changeStickyNoteColor(activeStickyNote, color)"
             class="w-4 h-4 rounded-full border border-black/20 hover:scale-125 transition transform cursor-pointer"
             :style="{ backgroundColor: color.bg }"
@@ -1862,6 +2084,7 @@ onUnmounted(() => {
         </div>
         <div class="w-px h-4 bg-slate-700"></div>
         <button
+          @mousedown.prevent
           @click="duplicateStickyNote(activeStickyNote)"
           class="p-1 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition cursor-pointer"
           title="Duplicate Note"
@@ -1869,6 +2092,7 @@ onUnmounted(() => {
           <Copy class="w-3.5 h-3.5" />
         </button>
         <button
+          @mousedown.prevent
           @click="deleteSelected"
           class="p-1 hover:bg-rose-950/60 text-rose-400 hover:text-rose-300 rounded-lg transition cursor-pointer"
           title="Delete Note"
@@ -1957,10 +2181,6 @@ onUnmounted(() => {
       </div>
     </transition>
 
-    <!-- Controls hint -->
-    <div class="absolute bottom-20 left-1/2 -translate-x-1/2 text-[10px] text-slate-400/60 pointer-events-none text-center whitespace-nowrap transition-opacity duration-300" :class="{ 'opacity-0': isHoveringSend }">
-      Ctrl+Wheel: Zoom • Alt+Wheel / Mid-click: Pan • Right-Click: Context Menu
-    </div>
 
     <div class="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 sm:gap-4 transition-all w-max max-w-[95%]">
       
@@ -2197,7 +2417,7 @@ onUnmounted(() => {
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
       @click.self="showShortcutsModal = false"
     >
-      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full shadow-2xl text-slate-100 space-y-4 animate-in fade-in zoom-in-95">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-lg w-full shadow-2xl text-slate-100 space-y-4 animate-in fade-in zoom-in-95">
         <div class="flex items-center justify-between pb-2 border-b border-slate-800">
           <div class="flex items-center gap-2 font-bold text-sm text-slate-200">
             <HelpCircle class="w-4 h-4 text-indigo-400" />
@@ -2207,49 +2427,118 @@ onUnmounted(() => {
             <X class="w-4 h-4" />
           </button>
         </div>
-        <div class="grid grid-cols-2 gap-2 text-xs">
-          <div class="flex items-center justify-between p-2 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <span class="text-slate-400">Quick Save</span>
-            <kbd class="px-1.5 py-0.5 rounded bg-slate-800 font-mono text-[10px] text-indigo-300">Ctrl+S</kbd>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+          <!-- Quick Save -->
+          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
+            <span class="text-slate-300 font-medium">Quick Save</span>
+            <div class="flex items-center gap-1">
+              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Ctrl</kbd>
+              <span class="text-slate-500 text-[10px]">+</span>
+              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">S</kbd>
+            </div>
           </div>
-          <div class="flex items-center justify-between p-2 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <span class="text-slate-400">Lock / Unlock</span>
-            <kbd class="px-1.5 py-0.5 rounded bg-slate-800 font-mono text-[10px] text-indigo-300">Ctrl+L</kbd>
+          <!-- Lock / Unlock -->
+          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
+            <span class="text-slate-300 font-medium">Lock / Unlock</span>
+            <div class="flex items-center gap-1">
+              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Ctrl</kbd>
+              <span class="text-slate-500 text-[10px]">+</span>
+              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">L</kbd>
+            </div>
           </div>
-          <div class="flex items-center justify-between p-2 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <span class="text-slate-400">Group Objects</span>
-            <kbd class="px-1.5 py-0.5 rounded bg-slate-800 font-mono text-[10px] text-indigo-300">Ctrl+G</kbd>
+          <!-- Group Objects -->
+          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
+            <span class="text-slate-300 font-medium">Group</span>
+            <div class="flex items-center gap-1">
+              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Ctrl</kbd>
+              <span class="text-slate-500 text-[10px]">+</span>
+              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">G</kbd>
+            </div>
           </div>
-          <div class="flex items-center justify-between p-2 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <span class="text-slate-400">Ungroup</span>
-            <kbd class="px-1.5 py-0.5 rounded bg-slate-800 font-mono text-[10px] text-indigo-300">Ctrl+Shift+G</kbd>
+          <!-- Ungroup -->
+          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
+            <span class="text-slate-300 font-medium">Ungroup</span>
+            <div class="flex items-center gap-1">
+              <kbd class="px-1.5 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Ctrl</kbd>
+              <span class="text-slate-500 text-[10px]">+</span>
+              <kbd class="px-1.5 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Shift</kbd>
+              <span class="text-slate-500 text-[10px]">+</span>
+              <kbd class="px-1.5 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">G</kbd>
+            </div>
           </div>
-          <div class="flex items-center justify-between p-2 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <span class="text-slate-400">Copy / Paste</span>
-            <kbd class="px-1.5 py-0.5 rounded bg-slate-800 font-mono text-[10px] text-indigo-300">Ctrl+C / V</kbd>
+          <!-- Copy / Paste -->
+          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
+            <span class="text-slate-300 font-medium">Copy</span>
+            <div class="flex items-center gap-1">
+              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Ctrl</kbd>
+              <span class="text-slate-500 text-[10px]">+</span>
+              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">C</kbd>
+            </div>
           </div>
-          <div class="flex items-center justify-between p-2 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <span class="text-slate-400">Cut / Delete</span>
-            <kbd class="px-1.5 py-0.5 rounded bg-slate-800 font-mono text-[10px] text-indigo-300">Ctrl+X / Del</kbd>
+          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
+            <span class="text-slate-300 font-medium">Paste</span>
+            <div class="flex items-center gap-1">
+              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Ctrl</kbd>
+              <span class="text-slate-500 text-[10px]">+</span>
+              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">V</kbd>
+            </div>
           </div>
-          <div class="flex items-center justify-between p-2 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <span class="text-slate-400">Undo Action</span>
-            <kbd class="px-1.5 py-0.5 rounded bg-slate-800 font-mono text-[10px] text-indigo-300">Ctrl+Z</kbd>
+          <!-- Cut / Delete -->
+          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
+            <span class="text-slate-300 font-medium">Cut</span>
+            <div class="flex items-center gap-1">
+              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Ctrl</kbd>
+              <span class="text-slate-500 text-[10px]">+</span>
+              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">X</kbd>
+            </div>
           </div>
-          <div class="flex items-center justify-between p-2 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <span class="text-slate-400">Select All</span>
-            <kbd class="px-1.5 py-0.5 rounded bg-slate-800 font-mono text-[10px] text-indigo-300">Ctrl+A</kbd>
+          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
+            <span class="text-slate-300 font-medium">Delete</span>
+            <div class="flex items-center gap-1">
+              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-rose-300 font-semibold shadow-xs">Del</kbd>
+              <span class="text-slate-500 text-[10px]">/</span>
+              <kbd class="px-1.5 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-rose-300 font-semibold shadow-xs">⌫</kbd>
+            </div>
           </div>
-          <div class="flex items-center justify-between p-2 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <span class="text-slate-400">Zoom Canvas</span>
-            <kbd class="px-1.5 py-0.5 rounded bg-slate-800 font-mono text-[10px] text-indigo-300">Ctrl+Wheel</kbd>
+          <!-- Undo -->
+          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
+            <span class="text-slate-300 font-medium">Undo</span>
+            <div class="flex items-center gap-1">
+              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Ctrl</kbd>
+              <span class="text-slate-500 text-[10px]">+</span>
+              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Z</kbd>
+            </div>
           </div>
-          <div class="flex items-center justify-between p-2 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <span class="text-slate-400">Pan Canvas</span>
-            <kbd class="px-1.5 py-0.5 rounded bg-slate-800 font-mono text-[10px] text-indigo-300">Alt+Wheel / Mid</kbd>
+          <!-- Select All -->
+          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
+            <span class="text-slate-300 font-medium">Select All</span>
+            <div class="flex items-center gap-1">
+              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Ctrl</kbd>
+              <span class="text-slate-500 text-[10px]">+</span>
+              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">A</kbd>
+            </div>
           </div>
-          <div class="col-span-2 p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80 text-[11px] text-slate-300">
-            💡 <span class="font-semibold text-indigo-300">Group Isolation Mode:</span> Double-click any group to edit items individually. Press <kbd class="px-1.5 py-0.5 bg-slate-800 rounded font-mono text-[10px]">ESC</kbd> or click Exit Isolation to return.
+          <!-- Zoom -->
+          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
+            <span class="text-slate-300 font-medium">Zoom Canvas</span>
+            <div class="flex items-center gap-1">
+              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Ctrl</kbd>
+              <span class="text-slate-500 text-[10px]">+</span>
+              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Wheel</kbd>
+            </div>
+          </div>
+          <!-- Pan -->
+          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
+            <span class="text-slate-300 font-medium">Pan Canvas</span>
+            <div class="flex items-center gap-1">
+              <kbd class="px-1.5 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Alt+Wheel</kbd>
+              <span class="text-slate-500 text-[10px]">/</span>
+              <kbd class="px-1.5 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Mid Drag</kbd>
+            </div>
+          </div>
+          <div class="col-span-1 sm:col-span-2 p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80 text-[11px] text-slate-300 flex items-center gap-2">
+            <span class="text-indigo-400 font-bold shrink-0">💡 Note:</span>
+            <span><strong class="text-indigo-300">Group Isolation:</strong> Double-click any group to edit individual elements. Press <kbd class="px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded-md font-mono text-[10px] text-slate-200">ESC</kbd> or click "Exit Isolation" to return.</span>
           </div>
         </div>
       </div>

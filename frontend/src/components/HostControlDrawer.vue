@@ -30,12 +30,15 @@ import {
   Cpu,
   Globe,
   Check,
-  Loader2
+  Loader2,
+  Edit3,
+  Sparkles
 } from 'lucide-vue-next';
 
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import { getStoredTripoApiKey, setStoredTripoApiKey } from '../services/tripo';
 import { getStoredMeshyApiKey, setStoredMeshyApiKey } from '../services/meshy';
+import { ROOM_EMOJI_LIST } from '../constants/roomEmojis';
 
 const props = defineProps<{
   isOpen: boolean;
@@ -54,6 +57,57 @@ const showLeaveModal = ref(false);
 const showEndAllModal = ref(false);
 const showAnonWarningModal = ref(false);
 const pendingAction = ref<'leave' | 'end'>('leave');
+
+// Room Details (Name & Emoji Avatar)
+const editRoomName = ref(roomStore.currentRoom?.roomName || '');
+const editRoomEmoji = ref(roomStore.currentRoom?.roomEmoji || '💡');
+const isEmojiPickerOpen = ref(false);
+const emojiSearchQuery = ref('');
+const selectedEmojiCategory = ref<string>('all');
+const isSavingRoomInfo = ref(false);
+const roomInfoSavedMsg = ref('');
+
+// Sync inputs when drawer opens or currentRoom updates
+watch(
+  [() => props.isOpen, () => roomStore.currentRoom?.roomName, () => roomStore.currentRoom?.roomEmoji],
+  ([isOpen]) => {
+    if (isOpen && roomStore.currentRoom) {
+      editRoomName.value = roomStore.currentRoom.roomName || '';
+      editRoomEmoji.value = roomStore.currentRoom.roomEmoji || '💡';
+    }
+  },
+  { immediate: true }
+);
+
+const filteredRoomEmojis = computed(() => {
+  const q = emojiSearchQuery.value.trim().toLowerCase();
+  return ROOM_EMOJI_LIST.filter(item => {
+    const matchCat = selectedEmojiCategory.value === 'all' || item.cat === selectedEmojiCategory.value;
+    const matchQuery = !q || item.name.toLowerCase().includes(q) || item.emoji.includes(q);
+    return matchCat && matchQuery;
+  });
+});
+
+const selectRoomEmoji = (emoji: string) => {
+  editRoomEmoji.value = emoji;
+  isEmojiPickerOpen.value = false;
+};
+
+const handleSaveRoomInfo = async () => {
+  if (!roomStore.currentRoom || isSavingRoomInfo.value) return;
+  isSavingRoomInfo.value = true;
+  try {
+    await roomStore.updateRoomInfo(editRoomName.value, editRoomEmoji.value);
+    roomInfoSavedMsg.value = 'Room details updated!';
+    setTimeout(() => {
+      roomInfoSavedMsg.value = '';
+    }, 2500);
+  } catch (err) {
+    console.error('Failed to save room info:', err);
+  } finally {
+    isSavingRoomInfo.value = false;
+  }
+};
 
 // 3D AI Engine settings (stored in localStorage)
 const selected3DEngine = ref<'meshy' | 'tripo' | 'threejs'>(
@@ -252,7 +306,7 @@ const sensitivities: { id: SensitivityLevel; name: string; desc: string }[] = [
       <div class="flex items-center justify-between p-4 border-b border-slate-800 bg-slate-950/80">
         <div class="flex items-center gap-2">
           <Sliders class="w-5 h-5 text-sky-400" />
-          <h3 class="font-bold text-slate-100">Host Controls</h3>
+          <h3 class="font-bold text-slate-100">Room Settings</h3>
         </div>
         <button
           @click="emit('close')"
@@ -285,6 +339,186 @@ const sensitivities: { id: SensitivityLevel; name: string; desc: string }[] = [
             <LogIn class="w-3.5 h-3.5" /> Sign in
           </button>
         </div>
+
+        <!-- Room Profile & Appearance (Name & Avatar/Emoji) -->
+        <section class="p-4 rounded-2xl bg-slate-950/70 border border-slate-800 space-y-3.5 shadow-lg">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <Sparkles class="w-4 h-4 text-sky-400" />
+              <h4 class="font-semibold text-sm text-slate-100">Room Details</h4>
+            </div>
+            <span
+              v-if="roomStore.isHost"
+              class="text-[10px] font-medium px-2 py-0.5 rounded-full bg-sky-500/20 text-sky-300 border border-sky-500/30 flex items-center gap-1"
+            >
+              👑 Host Edit
+            </span>
+            <span
+              v-else
+              class="text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700"
+            >
+              Host Only
+            </span>
+          </div>
+
+          <div class="flex items-center gap-3">
+            <!-- Room Emoji / Avatar Button -->
+            <div class="relative shrink-0">
+              <button
+                type="button"
+                @click="roomStore.isHost ? (isEmojiPickerOpen = !isEmojiPickerOpen) : null"
+                :disabled="!roomStore.isHost"
+                class="w-13 h-13 rounded-2xl bg-slate-900 border-2 transition-all flex items-center justify-center text-2xl sm:text-3xl shadow-inner group relative"
+                :class="roomStore.isHost ? 'border-slate-700 hover:border-sky-400 cursor-pointer hover:scale-105 active:scale-95' : 'border-slate-800 cursor-default opacity-90'"
+                :title="roomStore.isHost ? 'Click to change room avatar emoji' : 'Room avatar'"
+              >
+                <span>{{ editRoomEmoji || '💡' }}</span>
+                <span
+                  v-if="roomStore.isHost"
+                  class="absolute -bottom-1 -right-1 p-1 bg-sky-600 group-hover:bg-sky-500 text-white rounded-full shadow-md transition"
+                  title="Change emoji"
+                >
+                  <Edit3 class="w-2.5 h-2.5" />
+                </span>
+              </button>
+            </div>
+
+            <!-- Room Name Input & Save -->
+            <div class="flex-1 space-y-1 min-w-0">
+              <label class="text-[11px] font-medium text-slate-400 block truncate">
+                Room Name
+              </label>
+              <div class="flex items-center gap-1.5">
+                <input
+                  v-model="editRoomName"
+                  :disabled="!roomStore.isHost"
+                  @keydown.enter.prevent="handleSaveRoomInfo"
+                  type="text"
+                  placeholder="e.g. Design Sync, Sprint 4..."
+                  maxlength="50"
+                  class="flex-1 bg-slate-900 border border-slate-700 disabled:opacity-60 disabled:cursor-not-allowed rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 transition min-w-0"
+                />
+                <button
+                  v-if="roomStore.isHost"
+                  type="button"
+                  @click="handleSaveRoomInfo"
+                  :disabled="isSavingRoomInfo || (!editRoomName.trim() && !editRoomEmoji)"
+                  class="px-3 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-semibold shrink-0 transition flex items-center gap-1 cursor-pointer shadow"
+                >
+                  <Loader2 v-if="isSavingRoomInfo" class="w-3.5 h-3.5 animate-spin" />
+                  <Check v-else-if="roomInfoSavedMsg" class="w-3.5 h-3.5 text-emerald-300" />
+                  <span>{{ roomInfoSavedMsg ? 'Saved' : 'Save' }}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Inline Searchable Room Emoji Picker -->
+          <div
+            v-if="isEmojiPickerOpen && roomStore.isHost"
+            class="p-3 bg-slate-900/95 border border-sky-500/40 rounded-2xl space-y-2.5 animate-in fade-in zoom-in-95 shadow-xl"
+          >
+            <div class="flex items-center justify-between pb-1 border-b border-slate-800">
+              <span class="text-xs font-semibold text-sky-300 flex items-center gap-1.5">
+                <span>Select Room Avatar</span>
+              </span>
+              <button
+                type="button"
+                @click="isEmojiPickerOpen = false"
+                class="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition"
+              >
+                <X class="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <!-- Search input -->
+            <div class="relative">
+              <Search class="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <input
+                v-model="emojiSearchQuery"
+                type="text"
+                placeholder="Search emojis (e.g. rocket, coffee, cat, tools)..."
+                class="w-full bg-slate-950 border border-slate-700 rounded-xl pl-8 pr-7 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500"
+              />
+              <button
+                v-if="emojiSearchQuery"
+                type="button"
+                @click="emojiSearchQuery = ''"
+                class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-0.5"
+              >
+                <X class="w-3 h-3" />
+              </button>
+            </div>
+
+            <!-- Categories -->
+            <div class="flex items-center gap-1 overflow-x-auto pb-1 text-[11px] custom-scrollbar">
+              <button
+                type="button"
+                @click="selectedEmojiCategory = 'all'"
+                class="px-2 py-0.5 rounded-lg shrink-0 transition"
+                :class="selectedEmojiCategory === 'all' ? 'bg-sky-600 text-white font-medium' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'"
+              >All</button>
+              <button
+                type="button"
+                @click="selectedEmojiCategory = 'tools'"
+                class="px-2 py-0.5 rounded-lg shrink-0 transition"
+                :class="selectedEmojiCategory === 'tools' ? 'bg-sky-600 text-white font-medium' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'"
+              >🛠️ Tools</button>
+              <button
+                type="button"
+                @click="selectedEmojiCategory = 'food'"
+                class="px-2 py-0.5 rounded-lg shrink-0 transition"
+                :class="selectedEmojiCategory === 'food' ? 'bg-sky-600 text-white font-medium' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'"
+              >🍕 Food</button>
+              <button
+                type="button"
+                @click="selectedEmojiCategory = 'transport'"
+                class="px-2 py-0.5 rounded-lg shrink-0 transition"
+                :class="selectedEmojiCategory === 'transport' ? 'bg-sky-600 text-white font-medium' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'"
+              >🚀 Transport</button>
+              <button
+                type="button"
+                @click="selectedEmojiCategory = 'characters'"
+                class="px-2 py-0.5 rounded-lg shrink-0 transition"
+                :class="selectedEmojiCategory === 'characters' ? 'bg-sky-600 text-white font-medium' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'"
+              >🧑‍🚀 People</button>
+              <button
+                type="button"
+                @click="selectedEmojiCategory = 'nature'"
+                class="px-2 py-0.5 rounded-lg shrink-0 transition"
+                :class="selectedEmojiCategory === 'nature' ? 'bg-sky-600 text-white font-medium' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'"
+              >🌿 Nature</button>
+              <button
+                type="button"
+                @click="selectedEmojiCategory = 'activities'"
+                class="px-2 py-0.5 rounded-lg shrink-0 transition"
+                :class="selectedEmojiCategory === 'activities' ? 'bg-sky-600 text-white font-medium' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'"
+              >🎯 Activities</button>
+            </div>
+
+            <!-- Emoji Grid -->
+            <div class="grid grid-cols-7 gap-1 max-h-40 overflow-y-auto p-1 bg-slate-950/70 rounded-xl border border-slate-800">
+              <button
+                v-for="item in filteredRoomEmojis"
+                :key="item.emoji"
+                type="button"
+                @click="selectRoomEmoji(item.emoji)"
+                class="h-8 w-8 rounded-lg hover:bg-slate-800 flex items-center justify-center text-base hover:scale-125 transition cursor-pointer"
+                :class="editRoomEmoji === item.emoji ? 'bg-sky-600/40 ring-1 ring-sky-500 scale-110' : ''"
+                :title="item.name"
+              >
+                {{ item.emoji }}
+              </button>
+              <div v-if="filteredRoomEmojis.length === 0" class="col-span-7 py-3 text-center text-xs text-slate-500">
+                No matching emojis found
+              </div>
+            </div>
+          </div>
+
+          <p v-if="roomInfoSavedMsg" class="text-[11px] text-emerald-400 flex items-center gap-1.5 animate-in fade-in">
+            <Check class="w-3.5 h-3.5" /> {{ roomInfoSavedMsg }}
+          </p>
+        </section>
 
         <!-- 1. Waiting Room Approval List -->
         <section>

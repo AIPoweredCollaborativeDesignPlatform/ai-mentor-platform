@@ -1533,6 +1533,55 @@ export const useRoomStore = defineStore('room', () => {
     }
   };
 
+  const updateRoomInfo = async (name: string, emoji: string) => {
+    if (!currentRoom.value) return;
+    const cleanName = name.trim() || 'Meeting';
+    const cleanEmoji = emoji.trim() || '💡';
+
+    const oldName = currentRoom.value.roomName;
+    const oldEmoji = currentRoom.value.roomEmoji;
+
+    currentRoom.value.roomName = cleanName;
+    currentRoom.value.roomEmoji = cleanEmoji;
+
+    if (db && currentRoom.value.roomId) {
+      try {
+        await updateDoc(doc(db, 'rooms', currentRoom.value.roomId), {
+          roomName: cleanName,
+          roomEmoji: cleanEmoji,
+          updatedAt: Date.now()
+        });
+
+        // Also update user's own room history if authenticated
+        if (authStore.uid) {
+          setDoc(
+            doc(db, 'users', authStore.uid, 'rooms', currentRoom.value.roomId),
+            {
+              roomName: cleanName,
+              roomEmoji: cleanEmoji,
+              updatedAt: Date.now()
+            },
+            { merge: true }
+          ).catch(() => {});
+        }
+
+        // Post a subtle system message if name or emoji changed
+        if (oldName !== cleanName || oldEmoji !== cleanEmoji) {
+          await sendCustomMessage({
+            senderUid: 'system',
+            senderName: 'System',
+            content: `Room details updated to ${cleanEmoji} ${cleanName}`
+          }).catch(() => {});
+        }
+      } catch (err) {
+        console.error('Failed to update room info in Firestore:', err);
+      }
+    } else {
+      // Local fallback
+      saveToStorage(currentRoom.value);
+    }
+  };
+
   const retryAiMentorMessage = async (messageId: string) => {
     if (!currentRoom.value || isAnalyzing.value) return;
     const targetMsg = currentRoom.value.messages.find(m => m.id === messageId);
@@ -1616,6 +1665,7 @@ export const useRoomStore = defineStore('room', () => {
     syncWhiteboardState,
     endWhiteboardSession,
     recordWhiteboardSnapshotMemory,
-    retryAiMentorMessage
+    retryAiMentorMessage,
+    updateRoomInfo
   };
 });

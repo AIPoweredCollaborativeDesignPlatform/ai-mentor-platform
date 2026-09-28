@@ -51,6 +51,47 @@ const isWhiteboardOpen = ref(false);
 const whiteboardRef = ref<any>(null);
 const activeWhiteboardAssetId = ref<string | null>(null);
 const currentWhiteboardJson = ref<string | undefined>(undefined);
+const whiteboardWidth = ref<number | null>(null);
+const isResizingWhiteboard = ref(false);
+
+watch(isWhiteboardOpen, (isOpen) => {
+  if (isOpen) {
+    if (whiteboardWidth.value === null || whiteboardWidth.value > window.innerWidth - 320) {
+      whiteboardWidth.value = Math.max(500, window.innerWidth - 360);
+    }
+  }
+});
+
+const startWhiteboardResize = (e: MouseEvent) => {
+  e.preventDefault();
+  isResizingWhiteboard.value = true;
+  document.body.style.cursor = 'col-resize';
+  document.body.style.userSelect = 'none';
+
+  const onMouseMove = (moveEvent: MouseEvent) => {
+    const remainingFromRight = window.innerWidth - moveEvent.clientX;
+    // Dragged all the way to the right edge (< 120px) -> Close Whiteboard through confirmation/pip handler
+    if (remainingFromRight < 120) {
+      stopResize();
+      whiteboardRef.value?.handleCloseRequest();
+      return;
+    }
+    const maxWhiteboardW = window.innerWidth - 320;
+    const clampedW = Math.max(300, Math.min(maxWhiteboardW, remainingFromRight));
+    whiteboardWidth.value = clampedW;
+  };
+
+  const stopResize = () => {
+    isResizingWhiteboard.value = false;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    window.removeEventListener('mousemove', onMouseMove);
+    window.removeEventListener('mouseup', stopResize);
+  };
+
+  window.addEventListener('mousemove', onMouseMove);
+  window.addEventListener('mouseup', stopResize);
+};
 
 // Only close whiteboard if a broadcast transition from active to stopped occurred
 watch(() => roomStore.currentRoom?.whiteboardActive, (isActive, wasActive) => {
@@ -745,11 +786,16 @@ onUnmounted(() => {
         </router-link>
 
         <div class="min-w-0">
-          <div class="flex items-center gap-1.5">
-            <span class="text-base sm:text-lg select-none shrink-0">{{ roomStore.currentRoom?.roomEmoji || '💡' }}</span>
-            <h1 class="font-bold text-xs sm:text-base text-white truncate max-w-[110px] xs:max-w-[160px] sm:max-w-xs">
+          <div
+            class="flex items-center gap-1.5 cursor-pointer group"
+            @click="isDrawerOpen = true"
+            :title="roomStore.isHost ? 'Click to edit room name & avatar in Settings' : 'Room settings'"
+          >
+            <span class="text-base sm:text-lg select-none shrink-0 group-hover:scale-110 transition-transform">{{ roomStore.currentRoom?.roomEmoji || '💡' }}</span>
+            <h1 class="font-bold text-xs sm:text-base text-white truncate max-w-[110px] xs:max-w-[160px] sm:max-w-xs group-hover:text-sky-300 transition-colors">
               {{ roomStore.currentRoom?.roomName || 'Meeting' }}
             </h1>
+            <Edit3 v-if="roomStore.isHost" class="w-3 h-3 text-slate-500 group-hover:text-sky-400 hidden sm:inline transition-colors shrink-0" />
             <span class="font-mono text-[10px] sm:text-[11px] px-1.5 sm:px-2 py-0.5 rounded-full bg-slate-800 border border-slate-700 text-sky-400 shrink-0">
               {{ pin }}
             </span>
@@ -874,9 +920,12 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div class="flex-1 flex overflow-hidden w-full relative">
-      <div class="flex flex-col h-full transition-all duration-300 w-full"
-           :class="isWhiteboardOpen ? 'lg:w-[35%] lg:min-w-[400px] border-r border-slate-800' : 'flex-1'">
+    <div class="flex-1 flex overflow-hidden w-full relative" :class="{ 'select-none': isResizingWhiteboard }">
+      <!-- Fullscreen drag overlay to prevent canvas mouse capture while resizing -->
+      <div v-if="isResizingWhiteboard" class="fixed inset-0 z-50 cursor-col-resize pointer-events-auto"></div>
+
+      <div class="flex flex-col h-full transition-all duration-75 w-full min-w-0"
+           :class="isWhiteboardOpen ? 'flex-1 min-w-[320px]' : 'flex-1'">
       <!-- Chat Stream Area with 3-second fading scrollbar -->
       <main
         ref="chatContainerRef"
@@ -1351,8 +1400,22 @@ onUnmounted(() => {
     </footer>
       </div>
 
+      <!-- Resizer Handle Divider between Chat and Whiteboard -->
+      <div
+        v-if="isWhiteboardOpen"
+        class="hidden lg:flex w-2.5 hover:w-3 bg-slate-900 hover:bg-indigo-500/80 active:bg-indigo-600 transition-all cursor-col-resize shrink-0 z-30 items-center justify-center select-none group border-x border-slate-800"
+        @mousedown="startWhiteboardResize"
+        title="Drag to resize whiteboard (drag to right edge to close)"
+      >
+        <div class="h-8 w-1 rounded-full bg-slate-600 group-hover:bg-white transition-colors"></div>
+      </div>
+
       <!-- Collaborative Whiteboard Column -->
-      <div v-if="isWhiteboardOpen" class="flex-1 h-full relative overflow-hidden bg-slate-900 shrink-0 min-w-[320px]">
+      <div
+        v-if="isWhiteboardOpen"
+        class="h-full relative overflow-hidden bg-slate-900 shrink-0 w-full lg:w-auto"
+        :style="whiteboardWidth ? { width: `${whiteboardWidth}px` } : { width: '68%' }"
+      >
         <CollaborativeWhiteboard
           ref="whiteboardRef"
           :initialJson="currentWhiteboardJson"

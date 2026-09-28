@@ -4,7 +4,7 @@ import { useRoomStore } from '../stores/room';
 import { useAuthStore } from '../stores/auth';
 import * as fabric from 'fabric';
 import {
-  X, Pencil, Image as ImageIcon, Undo2, Trash2, Maximize, Minimize, Check, Loader2, Sparkles, Send, Radio, Settings2, MousePointer2, Type, Square, Circle, Triangle, Minus, Group, Ungroup, BringToFront, SendToBack, MoveUp, MoveDown, Copy, Scissors, ClipboardPaste, AlertTriangle, AlertCircle, RefreshCw, ChevronDown, ChevronUp, StickyNote, MoreHorizontal, Lock, Unlock, HelpCircle
+  X, Pencil, Image as ImageIcon, Undo2, Trash2, Maximize, Minimize, Check, Loader2, Sparkles, Send, Radio, Settings2, MousePointer2, Type, Square, Circle, Triangle, Minus, ArrowUpRight, Group, Ungroup, BringToFront, SendToBack, MoveUp, MoveDown, Copy, Scissors, ClipboardPaste, AlertTriangle, AlertCircle, RefreshCw, ChevronDown, ChevronUp, StickyNote, MoreHorizontal, Lock, Unlock, HelpCircle
 } from 'lucide-vue-next';
 import { generateSvgForWhiteboard } from '../services/ai';
 
@@ -300,18 +300,166 @@ let isDragging = false;
 let lastPosX = 0;
 let lastPosY = 0;
 
-// Procreate-style QuickShape (Pencil Hold-to-Straighten / Smooth with Catmull-Rom Bezier Spline)
+// Procreate-style QuickShape (Pencil Hold-to-Straighten / Multi-Shape Recognition & Resizing)
 let pencilHoldTimer: any = null;
 let pencilStrokePoints: Array<{ x: number; y: number }> = [];
 let isPencilHolding = false;
 let pendingQuickShape: any = null;
 let lastPencilMovePos: { x: number; y: number } | null = null;
 
+// QuickShape continuous resize state
+let isQuickShapeResizing = false;
+let quickShapeActiveObj: any = null;
+let quickShapeAnchor = { x: 0, y: 0 };
+let quickShapeArrowP0: { x: number; y: number } | null = null;
+let quickShapeInitialDist = 1;
+
+// Ramer-Douglas-Peucker (RDP) polygonal simplification
+const rdp = (points: Array<{ x: number; y: number }>, epsilon: number): Array<{ x: number; y: number }> => {
+  if (points.length <= 2) return points;
+  let dmax = 0;
+  let index = 0;
+  const p1 = points[0];
+  const p2 = points[points.length - 1];
+  const lineLen = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+  for (let i = 1; i < points.length - 1; i++) {
+    const d = lineLen === 0 ? Math.hypot(points[i].x - p1.x, points[i].y - p1.y) :
+      Math.abs((p2.y - p1.y) * points[i].x - (p2.x - p1.x) * points[i].y + p2.x * p1.y - p2.y * p1.x) / lineLen;
+    if (d > dmax) { index = i; dmax = d; }
+  }
+  if (dmax > epsilon) {
+    const rec1 = rdp(points.slice(0, index + 1), epsilon);
+    const rec2 = rdp(points.slice(index), epsilon);
+    return rec1.slice(0, -1).concat(rec2);
+  } else {
+    return [p1, p2];
+  }
+};
+
+// Generates an Arrow object with shaft and arrowhead oriented precisely with end tangent
+const createArrowFromPoints = (pts: Array<{ x: number; y: number }>) => {
+  if (pts.length < 2) return null;
+  const p0 = pts[0];
+  const pn = pts[pts.length - 1];
+  const lineLen = Math.hypot(pn.x - p0.x, pn.y - p0.y);
+  if (lineLen < 6) return null;
+
+  // 1. Straight line check: perpendicular deviation from chord p0 -> pn
+  let maxDev = 0;
+  for (const pt of pts) {
+    const dist = Math.abs((pn.y - p0.y) * pt.x - (pn.x - p0.x) * pt.y + pn.x * p0.y - pn.y * p0.x) / lineLen;
+    if (dist > maxDev) maxDev = dist;
+  }
+
+  let shaft: any;
+  let tangentAngle = Math.atan2(pn.y - p0.y, pn.x - p0.x);
+
+  if (maxDev < Math.max(16, lineLen * 0.12) || pts.length <= 4) {
+    shaft = new fabric.Line([p0.x, p0.y, pn.x, pn.y], {
+      stroke: activeColor.value,
+      strokeWidth: strokeWidth.value,
+      strokeLineCap: 'round',
+      perPixelTargetFind: true
+    });
+  } else {
+    // Curved arrow: smoothed via Catmull-Rom Bezier Spline
+    const sampled: Array<{ x: number; y: number }> = [pts[0]];
+    let accumDist = 0;
+    const targetStep = Math.max(16, lineLen / 12);
+    for (let i = 1; i < pts.length; i++) {
+      const d = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+      accumDist += d;
+      if (accumDist >= targetStep) {
+        sampled.push(pts[i]);
+        accumDist = 0;
+      }
+    }
+    if (sampled[sampled.length - 1] !== pn) {
+      sampled.push(pn);
+    }
+
+    if (sampled.length < 3) {
+      shaft = new fabric.Line([p0.x, p0.y, pn.x, pn.y], {
+        stroke: activeColor.value,
+        strokeWidth: strokeWidth.value,
+        strokeLineCap: 'round',
+        perPixelTargetFind: true
+      });
+    } else {
+      let pathD = `M ${sampled[0].x.toFixed(1)} ${sampled[0].y.toFixed(1)}`;
+      const m = sampled.length - 1;
+      for (let i = 0; i < m; i++) {
+        const pPrev = sampled[Math.max(0, i - 1)];
+        const pCur = sampled[i];
+        const pNext = sampled[i + 1];
+        const pAfter = sampled[Math.min(m, i + 2)];
+
+        const cp1x = pCur.x + (pNext.x - pPrev.x) / 6;
+        const cp1y = pCur.y + (pNext.y - pPrev.y) / 6;
+        const cp2x = pNext.x - (pAfter.x - pCur.x) / 6;
+        const cp2y = pNext.y - (pAfter.y - pCur.y) / 6;
+
+        pathD += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${pNext.x.toFixed(1)} ${pNext.y.toFixed(1)}`;
+      }
+
+      shaft = new fabric.Path(pathD, {
+        stroke: activeColor.value,
+        strokeWidth: strokeWidth.value,
+        fill: 'transparent',
+        strokeLineCap: 'round',
+        strokeLineJoin: 'round',
+        perPixelTargetFind: true
+      });
+
+      const pPrev = sampled[sampled.length - 2];
+      tangentAngle = Math.atan2(pn.y - pPrev.y, pn.x - pPrev.x);
+    }
+  }
+
+  // 2. Arrowhead triangle oriented along tangentAngle
+  const headLen = Math.max(14, strokeWidth.value * 3.6);
+  const headAngle = Math.PI / 6; // 30 degrees
+  const w1x = pn.x - headLen * Math.cos(tangentAngle - headAngle);
+  const w1y = pn.y - headLen * Math.sin(tangentAngle - headAngle);
+  const w2x = pn.x - headLen * Math.cos(tangentAngle + headAngle);
+  const w2y = pn.y - headLen * Math.sin(tangentAngle + headAngle);
+
+  const head = new fabric.Polygon(
+    [
+      { x: pn.x, y: pn.y },
+      { x: w1x, y: w1y },
+      { x: w2x, y: w2y }
+    ],
+    {
+      fill: activeColor.value,
+      stroke: activeColor.value,
+      strokeWidth: 1,
+      strokeLineJoin: 'round',
+      perPixelTargetFind: true
+    }
+  );
+
+  const arrow = new fabric.Group([shaft, head], {
+    selectable: true,
+    evented: true,
+    perPixelTargetFind: true
+  });
+  (arrow as any).isArrow = true;
+  (arrow as any).arrowP0 = { x: p0.x, y: p0.y };
+  displayToast('Arrow created ✨');
+  return arrow;
+};
+
 const createSmoothedShape = (pts: Array<{ x: number; y: number }>) => {
   if (pts.length < 2) return null;
   const p0 = pts[0];
   const pn = pts[pts.length - 1];
   const endDist = Math.hypot(pn.x - p0.x, pn.y - p0.y);
+  const lineLen = Math.hypot(pn.x - p0.x, pn.y - p0.y);
+
+  if (currentTool.value === 'arrow') {
+    return createArrowFromPoints(pts);
+  }
 
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (const pt of pts) {
@@ -323,30 +471,128 @@ const createSmoothedShape = (pts: Array<{ x: number; y: number }>) => {
   const w = maxX - minX;
   const h = maxY - minY;
   const maxDim = Math.max(w, h);
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
 
-  // 1. Closed loop check (Circle / Ellipse)
-  if (endDist < Math.max(40, maxDim * 0.28) && pts.length >= 8 && maxDim > 25) {
+  const isClosed = endDist < Math.max(45, maxDim * 0.32) && pts.length >= 8 && maxDim > 25;
+
+  if (isClosed) {
+    // 1. Strict Circle / Ellipse check: normalized radial mean deviation
     const rx = Math.max(10, w / 2);
     const ry = Math.max(10, h / 2);
-    const cx = (minX + maxX) / 2;
-    const cy = (minY + maxY) / 2;
-    displayToast('Snapped to Circle / Ellipse ✨');
-    return new fabric.Ellipse({
-      left: cx,
-      top: cy,
-      rx,
-      ry,
-      originX: 'center',
-      originY: 'center',
-      stroke: activeColor.value,
-      strokeWidth: strokeWidth.value,
-      fill: 'transparent',
-      perPixelTargetFind: true
-    });
+    let sumDev = 0;
+    for (const pt of pts) {
+      const d = Math.hypot((pt.x - cx) / rx, (pt.y - cy) / ry);
+      sumDev += Math.abs(d - 1.0);
+    }
+    const radialMeanDev = sumDev / pts.length;
+
+    // Only classify as ellipse/circle if deviation from smooth oval is genuinely low (< 0.085)
+    if (radialMeanDev < 0.085) {
+      displayToast('Snapped to Circle / Ellipse ✨');
+      return new fabric.Ellipse({
+        left: cx,
+        top: cy,
+        rx,
+        ry,
+        originX: 'center',
+        originY: 'center',
+        stroke: activeColor.value,
+        strokeWidth: strokeWidth.value,
+        fill: 'transparent',
+        perPixelTargetFind: true
+      });
+    }
+
+    // 2. Polygonal simplification for Triangle, Rectangle, Star
+    const epsilon = Math.max(10, maxDim * 0.07);
+    const simplified = rdp(pts, epsilon);
+    const corners = [...simplified];
+    if (corners.length > 1 && Math.hypot(corners[corners.length - 1].x - corners[0].x, corners[corners.length - 1].y - corners[0].y) < epsilon * 1.5) {
+      corners.pop();
+    }
+    const numCorners = corners.length;
+
+    // Triangle
+    if (numCorners === 3) {
+      displayToast('Snapped to Triangle ✨');
+      return new fabric.Triangle({
+        left: minX,
+        top: minY,
+        width: Math.max(10, w),
+        height: Math.max(10, h),
+        originX: 'left',
+        originY: 'top',
+        stroke: activeColor.value,
+        strokeWidth: strokeWidth.value,
+        fill: 'transparent',
+        perPixelTargetFind: true
+      });
+    }
+
+    // Rectangle
+    if (numCorners === 4) {
+      displayToast('Snapped to Rectangle ✨');
+      return new fabric.Rect({
+        left: minX,
+        top: minY,
+        width: Math.max(10, w),
+        height: Math.max(10, h),
+        originX: 'left',
+        originY: 'top',
+        stroke: activeColor.value,
+        strokeWidth: strokeWidth.value,
+        fill: 'transparent',
+        perPixelTargetFind: true
+      });
+    }
+
+    // Five-pointed Star (pentagram with 5 vertices, or outline star with 10 alternating vertices)
+    if (numCorners === 5 || numCorners === 6 || numCorners === 10 || numCorners === 9 || numCorners === 11) {
+      displayToast('Snapped to 5-Point Star ✨');
+      const starPoints: Array<{ x: number; y: number }> = [];
+      const R = Math.max(15, maxDim / 2);
+      const r = R * 0.4;
+      for (let i = 0; i < 10; i++) {
+        const angle = -Math.PI / 2 + (i * Math.PI) / 5;
+        const rad = i % 2 === 0 ? R : r;
+        starPoints.push({
+          x: cx + rad * Math.cos(angle),
+          y: cy + rad * Math.sin(angle)
+        });
+      }
+      return new fabric.Polygon(starPoints, {
+        stroke: activeColor.value,
+        strokeWidth: strokeWidth.value,
+        fill: 'transparent',
+        strokeLineJoin: 'round',
+        originX: 'center',
+        originY: 'center',
+        left: cx,
+        top: cy,
+        perPixelTargetFind: true
+      });
+    }
+
+    // Fallback if somewhat round
+    if (radialMeanDev < 0.15) {
+      displayToast('Snapped to Circle / Ellipse ✨');
+      return new fabric.Ellipse({
+        left: cx,
+        top: cy,
+        rx,
+        ry,
+        originX: 'center',
+        originY: 'center',
+        stroke: activeColor.value,
+        strokeWidth: strokeWidth.value,
+        fill: 'transparent',
+        perPixelTargetFind: true
+      });
+    }
   }
 
-  // 2. Straight line check: perpendicular deviation from chord p0 -> pn
-  const lineLen = Math.hypot(pn.x - p0.x, pn.y - p0.y);
+  // 3. Open stroke: Straight line check
   let maxDev = 0;
   if (lineLen > 1) {
     for (const pt of pts) {
@@ -365,7 +611,7 @@ const createSmoothedShape = (pts: Array<{ x: number; y: number }>) => {
     });
   }
 
-  // 3. User drew a curve! Smooth hand-drawn points using Catmull-Rom cubic Bezier spline
+  // 4. Open stroke: Catmull-Rom cubic Bezier spline
   displayToast('Smoothed curve ✨');
 
   const sampled: Array<{ x: number; y: number }> = [pts[0]];
@@ -434,9 +680,23 @@ const onPencilHoldDetected = () => {
   canvas.add(shape);
   canvas.setActiveObject(shape);
   canvas.requestRenderAll();
-  saveHistoryState();
-  syncToFirebase();
   updateSelectionState();
+
+  // Enter continuous resize mode while left button continues to be held
+  isQuickShapeResizing = true;
+  quickShapeActiveObj = shape;
+  const p0 = pencilStrokePoints[0];
+  const pn = pencilStrokePoints[pencilStrokePoints.length - 1];
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const pt of pencilStrokePoints) {
+    if (pt.x < minX) minX = pt.x;
+    if (pt.x > maxX) maxX = pt.x;
+    if (pt.y < minY) minY = pt.y;
+    if (pt.y > maxY) maxY = pt.y;
+  }
+  quickShapeAnchor = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+  quickShapeArrowP0 = { x: p0.x, y: p0.y };
+  quickShapeInitialDist = Math.max(10, Math.hypot(pn.x - quickShapeAnchor.x, pn.y - quickShapeAnchor.y));
   pendingQuickShape = null;
 };
 
@@ -622,14 +882,11 @@ const initFabric = () => {
 
   // Sync and history on changes
   canvas.on('path:created', (e: any) => {
-    if (isPencilHolding && pendingQuickShape) {
+    if (isPencilHolding || isQuickShapeResizing || currentTool.value === 'arrow') {
       if (e.path) canvas?.remove(e.path);
-      canvas?.add(pendingQuickShape);
-      canvas?.setActiveObject(pendingQuickShape);
-      canvas?.requestRenderAll();
-      pendingQuickShape = null;
-      isPencilHolding = false;
-    } else if (e.path) {
+      return;
+    }
+    if (e.path) {
       e.path.set({ perPixelTargetFind: true });
     }
     if (!isInternalChange) {
@@ -704,6 +961,47 @@ const initFabric = () => {
     }
   });
 
+  // Smart tool switch on mousedown: clicking an existing object or control handle automatically switches to select tool
+  canvas.on('mouse:down:before', (opt: any) => {
+    if (!canvas) return;
+    const e = opt.e as MouseEvent;
+    if (e.button !== 0) return; // left click only
+
+    const found = canvas.findTarget(e);
+    let hitTarget = (found as any)?.target || found || null;
+    const activeObj = canvas.getActiveObject();
+
+    if (!hitTarget && activeObj) {
+      const scenePoint = canvas.getScenePoint(e);
+      if ((activeObj as any).shouldStartTransform?.(e) || (activeObj as any).findControl?.(scenePoint)) {
+        hitTarget = activeObj;
+      }
+    }
+
+    if (hitTarget && hitTarget !== (canvas as any).clipPath) {
+      if (isDrawingMode.value || currentTool.value === 'sticky' || currentTool.value === 'arrow') {
+        toggleMode(false);
+        currentTool.value = 'select';
+        canvas.isDrawingMode = false;
+        isDrawingMode.value = false;
+
+        // Clear any in-progress brush line from contextTop
+        canvas.clearContext(canvas.contextTop);
+        if ((canvas.freeDrawingBrush as any)?._points) {
+          (canvas.freeDrawingBrush as any)._points = [];
+        }
+        if (pencilHoldTimer) {
+          clearTimeout(pencilHoldTimer);
+          pencilHoldTimer = null;
+        }
+
+        canvas.setActiveObject(hitTarget);
+        canvas.requestRenderAll();
+        updateSelectionState();
+      }
+    }
+  });
+
   // Unified Mouse Down
   canvas.on('mouse:down', (opt) => {
     if (!canvas) return;
@@ -757,11 +1055,24 @@ const initFabric = () => {
 
     const scenePoint = canvas.getScenePoint(e);
 
-    // Pencil drawing mode: start tracking for Procreate-style QuickShape hold
+    // Pencil / Arrow drawing mode: smart switch if object was clicked, else start tracking for QuickShape hold
     if (isDrawingMode.value) {
+      const found = canvas.findTarget(e);
+      const hitTarget = (found as any)?.target || found || null;
+      if (hitTarget && hitTarget !== (canvas as any).clipPath) {
+        toggleMode(false);
+        currentTool.value = 'select';
+        canvas.setActiveObject(hitTarget);
+        canvas.requestRenderAll();
+        updateSelectionState();
+        return;
+      }
+
       pencilStrokePoints = [scenePoint];
       lastPencilMovePos = { x: scenePoint.x, y: scenePoint.y };
       isPencilHolding = false;
+      isQuickShapeResizing = false;
+      quickShapeActiveObj = null;
       pendingQuickShape = null;
       if (pencilHoldTimer) clearTimeout(pencilHoldTimer);
       pencilHoldTimer = setTimeout(() => {
@@ -769,8 +1080,18 @@ const initFabric = () => {
       }, 650);
     }
 
-    // Sticky Note tool
+    // Sticky Note tool: smart switch if clicked on existing object, else spawn sticky note on empty space
     if (currentTool.value === 'sticky') {
+      const found = canvas.findTarget(e);
+      const hitTarget = (found as any)?.target || found || null;
+      if (hitTarget && hitTarget !== (canvas as any).clipPath) {
+        toggleMode(false);
+        currentTool.value = 'select';
+        canvas.setActiveObject(hitTarget);
+        canvas.requestRenderAll();
+        updateSelectionState();
+        return;
+      }
       spawnStickyNote(scenePoint.x, scenePoint.y);
       return;
     }
@@ -857,7 +1178,53 @@ const initFabric = () => {
       return;
     }
 
-    // Pencil QuickShape hold detection during move
+    // QuickShape continuous resize mode: width/height follow mouse movement while holding
+    if (isQuickShapeResizing && quickShapeActiveObj) {
+      const curScene = canvas.getScenePoint(e);
+      if (quickShapeActiveObj.isArrow) {
+        const p0 = quickShapeArrowP0 || quickShapeAnchor;
+        const updatedArrow = createArrowFromPoints([p0, curScene]);
+        if (updatedArrow) {
+          canvas.remove(quickShapeActiveObj);
+          quickShapeActiveObj = updatedArrow;
+          (quickShapeActiveObj as any).isArrow = true;
+          canvas.add(quickShapeActiveObj);
+          canvas.setActiveObject(quickShapeActiveObj);
+        }
+      } else if (quickShapeActiveObj.type === 'line') {
+        quickShapeActiveObj.set({ x2: curScene.x, y2: curScene.y });
+        quickShapeActiveObj.setCoords();
+      } else if (quickShapeActiveObj.type === 'ellipse') {
+        const rx = Math.max(5, Math.abs(curScene.x - quickShapeAnchor.x));
+        const ry = Math.max(5, Math.abs(curScene.y - quickShapeAnchor.y));
+        quickShapeActiveObj.set({ rx, ry });
+        quickShapeActiveObj.setCoords();
+      } else if (quickShapeActiveObj.type === 'rect' || quickShapeActiveObj.type === 'triangle') {
+        const halfW = Math.abs(curScene.x - quickShapeAnchor.x);
+        const halfH = Math.abs(curScene.y - quickShapeAnchor.y);
+        const w = Math.max(10, halfW * 2);
+        const h = Math.max(10, halfH * 2);
+        quickShapeActiveObj.set({
+          left: quickShapeAnchor.x - w / 2,
+          top: quickShapeAnchor.y - h / 2,
+          width: w,
+          height: h
+        });
+        quickShapeActiveObj.setCoords();
+      } else {
+        const curDist = Math.max(10, Math.hypot(curScene.x - quickShapeAnchor.x, curScene.y - quickShapeAnchor.y));
+        const scale = curDist / quickShapeInitialDist;
+        quickShapeActiveObj.set({
+          scaleX: Math.max(0.1, scale),
+          scaleY: Math.max(0.1, scale)
+        });
+        quickShapeActiveObj.setCoords();
+      }
+      canvas.requestRenderAll();
+      return;
+    }
+
+    // Normal pencil drawing: track points for hold-to-straighten
     if (isDrawingMode.value && lastPencilMovePos) {
       const scenePoint = canvas.getScenePoint(e);
       pencilStrokePoints.push(scenePoint);
@@ -911,6 +1278,40 @@ const initFabric = () => {
     if (isDragging) {
       isDragging = false;
       canvas.selection = currentTool.value === 'select';
+    }
+
+    // Finish QuickShape continuous resize mode
+    if (isQuickShapeResizing && quickShapeActiveObj) {
+      isQuickShapeResizing = false;
+      isPencilHolding = false;
+      quickShapeActiveObj.setCoords();
+      canvas.setActiveObject(quickShapeActiveObj);
+      canvas.requestRenderAll();
+      saveHistoryState();
+      syncToFirebase();
+      updateSelectionState();
+      quickShapeActiveObj = null;
+      pencilStrokePoints = [];
+      return;
+    }
+
+    // Arrow brush: on release without holding, automatically smooth and generate arrow
+    if (currentTool.value === 'arrow' && pencilStrokePoints.length >= 2) {
+      const arrow = createArrowFromPoints(pencilStrokePoints);
+      if (arrow) {
+        canvas.clearContext(canvas.contextTop);
+        if ((canvas.freeDrawingBrush as any)?._points) {
+          (canvas.freeDrawingBrush as any)._points = [];
+        }
+        canvas.add(arrow);
+        arrow.setCoords();
+        canvas.setActiveObject(arrow);
+        canvas.requestRenderAll();
+        saveHistoryState();
+        syncToFirebase();
+        updateSelectionState();
+      }
+      pencilStrokePoints = [];
     }
 
     if (drawingObject) {
@@ -1682,14 +2083,24 @@ const toggleMode = (drawing: boolean) => {
 
 const addShape = (type: any) => {
   currentTool.value = type;
-  isDrawingMode.value = false;
-  if (canvas) {
-    canvas.isDrawingMode = false;
-    canvas.selection = false;
+  if (type === 'arrow') {
+    isDrawingMode.value = true;
+    if (canvas) {
+      canvas.isDrawingMode = true;
+      canvas.selection = false;
+    }
+    displayToast('Arrow Brush: draw line or curve to create arrow ✨');
+  } else {
+    isDrawingMode.value = false;
+    if (canvas) {
+      canvas.isDrawingMode = false;
+      canvas.selection = false;
+    }
   }
   canvas?.discardActiveObject();
   canvas?.requestRenderAll();
   updateSelectionState();
+  isBrushMenuOpen.value = false;
 };
 
 const addText = () => {
@@ -2267,6 +2678,7 @@ onUnmounted(() => {
                 <button @click="addShape('circle')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Circle / Ellipse"><Circle class="w-4 h-4" /></button>
                 <button @click="addShape('triangle')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Triangle"><Triangle class="w-4 h-4" /></button>
                 <button @click="addShape('line')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Line"><Minus class="w-4 h-4" /></button>
+                <button @click="addShape('arrow')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" :class="{ 'bg-indigo-100 text-indigo-600': currentTool === 'arrow' }" title="Arrow Brush (箭頭畫筆)"><ArrowUpRight class="w-4 h-4" /></button>
               </div>
             </div>
           </div>

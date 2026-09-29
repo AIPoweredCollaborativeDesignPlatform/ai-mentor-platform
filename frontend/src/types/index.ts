@@ -80,8 +80,25 @@ export interface RoomData {
   whiteboardHostUid?: string;
   whiteboardHostName?: string;
   whiteboardState?: string;
+  whiteboardThumbnail?: string;
   whiteboardMemories?: Array<{ timestamp: number; timeFormatted: string; summary: string; assetId?: string }>;
+  sharedApiKeys?: {
+    geminiApiKey?: string;
+    tripoApiKey?: string;
+    meshyApiKey?: string;
+    engine3D?: string;
+  };
   deletedAt?: number;
+}
+
+export interface CursorData {
+  uid: string;
+  name: string;
+  avatar: string;
+  color: string;
+  x: number;
+  y: number;
+  updatedAt: number;
 }
 
 export type AnimationMotionType = 'harmonic' | 'bounce' | 'pendulum' | 'spin' | 'pulse' | 'wave';

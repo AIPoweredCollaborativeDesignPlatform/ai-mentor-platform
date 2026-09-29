@@ -16,6 +16,7 @@ export const getStoredMeshyApiKey = (): string => {
   return (
     localStorage.getItem('ai_meshy_api_key') ||
     (window as any).__SHARED_MESHY_KEY__ ||
+    (window as any).__SHARED_HOST_MESHY_KEY__ ||
     import.meta.env.VITE_MESHY_API_KEY ||
     ''
   );

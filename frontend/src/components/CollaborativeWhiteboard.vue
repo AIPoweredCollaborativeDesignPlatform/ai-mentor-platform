@@ -16,8 +16,11 @@ if ((fabric as any).Object?.prototype) {
   (fabric as any).Object.prototype.objectCaching = false;
 }
 import {
-  X, Pencil, Image as ImageIcon, Undo2, Redo2, Trash2, Maximize, Minimize, Check, Loader2, Sparkles, Send, Radio, Settings2, MousePointer2, Type, Square, Circle, Triangle, Minus, ArrowUpRight, Group, Ungroup, BringToFront, SendToBack, MoveUp, MoveDown, Copy, Scissors, ClipboardPaste, AlertTriangle, AlertCircle, RefreshCw, ChevronDown, ChevronUp, StickyNote, MoreHorizontal, Lock, Unlock, HelpCircle, Waypoints
+  X, Pencil, Image as ImageIcon, Undo2, Redo2, Trash2, Maximize, Minimize, Check, Loader2, Sparkles, Send, Radio, Settings2, MousePointer2, Type, Square, Circle, Triangle, Minus, ArrowUpRight, Group, Ungroup, BringToFront, SendToBack, MoveUp, MoveDown, Copy, Scissors, ClipboardPaste, AlertTriangle, AlertCircle, RefreshCw, ChevronDown, ChevronUp, StickyNote, MoreHorizontal, Lock, Unlock, HelpCircle, Waypoints, Globe, MicOff
 } from 'lucide-vue-next';
+import { db } from '../firebase/config';
+import { doc, collection, onSnapshot, setDoc, deleteDoc, type Unsubscribe } from 'firebase/firestore';
+import type { CursorData } from '../types';
 import { generateSvgForWhiteboard } from '../services/ai';
 
 const props = defineProps<{
@@ -178,11 +181,11 @@ const isHoveringSend = ref(false);
 const toastMsg = ref('');
 const showToast = ref(false);
 let toastTimer: any = null;
-const displayToast = (msg: string) => {
+const displayToast = (msg: string, duration = 2500) => {
   toastMsg.value = msg;
   showToast.value = true;
   if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { showToast.value = false; }, 2500);
+  toastTimer = setTimeout(() => { showToast.value = false; }, duration);
 };
 const showShortcutsModal = ref(false);
 
@@ -938,6 +941,92 @@ let quickShapeBaseScaleX = 1;
 let quickShapeBaseScaleY = 1;
 let lastSyncedJson = '';
 let pendingRemoteState: string | null = null;
+
+// Live Collaborative Cursors
+const remoteCursors = ref<Record<string, CursorData>>({});
+let unsubCursors: Unsubscribe | null = null;
+let lastCursorBroadcast = 0;
+let lastCursorPos = { x: -9999, y: -9999 };
+
+const CURSOR_COLORS = [
+  '#6366f1', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6',
+  '#06b6d4', '#f97316', '#14b8a6', '#3b82f6', '#e11d48'
+];
+const getCursorColor = (uid: string) => {
+  let hash = 0;
+  for (let i = 0; i < uid.length; i++) {
+    hash = (hash << 5) - hash + uid.charCodeAt(i);
+    hash |= 0;
+  }
+  return CURSOR_COLORS[Math.abs(hash) % CURSOR_COLORS.length];
+};
+
+const broadcastMyCursor = (opt: any) => {
+  if (!db || !authStore.uid || !roomStore.currentRoom) return;
+  const now = Date.now();
+  if (now - lastCursorBroadcast < 70) return; // 70ms throttle
+
+  if (!canvas) return;
+  const pointer = (canvas as any).getScenePoint ? (canvas as any).getScenePoint(opt.e || opt) : ((canvas as any).getPointer?.(opt.e || opt) || { x: 0, y: 0 });
+  const dx = Math.abs(pointer.x - lastCursorPos.x);
+  const dy = Math.abs(pointer.y - lastCursorPos.y);
+  if (dx < 3 && dy < 3) return;
+
+  lastCursorBroadcast = now;
+  lastCursorPos = { x: pointer.x, y: pointer.y };
+
+  const roomId = roomStore.currentRoom.roomId;
+  const cursorRef = doc(db, 'rooms', roomId, 'cursors', authStore.uid);
+  setDoc(cursorRef, {
+    uid: authStore.uid,
+    name: authStore.displayName || 'Guest',
+    avatar: authStore.avatar || '🎨',
+    color: getCursorColor(authStore.uid),
+    x: Math.round(pointer.x),
+    y: Math.round(pointer.y),
+    updatedAt: now
+  }).catch(() => {});
+};
+
+const removeMyCursor = () => {
+  if (!db || !authStore.uid || !roomStore.currentRoom) return;
+  const roomId = roomStore.currentRoom.roomId;
+  const cursorRef = doc(db, 'rooms', roomId, 'cursors', authStore.uid);
+  deleteDoc(cursorRef).catch(() => {});
+};
+
+const startCursorListener = () => {
+  if (unsubCursors) {
+    unsubCursors();
+    unsubCursors = null;
+  }
+  if (!db || !roomStore.currentRoom) return;
+  const roomId = roomStore.currentRoom.roomId;
+  const cursorsCol = collection(db, 'rooms', roomId, 'cursors');
+  unsubCursors = onSnapshot(cursorsCol, (snapshot) => {
+    const map: Record<string, CursorData> = {};
+    const now = Date.now();
+    snapshot.forEach(docSnap => {
+      const data = docSnap.data() as CursorData;
+      if (data.uid !== authStore.uid && now - data.updatedAt < 10000) {
+        map[data.uid] = data;
+      }
+    });
+    remoteCursors.value = map;
+  }, (err) => {
+    console.warn('[Cursors] listener error:', err);
+  });
+};
+
+// Muted Participant Canvas Lock
+const isCurrentUserMuted = computed(() => {
+  return !!roomStore.currentRoom?.participants?.[authStore.uid]?.isMuted;
+});
+
+// Whiteboard Publish / Private Dropdown & Modal
+const showPublishMenu = ref(false);
+const showPrivateConfirmModal = ref(false);
+const isConvertingToPrivate = ref(false);
 
 // Ramer-Douglas-Peucker (RDP) polygonal simplification
 const rdp = (points: Array<{ x: number; y: number }>, epsilon: number): Array<{ x: number; y: number }> => {
@@ -2113,6 +2202,7 @@ const initFabric = () => {
   // Unified Mouse Move
   canvas.on('mouse:move', (opt) => {
     if (!canvas) return;
+    broadcastMyCursor(opt);
     const e = opt.e as MouseEvent;
 
     if (isDragging) {
@@ -2594,7 +2684,7 @@ const initFabric = () => {
         whiteboardContainerWidth.value = w;
 
         // If user is actively drawing, selecting, or dragging, DEFER canvas dimensions change until mouse:up!
-        const isInteracting = (canvas as any)._isCurrentlyDrawing || (canvas as any)._groupSelector || isDragging || isQuickShapeResizing || pencilStrokePoints.length > 0;
+        const isInteracting = isMouseDown || isDragging || isQuickShapeResizing || pencilStrokePoints.length > 0 || isDraggingNode.value || !!(canvas as any)._currentTransform;
         if (isInteracting) {
           pendingResize = { w, h };
           return;
@@ -2863,7 +2953,8 @@ const syncToFirebase = () => {
   if (isInternalChange || !canvas || !roomStore.currentRoom?.whiteboardActive) return;
   const json = getSerializedCanvasJson();
   lastSyncedJson = json;
-  roomStore.syncWhiteboardState(json);
+  const thumbnail = getCanvasSnapshot(0.3);
+  roomStore.syncWhiteboardState(json, thumbnail);
 };
 
 const loadFromFirebase = async (json: string) => {
@@ -2872,7 +2963,9 @@ const loadFromFirebase = async (json: string) => {
   await canvas.loadFromJSON(json);
   rehydrateCanvasObjects();
   syncNodeEditingStateAfterReload();
-  canvas.requestRenderAll();
+  canvas.getObjects().forEach(o => o.setCoords());
+  canvas.renderAll();
+  viewportVersion.value++;
 
   if (historyStack.value.length === 0) {
     historyStack.value = [json];
@@ -2890,13 +2983,49 @@ watch(() => roomStore.currentRoom?.whiteboardState, (newState, oldState) => {
     // Ignore echo of local changes
     if (newState === lastSyncedJson) return;
 
-    // Defer loading if user is actively drawing, selecting, or dragging
-    const isInteracting = isMouseDown || (canvas as any)?._groupSelector || isDragging || isQuickShapeResizing || pencilStrokePoints.length > 0;
+    // Defer loading only if user is actively drawing or transforming right now
+    const isInteracting = isMouseDown || isDragging || isQuickShapeResizing || pencilStrokePoints.length > 0 || isDraggingNode.value || !!(canvas as any)._currentTransform;
     if (isInteracting) {
       pendingRemoteState = newState;
       return;
     }
     loadFromFirebase(newState);
+  }
+});
+
+watch(isCurrentUserMuted, (muted) => {
+  if (!canvas) return;
+  if (muted) {
+    currentTool.value = 'select';
+    canvas.isDrawingMode = false;
+    canvas.selection = false;
+    canvas.discardActiveObject();
+    canvas.forEachObject(o => {
+      (o as any)._origSelectable = o.selectable;
+      (o as any)._origEvented = o.evented;
+      o.selectable = false;
+      o.evented = false;
+    });
+    exitArrowNodeEditing();
+    canvas.renderAll();
+    displayToast('唯讀模式：您已被主持人禁言，暫時無法編輯畫布', 4000);
+  } else {
+    canvas.selection = true;
+    canvas.forEachObject(o => {
+      if ((o as any)._origSelectable !== undefined) {
+        o.selectable = (o as any)._origSelectable;
+        delete (o as any)._origSelectable;
+      } else {
+        o.selectable = true;
+      }
+      if ((o as any)._origEvented !== undefined) {
+        o.evented = (o as any)._origEvented;
+        delete (o as any)._origEvented;
+      } else {
+        o.evented = true;
+      }
+    });
+    canvas.renderAll();
   }
 });
 
@@ -3705,24 +3834,33 @@ const handleCancelCloseModal = () => {
   showCloseConfirmModal.value = false;
 };
 
-const handleBroadcast = () => {
+const handlePublish = () => {
   if (!canvas) return;
   const json = getSerializedCanvasJson();
-  roomStore.startWhiteboardSession(json);
+  const thumbnail = getCanvasSnapshot(0.3);
+  roomStore.startWhiteboardSession(json, thumbnail);
+  displayToast('畫布已發布為公開協作');
 };
 
-const handleStopBroadcast = async () => {
+const handleConfirmMakePrivate = async () => {
   if (!canvas) return;
-  const json = getSerializedCanvasJson();
-  const dataUrl = getCanvasSnapshot(0.7);
-  emit('save-state', json, dataUrl, currentAssetId.value);
-  hasUnsavedChanges.value = false;
-  await roomStore.endWhiteboardSession();
-  displayToast('Broadcast stopped — Switched to Local Sketchpad');
+  isConvertingToPrivate.value = true;
+  try {
+    await roomStore.makeWhiteboardPrivate();
+    showPrivateConfirmModal.value = false;
+    showPublishMenu.value = false;
+    displayToast('已將畫布改回私人，其他成員已退出');
+  } catch (e) {
+    console.error('Failed to make private:', e);
+  } finally {
+    isConvertingToPrivate.value = false;
+  }
 };
 
 const handleCloseRequest = () => {
   if (roomStore.currentRoom?.whiteboardActive) {
+    // When closing active whiteboard, save state to room assets so anyone can open & edit it!
+    triggerAutoSaveAsAsset();
     emit('close');
     return;
   }
@@ -3905,7 +4043,8 @@ defineExpose({
   showCloseConfirmModal,
   handleCloseRequest,
   triggerAutoSaveAsAsset,
-  handleStopBroadcast,
+  handlePublish,
+  handleConfirmMakePrivate,
   getCanvasSnapshot,
   setCurrentAssetId: (id: string) => { currentAssetId.value = id; },
   getCanvasJson: () => getSerializedCanvasJson()
@@ -4122,12 +4261,24 @@ onMounted(() => {
   if (wrapperRef.value) {
     wrapperRef.value.addEventListener('contextmenu', handleContextMenuCapture, { capture: true });
   }
+  startCursorListener();
   nextTick(() => {
     initFabric();
   });
 });
 
+watch(() => roomStore.currentRoom?.roomId, (newRoomId) => {
+  if (newRoomId) {
+    startCursorListener();
+  }
+});
+
 onUnmounted(() => {
+  removeMyCursor();
+  if (unsubCursors) {
+    unsubCursors();
+    unsubCursors = null;
+  }
   window.removeEventListener('keydown', handleKeydown, { capture: true });
   window.removeEventListener('click', handleWindowClick);
   window.removeEventListener('paste', handleGlobalPaste);
@@ -4153,16 +4304,25 @@ onUnmounted(() => {
       class="absolute top-4 left-4 z-10 flex items-center gap-2 transition-opacity duration-200"
       :class="{ 'opacity-15': isHoveringSend }"
     >
-      <div v-if="roomStore.currentRoom?.whiteboardActive" class="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-indigo-600/90 shadow-sm border border-indigo-400 flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-white animate-pulse">
-        <Radio class="w-3.5 h-3.5" />
-        <span v-if="whiteboardContainerWidth >= 640">{{ roomStore.currentRoom?.whiteboardHostName }} is Broadcasting</span>
-        <span v-else>Live</span>
+      <div v-if="roomStore.currentRoom?.whiteboardActive" class="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-emerald-600/90 shadow-sm border border-emerald-400 flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-white">
+        <span class="w-2 h-2 rounded-full bg-emerald-200 animate-pulse"></span>
+        <span v-if="whiteboardContainerWidth >= 640">{{ roomStore.currentRoom?.whiteboardHostName }} 公開協作中</span>
+        <span v-else>公開中</span>
       </div>
       <div v-else class="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-white/90 shadow-sm border border-slate-200 flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-slate-700">
         <Sparkles class="w-3.5 h-3.5 text-sky-500" />
-        <span v-if="whiteboardContainerWidth >= 640">Local Sketchpad</span>
-        <span v-else-if="whiteboardContainerWidth >= 480">Local</span>
+        <span v-if="whiteboardContainerWidth >= 640">私人畫布</span>
+        <span v-else>私人</span>
       </div>
+    </div>
+
+    <!-- View-Only Banner for Muted Users -->
+    <div
+      v-if="isCurrentUserMuted"
+      class="absolute top-4 left-1/2 -translate-x-1/2 z-40 px-3.5 py-1.5 sm:px-4 sm:py-2 rounded-2xl bg-rose-950/90 border border-rose-500/50 text-rose-300 text-xs font-semibold shadow-2xl backdrop-blur-md flex items-center gap-2 select-none"
+    >
+      <MicOff class="w-4 h-4 text-rose-400 shrink-0" />
+      <span>唯讀模式：您目前已被主持人禁言，暫時無法編輯畫布</span>
     </div>
 
     <!-- Group Isolation Mode Top Floating Banner -->
@@ -4213,13 +4373,40 @@ onUnmounted(() => {
       class="absolute top-4 right-4 z-10 flex items-center gap-1 sm:gap-2 transition-opacity duration-200"
       :class="{ 'opacity-15': isHoveringSend }"
     >
-      <button v-if="roomStore.currentRoom?.whiteboardActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid" @click="handleStopBroadcast()" class="px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl bg-rose-500/90 hover:bg-rose-600 text-white shadow-sm transition text-xs font-semibold flex items-center gap-1 cursor-pointer">
-        <X class="w-3.5 h-3.5" />
-        <span v-if="whiteboardContainerWidth >= 640">Stop Broadcast</span>
-      </button>
-      <button v-if="!roomStore.currentRoom?.whiteboardActive" @click="handleBroadcast" class="px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm transition text-xs font-semibold flex items-center gap-1 cursor-pointer">
-        <Radio class="w-3.5 h-3.5" />
-        <span v-if="whiteboardContainerWidth >= 640">Broadcast</span>
+      <!-- Publisher Settings Dropdown Menu (Protected from accidental clicks) -->
+      <div v-if="roomStore.currentRoom?.whiteboardActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid" class="relative">
+        <button
+          @click="showPublishMenu = !showPublishMenu"
+          class="px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-xl bg-white/90 hover:bg-white text-slate-700 hover:text-indigo-600 shadow-sm transition cursor-pointer flex items-center gap-1 text-xs font-medium"
+          title="協作設定"
+        >
+          <Settings2 class="w-3.5 h-3.5" />
+          <span v-if="whiteboardContainerWidth >= 640">協作設定</span>
+        </button>
+        <div
+          v-if="showPublishMenu"
+          @click.stop
+          class="absolute right-0 mt-1 w-44 bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl p-1 z-50 text-xs flex flex-col"
+        >
+          <button
+            @click="showPublishMenu = false; showPrivateConfirmModal = true"
+            class="w-full text-left px-3 py-2 rounded-lg hover:bg-rose-950/60 text-rose-300 flex items-center gap-2 transition cursor-pointer"
+          >
+            <Lock class="w-3.5 h-3.5 text-rose-400" />
+            <span>改回私人畫布...</span>
+          </button>
+        </div>
+      </div>
+      <button
+        v-if="!roomStore.currentRoom?.whiteboardActive"
+        @click="handlePublish"
+        :disabled="isCurrentUserMuted"
+        class="px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm transition text-xs font-semibold flex items-center gap-1 cursor-pointer disabled:opacity-50"
+        title="發布為公開畫布，供所有成員即時協作"
+      >
+        <Globe class="w-3.5 h-3.5" />
+        <span v-if="whiteboardContainerWidth >= 640">發布畫布</span>
+        <span v-else>發布</span>
       </button>
       <button @click="showShortcutsModal = true" class="p-1 sm:p-1.5 rounded-xl bg-white/90 hover:bg-white text-slate-600 hover:text-indigo-600 shadow-sm transition cursor-pointer" title="Shortcuts Cheatsheet (?)">
         <HelpCircle class="w-3.5 sm:w-4 h-3.5 sm:h-4" />
@@ -4250,8 +4437,45 @@ onUnmounted(() => {
       class="flex-1 w-full h-full relative cursor-crosshair transition-[box-shadow] duration-200"
       :class="{ 'ring-4 ring-inset ring-sky-400/90 shadow-[inset_0_0_40px_rgba(56,189,248,0.35)]': isHoveringSend }"
       @contextmenu.prevent
+      @mouseleave="removeMyCursor"
     >
       <canvas ref="canvasRef" class="w-full h-full touch-none"></canvas>
+
+      <!-- Live Collaborative Cursors Overlay -->
+      <div class="absolute inset-0 pointer-events-none z-30 overflow-hidden">
+        <div
+          v-for="c in Object.values(remoteCursors)"
+          :key="c.uid"
+          class="absolute top-0 left-0 transition-transform duration-75 ease-out will-change-transform"
+          :style="{
+            transform: `translate3d(${getNodeScreenPos({ x: c.x, y: c.y }).x}px, ${getNodeScreenPos({ x: c.x, y: c.y }).y}px, 0)`
+          }"
+        >
+          <!-- Cursor pointer SVG -->
+          <svg
+            class="w-5 h-5 -rotate-45 drop-shadow-md"
+            viewBox="0 0 24 24"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M3 3L10.07 19.97L12.58 12.58L19.97 10.07L3 3Z"
+              :fill="c.color"
+              stroke="#ffffff"
+              stroke-width="1.5"
+              stroke-linejoin="round"
+            />
+          </svg>
+          <!-- Name & Avatar Pill -->
+          <div
+            class="ml-3 -mt-1 px-2 py-0.5 rounded-full text-[10px] font-semibold text-white shadow-md flex items-center gap-1 whitespace-nowrap select-none"
+            :style="{ backgroundColor: c.color }"
+          >
+            <span>{{ c.avatar }}</span>
+            <span>{{ c.name }}</span>
+          </div>
+        </div>
+      </div>
 
       <!-- Send Viewport Capture Framing Guide / Viewfinder -->
       <div
@@ -4518,7 +4742,10 @@ onUnmounted(() => {
 
     <div
       class="absolute bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 sm:gap-2 transition-all duration-300 w-max max-w-[96%]"
-      :class="isStackedToolbar ? 'flex-col items-center' : 'flex-row'"
+      :class="[
+        isStackedToolbar ? 'flex-col items-center' : 'flex-row',
+        { 'opacity-40 pointer-events-none select-none': isCurrentUserMuted }
+      ]"
     >
       <!-- AI Input -->
       <div
@@ -4983,6 +5210,41 @@ onUnmounted(() => {
             class="px-4 py-2 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-md transition cursor-pointer"
           >
             Save to Assets
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Confirm Make Private -->
+    <div
+      v-if="showPrivateConfirmModal"
+      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs"
+      @click.self="showPrivateConfirmModal = false"
+    >
+      <div class="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-5 space-y-4 animate-in fade-in zoom-in-95">
+        <div class="flex items-center gap-3 text-rose-400">
+          <div class="p-2 rounded-xl bg-rose-500/10 border border-rose-500/20">
+            <Lock class="w-5 h-5 text-rose-400" />
+          </div>
+          <h3 class="text-sm font-bold text-white">將畫布改回私人？</h3>
+        </div>
+        <p class="text-xs text-slate-300 leading-relaxed">
+          改回私人後，其他房間成員將<strong>立即退出此畫布</strong>，且無法再讀取或編輯。
+        </p>
+        <div class="flex items-center justify-end gap-2 pt-2">
+          <button
+            @click="showPrivateConfirmModal = false"
+            class="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition cursor-pointer"
+          >
+            取消
+          </button>
+          <button
+            @click="handleConfirmMakePrivate"
+            :disabled="isConvertingToPrivate"
+            class="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold transition cursor-pointer flex items-center gap-1.5 shadow"
+          >
+            <Loader2 v-if="isConvertingToPrivate" class="w-3.5 h-3.5 animate-spin" />
+            <span>確認改為私人</span>
           </button>
         </div>
       </div>

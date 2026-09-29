@@ -3,6 +3,8 @@ import { ref, onMounted, onUnmounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import { useRoomStore } from '../stores/room';
+import { db } from '../firebase/config';
+import { doc, onSnapshot, type Unsubscribe } from 'firebase/firestore';
 import { Clock, ShieldAlert, ArrowLeft, RotateCcw, Sparkles, LogIn, Edit2, Check, Loader2 } from 'lucide-vue-next';
 
 const route = useRoute();
@@ -23,6 +25,36 @@ const customAvatar = ref(authStore.avatar);
 const avatarOptions = ['🦊', '🦉', '🎨', '🚀', '🔮', '📐', '🤖', '⚡', '🦅', '🐬'];
 
 let hasApplied = false;
+let unsubMyParticipantDoc: Unsubscribe | null = null;
+
+const listenToMyParticipantDoc = () => {
+  if (unsubMyParticipantDoc) {
+    unsubMyParticipantDoc();
+    unsubMyParticipantDoc = null;
+  }
+  if (!db || !authStore.uid || !roomId.value) return;
+
+  try {
+    const myDocRef = doc(db, 'rooms', roomId.value, 'participants', authStore.uid);
+    unsubMyParticipantDoc = onSnapshot(myDocRef, (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        if (data?.status === 'approved') {
+          roomStore.myStatus = 'approved';
+          router.replace(`/room/${roomId.value}`);
+        } else if (data?.status === 'rejected') {
+          roomStore.myStatus = 'rejected';
+        } else if (data?.status === 'kicked') {
+          roomStore.myStatus = 'kicked';
+        }
+      }
+    }, (err) => {
+      console.warn('[WaitingRoom] Participant doc listener error:', err);
+    });
+  } catch (err) {
+    console.warn('[WaitingRoom] Error establishing participant doc listener:', err);
+  }
+};
 
 // Random friendly English name generator if user is generic Guest
 const generateFriendlyIdentity = () => {
@@ -58,7 +90,9 @@ const checkStatus = () => {
       // User is not in participants list locally yet, auto-apply
       if (authStore.uid && !hasApplied) {
         hasApplied = true;
-        roomStore.applyToJoin(pin).catch((err) => {
+        roomStore.applyToJoin(pin).then(() => {
+          listenToMyParticipantDoc();
+        }).catch((err) => {
           console.error(err);
         });
       }
@@ -120,8 +154,11 @@ watch(() => roomStore.currentRoom, () => {
 }, { deep: true });
 
 watch(() => authStore.uid, (newUid) => {
-  if (newUid && roomExists.value && !hasApplied) {
-    checkStatus();
+  if (newUid) {
+    listenToMyParticipantDoc();
+    if (roomExists.value && !hasApplied) {
+      checkStatus();
+    }
   }
 });
 
@@ -143,6 +180,7 @@ onMounted(async () => {
   }
   targetRoomName.value = check.roomName || `Meeting ${pin}`;
   
+  listenToMyParticipantDoc();
   roomStore.startFirestoreListener(roomId.value);
   setTimeout(checkStatus, 600);
 });
@@ -153,6 +191,10 @@ const handleCancelAndBack = async () => {
 };
 
 onUnmounted(() => {
+  if (unsubMyParticipantDoc) {
+    unsubMyParticipantDoc();
+    unsubMyParticipantDoc = null;
+  }
   if (roomStore.myStatus === 'pending') {
     roomStore.cancelJoinRequest(pin);
   }

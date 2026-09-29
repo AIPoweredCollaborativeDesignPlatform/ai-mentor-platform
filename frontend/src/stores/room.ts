@@ -222,6 +222,14 @@ export const useRoomStore = defineStore('room', () => {
           currentRoom.value.whiteboardHostUid = data.whiteboardHostUid || undefined;
           currentRoom.value.whiteboardHostName = data.whiteboardHostName || undefined;
           currentRoom.value.whiteboardState = data.whiteboardState || undefined;
+          currentRoom.value.whiteboardThumbnail = data.whiteboardThumbnail || undefined;
+          currentRoom.value.sharedApiKeys = data.sharedApiKeys || undefined;
+        }
+        if (data.sharedApiKeys) {
+          (window as any).__SHARED_HOST_GEMINI_KEY__ = data.sharedApiKeys.geminiApiKey || '';
+          (window as any).__SHARED_HOST_TRIPO_KEY__ = data.sharedApiKeys.tripoApiKey || '';
+          (window as any).__SHARED_HOST_MESHY_KEY__ = data.sharedApiKeys.meshyApiKey || '';
+          (window as any).__SHARED_HOST_3D_ENGINE__ = data.sharedApiKeys.engine3D || '';
         }
         if (data.mentorConfig) {
           mentorStore.config = data.mentorConfig;
@@ -423,7 +431,13 @@ export const useRoomStore = defineStore('room', () => {
           content: `${selectedEmoji} Room "${displayRoomName}" created · PIN: ${pin}`,
           timestamp: Date.now()
         }
-      ]
+      ],
+      sharedApiKeys: {
+        geminiApiKey: localStorage.getItem('ai_gemini_api_key') || '',
+        tripoApiKey: localStorage.getItem('ai_tripo_api_key') || '',
+        meshyApiKey: localStorage.getItem('ai_meshy_api_key') || '',
+        engine3D: (localStorage.getItem('ai_3d_engine') as any) || 'meshy'
+      }
     };
 
     currentRoom.value = newRoom;
@@ -442,7 +456,8 @@ export const useRoomStore = defineStore('room', () => {
           lastActive: Date.now(),
           roomStatus: 'active',
           mentorConfig: mentorStore.config,
-          assetsCount: 0
+          assetsCount: 0,
+          sharedApiKeys: newRoom.sharedApiKeys
         });
         await setDoc(doc(db, 'rooms', roomId, 'participants', authStore.uid), hostUser);
         await addDoc(collection(db, 'rooms', roomId, 'messages'), newRoom.messages[0]);
@@ -1053,7 +1068,7 @@ export const useRoomStore = defineStore('room', () => {
 
       if (response.shouldIntervene && response.aiMessage) {
         // Check if Meshy.ai or Tripo3D API key is configured for photorealistic curved 3D models
-        const activeEngine = localStorage.getItem('ai_3d_engine') || 'meshy';
+        const activeEngine = localStorage.getItem('ai_3d_engine') || (window as any).__SHARED_HOST_3D_ENGINE__ || currentRoom.value?.sharedApiKeys?.engine3D || 'meshy';
         const { getStoredMeshyApiKey, generate3DModelWithMeshy } = await import('../services/meshy');
         const { getStoredTripoApiKey, generate3DModelWithTripo } = await import('../services/tripo');
         const meshyKey = getStoredMeshyApiKey();
@@ -1414,39 +1429,41 @@ export const useRoomStore = defineStore('room', () => {
 
   let whiteboardSyncTimer: any = null;
 
-  const startWhiteboardSession = async (initialJson?: string) => {
+  const startWhiteboardSession = async (initialJson?: string, thumbnail?: string) => {
     if (!currentRoom.value || !db) return;
     const hostName = authStore.displayName || 'Participant';
     try {
-      await updateDoc(doc(db, 'rooms', currentRoom.value.roomId), {
+      const payload: any = {
         whiteboardActive: true,
         whiteboardHostUid: authStore.uid,
         whiteboardHostName: hostName,
         whiteboardState: initialJson || null
-      });
+      };
+      if (thumbnail) payload.whiteboardThumbnail = thumbnail;
+      await updateDoc(doc(db, 'rooms', currentRoom.value.roomId), payload);
       // Send capsule broadcast announcement to chat
       await sendCustomMessage({
         senderUid: 'system',
         senderName: 'System',
-        content: `${hostName} started a collaborative whiteboard broadcast.`,
+        content: `${hostName} 發布了公開協作畫布。`,
         type: 'text'
       });
     } catch (e) {
       console.error('Failed to start whiteboard:', e);
-      alert('Failed to start broadcast: ' + ((e as any).message || String(e)));
+      alert('Failed to publish whiteboard: ' + ((e as any).message || String(e)));
     }
   };
 
-  const syncWhiteboardState = async (json: string) => {
+  const syncWhiteboardState = async (json: string, thumbnail?: string) => {
     if (!currentRoom.value || !db || !currentRoom.value.whiteboardActive) return;
     // Debounce syncing to avoid hitting Firestore write limits
     clearTimeout(whiteboardSyncTimer);
     whiteboardSyncTimer = setTimeout(async () => {
       if (!currentRoom.value || !db || !currentRoom.value.whiteboardActive) return;
       try {
-        await updateDoc(doc(db, 'rooms', currentRoom.value.roomId), {
-          whiteboardState: json
-        });
+        const payload: any = { whiteboardState: json };
+        if (thumbnail) payload.whiteboardThumbnail = thumbnail;
+        await updateDoc(doc(db, 'rooms', currentRoom.value.roomId), payload);
       } catch (e) {
         console.warn('Failed to sync whiteboard:', e);
       }
@@ -1461,17 +1478,56 @@ export const useRoomStore = defineStore('room', () => {
         whiteboardActive: false,
         whiteboardHostUid: null,
         whiteboardHostName: null,
-        whiteboardState: null
+        whiteboardState: null,
+        whiteboardThumbnail: null
       });
       // Send capsule announcement to chat
       await sendCustomMessage({
         senderUid: 'system',
         senderName: 'System',
-        content: `${hostName} ended the whiteboard broadcast.`,
+        content: `${hostName} 關閉了公開畫布。`,
         type: 'text'
       });
     } catch (e) {
       console.warn('Failed to end whiteboard:', e);
+    }
+  };
+
+  const makeWhiteboardPrivate = async () => {
+    if (!currentRoom.value || !db) return;
+    const hostName = authStore.displayName || 'Participant';
+    try {
+      await updateDoc(doc(db, 'rooms', currentRoom.value.roomId), {
+        whiteboardActive: false,
+        whiteboardHostUid: null,
+        whiteboardHostName: null,
+        whiteboardState: null,
+        whiteboardThumbnail: null
+      });
+      await sendCustomMessage({
+        senderUid: 'system',
+        senderName: 'System',
+        content: `${hostName} 已將畫布轉為私人，結束公開協作。`,
+        type: 'text'
+      });
+    } catch (e) {
+      console.warn('Failed to make whiteboard private:', e);
+    }
+  };
+
+  const updateSharedApiKeys = async (keys: { geminiApiKey?: string; tripoApiKey?: string; meshyApiKey?: string; engine3D?: string }) => {
+    if (!currentRoom.value || !db) return;
+    const updated = {
+      ...(currentRoom.value.sharedApiKeys || {}),
+      ...keys
+    };
+    currentRoom.value.sharedApiKeys = updated;
+    try {
+      await updateDoc(doc(db, 'rooms', currentRoom.value.roomId), {
+        sharedApiKeys: updated
+      });
+    } catch (err) {
+      console.warn('[Firestore] updateSharedApiKeys error:', err);
     }
   };
 
@@ -1672,6 +1728,8 @@ export const useRoomStore = defineStore('room', () => {
     startWhiteboardSession,
     syncWhiteboardState,
     endWhiteboardSession,
+    makeWhiteboardPrivate,
+    updateSharedApiKeys,
     recordWhiteboardSnapshotMemory,
     retryAiMentorMessage,
     updateRoomInfo

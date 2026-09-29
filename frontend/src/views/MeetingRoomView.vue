@@ -93,10 +93,16 @@ const startWhiteboardResize = (e: MouseEvent) => {
   window.addEventListener('mouseup', stopResize);
 };
 
-// When broadcast stops, switch to local sketchpad without closing whiteboard
+// When broadcast/publishing stops or converts to private, auto-eject non-host participants
 watch(() => roomStore.currentRoom?.whiteboardActive, (isActive, wasActive) => {
   if (wasActive === true && isActive === false) {
-    // Whiteboard remains open in personal sketchpad mode
+    const isPublisher = roomStore.currentRoom?.whiteboardHostUid === authStore.uid;
+    if (!isPublisher && isWhiteboardOpen.value) {
+      isWhiteboardOpen.value = false;
+      activeWhiteboardAssetId.value = null;
+      currentWhiteboardJson.value = undefined;
+      roomStore.pushToast('協作已結束', '發起人已將畫布改回私人，已自動退出協作。', 'info');
+    }
   }
 });
 
@@ -906,10 +912,15 @@ onUnmounted(() => {
     <div
       v-if="roomStore.currentRoom?.whiteboardActive && !isWhiteboardOpen"
       @click="isWhiteboardOpen = true"
-      class="absolute top-16 right-4 sm:right-6 z-40 w-32 h-24 sm:w-48 sm:h-32 bg-white rounded-xl shadow-2xl border-2 border-indigo-500 overflow-hidden cursor-pointer group hover:scale-105 transition-transform"
+      class="absolute top-16 right-4 sm:right-6 z-40 w-32 h-24 sm:w-48 sm:h-32 bg-slate-900 rounded-xl shadow-2xl border-2 border-indigo-500 overflow-hidden cursor-pointer group hover:scale-105 transition-transform"
       title="Join Whiteboard Session"
     >
-      <div class="absolute inset-0 bg-slate-900/10 flex items-center justify-center group-hover:bg-indigo-900/20 transition-colors z-10">
+      <img
+        v-if="roomStore.currentRoom?.whiteboardThumbnail"
+        :src="roomStore.currentRoom.whiteboardThumbnail"
+        class="w-full h-full object-cover opacity-90 group-hover:scale-105 transition-transform"
+      />
+      <div class="absolute inset-0 bg-slate-900/20 flex items-center justify-center group-hover:bg-indigo-900/30 transition-colors z-10">
         <div class="bg-indigo-600 text-white p-2 rounded-full shadow-lg group-hover:scale-110 transition-transform">
           <Palette class="w-4 h-4 sm:w-5 sm:h-5" />
         </div>
@@ -1468,6 +1479,18 @@ onUnmounted(() => {
               <div class="absolute top-1 left-1 bg-indigo-950/90 text-indigo-300 px-1.5 py-0.5 rounded text-[8px] font-bold border border-indigo-500/50 backdrop-blur-sm flex items-center gap-1 z-10 shadow">
                 <Palette class="w-2.5 h-2.5 text-indigo-400" />
                 <span>Whiteboard</span>
+              </div>
+              <!-- Creator Avatar Badge (Top Right) -->
+              <div
+                class="absolute top-1 right-1 bg-slate-900/95 text-white w-5 h-5 rounded-full border border-slate-700/80 backdrop-blur-sm flex items-center justify-center text-[10px] z-10 shadow select-none"
+                :title="`發起人: ${msg.metadata?.creatorName || msg.senderName || '成員'}`"
+              >
+                <span>{{ msg.metadata?.creatorAvatar || msg.senderAvatar || '🎨' }}</span>
+              </div>
+              <!-- Creator Name Pill (Bottom) -->
+              <div class="absolute bottom-1 left-1 right-1 bg-slate-950/85 px-1.5 py-0.5 rounded text-[8px] text-slate-300 font-medium truncate backdrop-blur-xs z-10 flex items-center gap-1">
+                <span class="text-[9px]">{{ msg.metadata?.creatorAvatar || msg.senderAvatar || '🎨' }}</span>
+                <span class="truncate">{{ msg.metadata?.creatorName || msg.senderName || '成員' }}</span>
               </div>
               <!-- Hover Overlay -->
               <div class="absolute inset-0 bg-indigo-950/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">

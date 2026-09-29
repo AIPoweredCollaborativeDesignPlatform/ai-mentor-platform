@@ -12,6 +12,7 @@ export function getStoredGeminiApiKey(): string {
   return (
     localStorage.getItem('ai_gemini_api_key') ||
     (window as any).__SHARED_GEMINI_KEY__ ||
+    (window as any).__SHARED_HOST_GEMINI_KEY__ ||
     import.meta.env.VITE_GEMINI_API_KEY ||
     ''
   );

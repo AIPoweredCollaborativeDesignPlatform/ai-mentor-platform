@@ -121,14 +121,16 @@ const engineSavedMsg = ref('');
 const handleSelectEngine = (engine: 'meshy' | 'tripo' | 'threejs') => {
   selected3DEngine.value = engine;
   authStore.syncUserApiKeys({ engine3D: engine });
-  engineSavedMsg.value = `Active 3D Engine: ${engine === 'meshy' ? 'Meshy.ai' : engine === 'tripo' ? 'Tripo3D' : 'Three.js'} (Synced)`;
+  roomStore.updateSharedApiKeys({ engine3D: engine });
+  engineSavedMsg.value = `Active 3D Engine: ${engine === 'meshy' ? 'Meshy.ai' : engine === 'tripo' ? 'Tripo3D' : 'Three.js'} (Synced & Shared)`;
   setTimeout(() => (engineSavedMsg.value = ''), 2500);
 };
 
 const handleSaveGeminiKey = () => {
   const val = geminiApiKey.value.trim();
   authStore.syncUserApiKeys({ geminiApiKey: val });
-  engineSavedMsg.value = val ? 'Gemini API Key saved & synced!' : 'Gemini API Key removed';
+  roomStore.updateSharedApiKeys({ geminiApiKey: val });
+  engineSavedMsg.value = val ? 'Gemini API Key saved & shared with room!' : 'Gemini API Key removed';
   setTimeout(() => (engineSavedMsg.value = ''), 2500);
 };
 
@@ -136,7 +138,8 @@ const handleSaveMeshyKey = () => {
   setStoredMeshyApiKey(meshyApiKey.value);
   if (meshyApiKey.value) selected3DEngine.value = 'meshy';
   authStore.syncUserApiKeys({ meshyApiKey: meshyApiKey.value, engine3D: selected3DEngine.value });
-  engineSavedMsg.value = meshyApiKey.value ? 'Meshy AI Key saved & synced!' : 'Meshy Key removed';
+  roomStore.updateSharedApiKeys({ meshyApiKey: meshyApiKey.value, engine3D: selected3DEngine.value });
+  engineSavedMsg.value = meshyApiKey.value ? 'Meshy AI Key saved & shared with room!' : 'Meshy Key removed';
   setTimeout(() => (engineSavedMsg.value = ''), 2500);
 };
 
@@ -144,7 +147,8 @@ const handleSaveTripoKey = () => {
   setStoredTripoApiKey(tripoApiKey.value);
   if (tripoApiKey.value) selected3DEngine.value = 'tripo';
   authStore.syncUserApiKeys({ tripoApiKey: tripoApiKey.value, engine3D: selected3DEngine.value });
-  engineSavedMsg.value = tripoApiKey.value ? 'Tripo3D Key saved & synced!' : 'Tripo3D Key removed';
+  roomStore.updateSharedApiKeys({ tripoApiKey: tripoApiKey.value, engine3D: selected3DEngine.value });
+  engineSavedMsg.value = tripoApiKey.value ? 'Tripo3D Key saved & shared with room!' : 'Tripo3D Key removed';
   setTimeout(() => (engineSavedMsg.value = ''), 2500);
 };
 

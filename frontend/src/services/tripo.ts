@@ -15,6 +15,7 @@ export const getStoredTripoApiKey = (): string => {
   return (
     localStorage.getItem('ai_tripo_api_key') ||
     (window as any).__SHARED_TRIPO_KEY__ ||
+    (window as any).__SHARED_HOST_TRIPO_KEY__ ||
     import.meta.env.VITE_TRIPO_API_KEY ||
     ''
   );

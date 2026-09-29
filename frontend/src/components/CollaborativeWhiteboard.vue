@@ -401,8 +401,72 @@ const rdp = (points: Array<{ x: number; y: number }>, epsilon: number): Array<{ 
   }
 };
 
+// Detects and trims terminal deflection/flick hooks from curved strokes
+const trimTerminalHook = (pts: Array<{ x: number; y: number }>): Array<{ x: number; y: number }> => {
+  if (pts.length < 8) return pts;
+  const cumDist: number[] = [0];
+  for (let i = 1; i < pts.length; i++) {
+    cumDist.push(cumDist[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y));
+  }
+  const totalLen = cumDist[cumDist.length - 1];
+  if (totalLen < 35) return pts;
+
+  // Maximum terminal hook window: up to 45px or last 30% of stroke
+  const maxHookWindow = Math.min(45, totalLen * 0.30);
+  let hookStartIdx = pts.length - 1;
+  while (hookStartIdx > 2 && cumDist[hookStartIdx] > totalLen - maxHookWindow) {
+    hookStartIdx--;
+  }
+
+  // Preceding body reference window: 35px preceding hookStartIdx
+  let bodyStartIdx = hookStartIdx;
+  while (bodyStartIdx > 0 && cumDist[bodyStartIdx] > cumDist[hookStartIdx] - 35) {
+    bodyStartIdx--;
+  }
+
+  const pBodyStart = pts[bodyStartIdx];
+  const pBodyEnd = pts[hookStartIdx];
+  const bodyDx = pBodyEnd.x - pBodyStart.x;
+  const bodyDy = pBodyEnd.y - pBodyStart.y;
+  const bodyLen = Math.hypot(bodyDx, bodyDy);
+  if (bodyLen < 10) return pts;
+
+  const bodyAngle = Math.atan2(bodyDy, bodyDx);
+
+  // Scan from hookStartIdx to the end for sudden angular deflection > ~34° (0.6 rad)
+  for (let i = hookStartIdx + 1; i < pts.length; i++) {
+    const segDx = pts[i].x - pts[i - 1].x;
+    const segDy = pts[i].y - pts[i - 1].y;
+    const segLen = Math.hypot(segDx, segDy);
+    if (segLen < 2) continue;
+
+    const segAngle = Math.atan2(segDy, segDx);
+    let diff = Math.abs(segAngle - bodyAngle);
+    while (diff > Math.PI) diff = Math.abs(diff - 2 * Math.PI);
+
+    const chordDx = pts[i].x - pts[hookStartIdx].x;
+    const chordDy = pts[i].y - pts[hookStartIdx].y;
+    const chordLen = Math.hypot(chordDx, chordDy);
+    let chordDiff = 0;
+    if (chordLen >= 5) {
+      const chordAngle = Math.atan2(chordDy, chordDx);
+      chordDiff = Math.abs(chordAngle - bodyAngle);
+      while (chordDiff > Math.PI) chordDiff = Math.abs(chordDiff - 2 * Math.PI);
+    }
+
+    if (diff > 0.6 || chordDiff > 0.6) {
+      const trimmed = pts.slice(0, Math.max(hookStartIdx, i));
+      return trimmed.length >= 2 ? trimmed : pts;
+    }
+  }
+
+  return pts;
+};
+
 // Generates an Arrow object with shaft and arrowhead oriented precisely with end tangent
-const createArrowFromPoints = (pts: Array<{ x: number; y: number }>) => {
+const createArrowFromPoints = (rawPts: Array<{ x: number; y: number }>) => {
+  if (rawPts.length < 2) return null;
+  const pts = trimTerminalHook(rawPts);
   if (pts.length < 2) return null;
   const p0 = pts[0];
   const pn = pts[pts.length - 1];
@@ -537,17 +601,27 @@ const createArrowFromPoints = (pts: Array<{ x: number; y: number }>) => {
     }
   );
 
+  shaft.set({
+    objectCaching: false,
+    strokeUniform: true
+  });
+  head.set({
+    objectCaching: false,
+    strokeUniform: true
+  });
+
   const arrow = new fabric.Group([shaft, head], {
     selectable: true,
     evented: true,
     strokeUniform: true,
+    objectCaching: false,
     perPixelTargetFind: true
   });
   (arrow as any).isArrow = true;
+  (arrow as any).lockUniScaling = true;
   (arrow as any).arrowPoints = pts.map(p => ({ x: p.x, y: p.y }));
   (arrow as any).arrowP0 = { x: p0.x, y: p0.y };
   (arrow as any).arrowPn = { x: pn.x, y: pn.y };
-  (arrow as any).initialMatrix = arrow.calcTransformMatrix();
   return arrow;
 };
 
@@ -1031,44 +1105,6 @@ const initFabric = () => {
         (obj as any).setPositionByOrigin(fixedPoint, originX, originY);
       }
       obj.setCoords();
-    }
-
-    // Reconstruct arrow with pristine scale 1.0 and un-stretched arrowhead after scaling
-    if (canvas && obj && (obj as any).isArrow && (obj as any).arrowPoints && (obj as any).initialMatrix && ((obj.scaleX && obj.scaleX !== 1) || (obj.scaleY && obj.scaleY !== 1))) {
-      try {
-        const M0 = (obj as any).initialMatrix;
-        const M1 = obj.calcTransformMatrix();
-        const invM0 = fabric.util.invertTransform(M0);
-        const M_delta = fabric.util.multiplyTransformMatrices(M1, invM0);
-        const newPts = (obj as any).arrowPoints.map((pt: any) => fabric.util.transformPoint(pt, M_delta));
-        const newArrow = createArrowFromPoints(newPts);
-        if (newArrow && canvas) {
-          (newArrow as any).isLocked = (obj as any).isLocked;
-          if ((obj as any).isLocked) {
-            newArrow.set({
-              lockMovementX: true,
-              lockMovementY: true,
-              lockRotation: true,
-              lockScalingX: true,
-              lockScalingY: true,
-              hasControls: false
-            });
-          }
-          const allObjs = canvas.getObjects();
-          const idx = allObjs.indexOf(obj);
-          canvas.remove(obj);
-          if (idx !== -1) {
-            canvas.insertAt(idx, newArrow);
-          } else {
-            canvas.add(newArrow);
-          }
-          newArrow.setCoords();
-          canvas.setActiveObject(newArrow);
-          canvas.requestRenderAll();
-        }
-      } catch (err) {
-        console.warn('Failed to bake arrow scaling:', err);
-      }
     }
 
     if (!isInternalChange) {
@@ -1685,22 +1721,18 @@ const initFabric = () => {
       }
       obj.setCoords();
     }
-
-    if (obj && obj.isArrow) {
-      const objects = obj.getObjects ? obj.getObjects() : (obj._objects || []);
-      if (objects.length >= 2) {
-        const head = objects[1];
-        if (head) {
-          const sx = obj.scaleX || 1;
-          const sy = obj.scaleY || 1;
-          head.set({
-            scaleX: 1 / sx,
-            scaleY: 1 / sy
-          });
-        }
-      }
-    }
     updateStickyToolbar();
+  });
+  canvas.on('object:resizing', (e: any) => {
+    const obj = e.target;
+    if (obj && (obj.isStickyNote || obj.stickyColorConfig)) {
+      if (obj.width < 125) {
+        obj.width = 125;
+        obj.initDimensions();
+        obj.setCoords();
+      }
+      updateStickyToolbar();
+    }
   });
   canvas.on('object:rotating', updateStickyToolbar);
 
@@ -1764,6 +1796,75 @@ watch([activeColor, strokeWidth], () => {
   updateBrush();
 });
 
+const changeStickyWidth = (eventData: any, transform: any, x: number, y: number) => {
+  const { target, originX, originY } = transform;
+  if (!target) return false;
+  const constraint = target.getPositionByOrigin ? target.getPositionByOrigin(originX, originY) : null;
+  const localPoint = fabric.controlsUtils.getLocalPoint(transform, originX, originY, x, y);
+  const strokePadding = target.strokeWidth / (target.strokeUniform ? target.scaleX : 1);
+  const multiplier = originX === 'center' ? 2 : 1;
+  const newW = Math.max(125, Math.abs(localPoint.x * multiplier / (target.scaleX || 1)) - strokePadding);
+  const oldW = target.width;
+  target.set('width', newW);
+  target.initDimensions();
+  if (constraint && target.setPositionByOrigin) {
+    target.setPositionByOrigin(constraint, originX, originY);
+  }
+  target.setCoords();
+  target.fire('resizing');
+  if (target.canvas) target.canvas.fire('object:resizing', { target });
+  return oldW !== newW;
+};
+
+const changeStickyHeight = (eventData: any, transform: any, x: number, y: number) => {
+  const { target, originX, originY } = transform;
+  if (!target) return false;
+  const constraint = target.getPositionByOrigin ? target.getPositionByOrigin(originX, originY) : null;
+  const localPoint = fabric.controlsUtils.getLocalPoint(transform, originX, originY, x, y);
+  const strokePadding = target.strokeWidth / (target.strokeUniform ? target.scaleY : 1);
+  const multiplier = originY === 'center' ? 2 : 1;
+  const minAllowedH = 60;
+  const newH = Math.max(minAllowedH, Math.abs(localPoint.y * multiplier / (target.scaleY || 1)) - strokePadding);
+  const oldH = (target as any).minHeight;
+  (target as any).minHeight = newH;
+  target.set('height', newH);
+  target.initDimensions();
+  if (constraint && target.setPositionByOrigin) {
+    target.setPositionByOrigin(constraint, originX, originY);
+  }
+  target.setCoords();
+  target.fire('resizing');
+  if (target.canvas) target.canvas.fire('object:resizing', { target });
+  return oldH !== newH;
+};
+
+const setupStickyControls = (note: any) => {
+  note.controls = {
+    ...fabric.controlsUtils.createTextboxDefaultControls(),
+    mr: new fabric.Control({
+      x: 0.5,
+      y: 0,
+      actionHandler: changeStickyWidth,
+      cursorStyleHandler: fabric.controlsUtils.scaleSkewCursorStyleHandler,
+      actionName: 'resizing'
+    }),
+    ml: new fabric.Control({
+      x: -0.5,
+      y: 0,
+      actionHandler: changeStickyWidth,
+      cursorStyleHandler: fabric.controlsUtils.scaleSkewCursorStyleHandler,
+      actionName: 'resizing'
+    }),
+    mb: new fabric.Control({
+      x: 0,
+      y: 0.5,
+      actionHandler: changeStickyHeight,
+      cursorStyleHandler: fabric.controlsUtils.scaleSkewCursorStyleHandler,
+      actionName: 'resizing'
+    })
+  };
+};
+
 // Rehydrate custom attributes, methods, and constraints after deserializing from JSON
 const rehydrateCanvasObjects = () => {
   if (!canvas) return;
@@ -1791,7 +1892,7 @@ const rehydrateCanvasObjects = () => {
       o.minHeight = o.minHeight || 180;
       o.textAlign = 'center';
       o.splitByGrapheme = true;
-      o.lockUniScaling = true;
+      o.lockUniScaling = false;
       const orig = o.calcTextHeight.bind(o);
       o.calcTextHeight = function() {
         return Math.max(orig(), (this as any).minHeight !== undefined ? (this as any).minHeight : 60);
@@ -1802,7 +1903,17 @@ const rehydrateCanvasObjects = () => {
         const extraOffset = Math.max(0, (h - linesH) / 2);
         return -h / 2 + extraOffset;
       };
+      setupStickyControls(o);
       o.initDimensions();
+    }
+
+    if ((o as any).isArrow) {
+      o.set({
+        objectCaching: false,
+        lockUniScaling: true
+      });
+      const children = o.getObjects ? o.getObjects() : (o._objects || []);
+      children.forEach((c: any) => c.set({ objectCaching: false, strokeUniform: true }));
     }
 
     if (o.isLocked) {
@@ -1965,7 +2076,7 @@ const spawnStickyNote = (x: number, y: number, colorCfg = selectedStickyColor.va
       offsetY: 4
     }),
     perPixelTargetFind: true,
-    lockUniScaling: true
+    lockUniScaling: false
   });
 
   (note as any).isStickyNote = true;
@@ -1985,6 +2096,7 @@ const spawnStickyNote = (x: number, y: number, colorCfg = selectedStickyColor.va
     const extraOffset = Math.max(0, (h - linesH) / 2);
     return -h / 2 + extraOffset;
   };
+  setupStickyControls(note);
   note.initDimensions();
 
   canvas.add(note);
@@ -2034,10 +2146,13 @@ const duplicateStickyNote = async (note: any) => {
     left: (note.left || 0) + 24,
     top: (note.top || 0) + 24,
     evented: true,
-    perPixelTargetFind: true
+    perPixelTargetFind: true,
+    lockUniScaling: false
   });
   (cloned as any).isStickyNote = true;
   (cloned as any).stickyColorConfig = (note as any).stickyColorConfig;
+  (cloned as any).minHeight = (note as any).minHeight || 180;
+  setupStickyControls(cloned);
   canvas.add(cloned);
   canvas.setActiveObject(cloned);
   canvas.requestRenderAll();
@@ -2621,7 +2736,6 @@ const addShape = (type: any) => {
       canvas.isDrawingMode = true;
       canvas.selection = false;
     }
-    displayToast('Arrow Brush: draw line or curve to create arrow ✨');
   } else {
     isDrawingMode.value = false;
     if (canvas) {

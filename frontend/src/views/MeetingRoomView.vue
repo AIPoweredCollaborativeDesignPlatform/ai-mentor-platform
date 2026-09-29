@@ -93,12 +93,10 @@ const startWhiteboardResize = (e: MouseEvent) => {
   window.addEventListener('mouseup', stopResize);
 };
 
-// Only close whiteboard if a broadcast transition from active to stopped occurred
+// When broadcast stops, switch to local sketchpad without closing whiteboard
 watch(() => roomStore.currentRoom?.whiteboardActive, (isActive, wasActive) => {
   if (wasActive === true && isActive === false) {
-    isWhiteboardOpen.value = false;
-    activeWhiteboardAssetId.value = null;
-    currentWhiteboardJson.value = undefined;
+    // Whiteboard remains open in personal sketchpad mode
   }
 });
 

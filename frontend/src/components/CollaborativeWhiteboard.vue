@@ -407,14 +407,27 @@ const createArrowFromPoints = (pts: Array<{ x: number; y: number }>) => {
     if (dist > maxDev) maxDev = dist;
   }
 
+  const headLen = Math.max(14, strokeWidth.value * 3.6);
+  const headAngle = Math.PI / 6; // 30 degrees
+
   let shaft: any;
   let tangentAngle = Math.atan2(pn.y - p0.y, pn.x - p0.x);
 
-  if (maxDev < Math.max(16, lineLen * 0.12) || pts.length <= 4) {
-    shaft = new fabric.Line([p0.x, p0.y, pn.x, pn.y], {
+  const isStraight = maxDev < Math.max(16, lineLen * 0.12) || pts.length <= 4;
+
+  if (isStraight) {
+    // For straight line: tangent is purely the chord angle (start to end), immune to end jitter
+    tangentAngle = Math.atan2(pn.y - p0.y, pn.x - p0.x);
+    // Terminate shaft slightly inside the arrowhead body so rounded stroke cap does not poke out past the tip
+    const shaftCut = headLen * 0.55;
+    const shaftEndX = pn.x - shaftCut * Math.cos(tangentAngle);
+    const shaftEndY = pn.y - shaftCut * Math.sin(tangentAngle);
+
+    shaft = new fabric.Line([p0.x, p0.y, shaftEndX, shaftEndY], {
       stroke: activeColor.value,
       strokeWidth: strokeWidth.value,
       strokeLineCap: 'round',
+      strokeUniform: true,
       perPixelTargetFind: true
     });
   } else {
@@ -434,21 +447,43 @@ const createArrowFromPoints = (pts: Array<{ x: number; y: number }>) => {
       sampled.push(pn);
     }
 
-    if (sampled.length < 3) {
-      shaft = new fabric.Line([p0.x, p0.y, pn.x, pn.y], {
+    // Direction smoothing: calculate tangent from a backward window of >= 25px or last 3 points
+    let pBack = sampled[Math.max(0, sampled.length - 2)];
+    let accumBack = 0;
+    for (let i = sampled.length - 1; i >= 1; i--) {
+      accumBack += Math.hypot(sampled[i].x - sampled[i - 1].x, sampled[i].y - sampled[i - 1].y);
+      if (accumBack >= Math.max(25, lineLen * 0.2)) {
+        pBack = sampled[i - 1];
+        break;
+      }
+    }
+    tangentAngle = Math.atan2(pn.y - pBack.y, pn.x - pBack.x);
+
+    // Shorten end of shaft by cutting the last segment so rounded cap does not poke out past tip
+    const shaftCut = headLen * 0.55;
+    const shaftEndX = pn.x - shaftCut * Math.cos(tangentAngle);
+    const shaftEndY = pn.y - shaftCut * Math.sin(tangentAngle);
+
+    // Replace final point in sampled with the cut shaftEnd
+    const shaftSampled = [...sampled];
+    shaftSampled[shaftSampled.length - 1] = { x: shaftEndX, y: shaftEndY };
+
+    if (shaftSampled.length < 3) {
+      shaft = new fabric.Line([p0.x, p0.y, shaftEndX, shaftEndY], {
         stroke: activeColor.value,
         strokeWidth: strokeWidth.value,
         strokeLineCap: 'round',
+        strokeUniform: true,
         perPixelTargetFind: true
       });
     } else {
-      let pathD = `M ${sampled[0].x.toFixed(1)} ${sampled[0].y.toFixed(1)}`;
-      const m = sampled.length - 1;
+      let pathD = `M ${shaftSampled[0].x.toFixed(1)} ${shaftSampled[0].y.toFixed(1)}`;
+      const m = shaftSampled.length - 1;
       for (let i = 0; i < m; i++) {
-        const pPrev = sampled[Math.max(0, i - 1)];
-        const pCur = sampled[i];
-        const pNext = sampled[i + 1];
-        const pAfter = sampled[Math.min(m, i + 2)];
+        const pPrev = shaftSampled[Math.max(0, i - 1)];
+        const pCur = shaftSampled[i];
+        const pNext = shaftSampled[i + 1];
+        const pAfter = shaftSampled[Math.min(m, i + 2)];
 
         const cp1x = pCur.x + (pNext.x - pPrev.x) / 6;
         const cp1y = pCur.y + (pNext.y - pPrev.y) / 6;
@@ -464,17 +499,13 @@ const createArrowFromPoints = (pts: Array<{ x: number; y: number }>) => {
         fill: 'transparent',
         strokeLineCap: 'round',
         strokeLineJoin: 'round',
+        strokeUniform: true,
         perPixelTargetFind: true
       });
-
-      const pPrev = sampled[sampled.length - 2];
-      tangentAngle = Math.atan2(pn.y - pPrev.y, pn.x - pPrev.x);
     }
   }
 
   // 2. Arrowhead triangle oriented along tangentAngle
-  const headLen = Math.max(14, strokeWidth.value * 3.6);
-  const headAngle = Math.PI / 6; // 30 degrees
   const w1x = pn.x - headLen * Math.cos(tangentAngle - headAngle);
   const w1y = pn.y - headLen * Math.sin(tangentAngle - headAngle);
   const w2x = pn.x - headLen * Math.cos(tangentAngle + headAngle);
@@ -491,6 +522,7 @@ const createArrowFromPoints = (pts: Array<{ x: number; y: number }>) => {
       stroke: activeColor.value,
       strokeWidth: 1,
       strokeLineJoin: 'round',
+      strokeUniform: true,
       perPixelTargetFind: true
     }
   );
@@ -498,6 +530,7 @@ const createArrowFromPoints = (pts: Array<{ x: number; y: number }>) => {
   const arrow = new fabric.Group([shaft, head], {
     selectable: true,
     evented: true,
+    strokeUniform: true,
     perPixelTargetFind: true
   });
   (arrow as any).isArrow = true;
@@ -555,6 +588,7 @@ const createSmoothedShape = (pts: Array<{ x: number; y: number }>) => {
         stroke: activeColor.value,
         strokeWidth: strokeWidth.value,
         fill: 'transparent',
+        strokeUniform: true,
         perPixelTargetFind: true
       });
     }
@@ -581,6 +615,7 @@ const createSmoothedShape = (pts: Array<{ x: number; y: number }>) => {
         stroke: activeColor.value,
         strokeWidth: strokeWidth.value,
         fill: 'transparent',
+        strokeUniform: true,
         perPixelTargetFind: true
       });
     }
@@ -598,6 +633,7 @@ const createSmoothedShape = (pts: Array<{ x: number; y: number }>) => {
         stroke: activeColor.value,
         strokeWidth: strokeWidth.value,
         fill: 'transparent',
+        strokeUniform: true,
         perPixelTargetFind: true
       });
     }
@@ -615,6 +651,7 @@ const createSmoothedShape = (pts: Array<{ x: number; y: number }>) => {
         stroke: activeColor.value,
         strokeWidth: strokeWidth.value,
         fill: 'transparent',
+        strokeUniform: true,
         perPixelTargetFind: true
       });
     }
@@ -635,6 +672,7 @@ const createSmoothedShape = (pts: Array<{ x: number; y: number }>) => {
       stroke: activeColor.value,
       strokeWidth: strokeWidth.value,
       strokeLineCap: 'round',
+      strokeUniform: true,
       perPixelTargetFind: true
     });
   }
@@ -662,6 +700,7 @@ const createSmoothedShape = (pts: Array<{ x: number; y: number }>) => {
       stroke: activeColor.value,
       strokeWidth: strokeWidth.value,
       strokeLineCap: 'round',
+      strokeUniform: true,
       perPixelTargetFind: true
     });
   }
@@ -688,6 +727,7 @@ const createSmoothedShape = (pts: Array<{ x: number; y: number }>) => {
     fill: 'transparent',
     strokeLineCap: 'round',
     strokeLineJoin: 'round',
+    strokeUniform: true,
     perPixelTargetFind: true
   });
 };
@@ -716,18 +756,13 @@ const onPencilHoldDetected = () => {
   quickShapeActiveObj = shape;
   const p0 = pencilStrokePoints[0];
   const pn = pencilStrokePoints[pencilStrokePoints.length - 1];
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (const pt of pencilStrokePoints) {
-    if (pt.x < minX) minX = pt.x;
-    if (pt.x > maxX) maxX = pt.x;
-    if (pt.y < minY) minY = pt.y;
-    if (pt.y > maxY) maxY = pt.y;
-  }
-  quickShapeAnchor = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+
+  // Scaling anchor is bound to the very first pen-down point p0
+  quickShapeAnchor = { x: p0.x, y: p0.y };
   quickShapeArrowP0 = { x: p0.x, y: p0.y };
-  quickShapeInitialDist = Math.max(10, Math.hypot(pn.x - quickShapeAnchor.x, pn.y - quickShapeAnchor.y));
-  quickShapeInitialDistX = Math.max(10, Math.abs(pn.x - quickShapeAnchor.x));
-  quickShapeInitialDistY = Math.max(10, Math.abs(pn.y - quickShapeAnchor.y));
+  quickShapeInitialDist = Math.max(10, Math.hypot(pn.x - p0.x, pn.y - p0.y));
+  quickShapeInitialDistX = Math.max(10, Math.abs(pn.x - p0.x));
+  quickShapeInitialDistY = Math.max(10, Math.abs(pn.y - p0.y));
   pendingQuickShape = null;
 };
 
@@ -943,17 +978,25 @@ const initFabric = () => {
       const sx = obj.scaleX || 1;
       const sy = obj.scaleY || 1;
       if (sx !== 1 || sy !== 1) {
+        const transform = (e as any).transform || (canvas as any)?._currentTransform;
+        const originX = transform?.originX || 'left';
+        const originY = transform?.originY || 'top';
+        const fixedPoint = (obj as any).getPositionByOrigin ? (obj as any).getPositionByOrigin(originX, originY) : null;
+
         const curW = obj.width || 180;
         const curMinH = (obj as any).minHeight || obj.height || 180;
-        const newW = Math.max(100, Math.round(curW * sx));
-        const newH = Math.max(100, Math.round(curMinH * sy));
-        (obj as any).minHeight = newH;
+        const targetW = Math.max(140, Math.round(curW * sx));
+        const targetH = Math.max(140, Math.round(curMinH * sy));
+        (obj as any).minHeight = targetH;
         obj.set({
-          width: newW,
+          width: targetW,
           scaleX: 1,
           scaleY: 1
         });
         obj.initDimensions();
+        if (fixedPoint && (obj as any).setPositionByOrigin) {
+          (obj as any).setPositionByOrigin(fixedPoint, originX, originY);
+        }
         obj.setCoords();
       }
     }
@@ -1273,33 +1316,37 @@ const initFabric = () => {
           canvas.setActiveObject(quickShapeActiveObj);
         }
       } else if (quickShapeActiveObj.type === 'line') {
-        quickShapeActiveObj.set({ x2: curScene.x, y2: curScene.y });
+        quickShapeActiveObj.set({ x1: quickShapeAnchor.x, y1: quickShapeAnchor.y, x2: curScene.x, y2: curScene.y });
         quickShapeActiveObj.setCoords();
       } else if (quickShapeActiveObj.type === 'ellipse') {
-        const rx = Math.max(5, Math.abs(curScene.x - quickShapeAnchor.x));
-        const ry = Math.max(5, Math.abs(curScene.y - quickShapeAnchor.y));
-        quickShapeActiveObj.set({ rx, ry });
+        const rx = Math.max(5, Math.abs(curScene.x - quickShapeAnchor.x) / 2);
+        const ry = Math.max(5, Math.abs(curScene.y - quickShapeAnchor.y) / 2);
+        const left = Math.min(quickShapeAnchor.x, curScene.x) + rx;
+        const top = Math.min(quickShapeAnchor.y, curScene.y) + ry;
+        quickShapeActiveObj.set({ left, top, rx, ry });
         quickShapeActiveObj.setCoords();
       } else if (quickShapeActiveObj.type === 'rect' || quickShapeActiveObj.type === 'triangle') {
-        const halfW = Math.abs(curScene.x - quickShapeAnchor.x);
-        const halfH = Math.abs(curScene.y - quickShapeAnchor.y);
-        const w = Math.max(10, halfW * 2);
-        const h = Math.max(10, halfH * 2);
+        const left = Math.min(quickShapeAnchor.x, curScene.x);
+        const top = Math.min(quickShapeAnchor.y, curScene.y);
+        const w = Math.max(10, Math.abs(curScene.x - quickShapeAnchor.x));
+        const h = Math.max(10, Math.abs(curScene.y - quickShapeAnchor.y));
         quickShapeActiveObj.set({
-          left: quickShapeAnchor.x - w / 2,
-          top: quickShapeAnchor.y - h / 2,
+          left,
+          top,
           width: w,
           height: h
         });
         quickShapeActiveObj.setCoords();
       } else {
-        const distX = Math.max(5, Math.abs(curScene.x - quickShapeAnchor.x));
-        const distY = Math.max(5, Math.abs(curScene.y - quickShapeAnchor.y));
+        const dx = curScene.x - quickShapeAnchor.x;
+        const dy = curScene.y - quickShapeAnchor.y;
         const initX = Math.max(10, quickShapeInitialDistX);
         const initY = Math.max(10, quickShapeInitialDistY);
         quickShapeActiveObj.set({
-          scaleX: Math.max(0.05, distX / initX),
-          scaleY: Math.max(0.05, distY / initY)
+          scaleX: Math.max(0.05, Math.abs(dx) / initX),
+          scaleY: Math.max(0.05, Math.abs(dy) / initY),
+          flipX: dx < 0,
+          flipY: dy < 0
         });
         quickShapeActiveObj.setCoords();
       }
@@ -1363,7 +1410,13 @@ const initFabric = () => {
 
     if (isDragging) {
       isDragging = false;
-      canvas.selection = currentTool.value === 'select';
+    }
+    canvas.selection = currentTool.value === 'select';
+
+    // Flush any deferred canvas resizing that arrived during drawing or dragging
+    if (pendingResize) {
+      performCanvasResize(pendingResize.w, pendingResize.h);
+      pendingResize = null;
     }
 
     // Finish QuickShape continuous resize mode
@@ -1394,7 +1447,7 @@ const initFabric = () => {
         }
         canvas.add(arrow);
         arrow.setCoords();
-        canvas.setActiveObject(arrow);
+        // Do NOT call setActiveObject(arrow) when arrow tool is active to allow continuous drawing!
         canvas.requestRenderAll();
         saveHistoryState();
         syncToFirebase();
@@ -1528,17 +1581,25 @@ const initFabric = () => {
       const sx = obj.scaleX || 1;
       const sy = obj.scaleY || 1;
       if (sx !== 1 || sy !== 1) {
+        const transform = (e as any).transform || (canvas as any)?._currentTransform;
+        const originX = transform?.originX || 'left';
+        const originY = transform?.originY || 'top';
+        const fixedPoint = (obj as any).getPositionByOrigin ? (obj as any).getPositionByOrigin(originX, originY) : null;
+
         const curW = obj.width || 180;
         const curMinH = (obj as any).minHeight || obj.height || 180;
-        const newW = Math.max(100, Math.round(curW * sx));
-        const newH = Math.max(100, Math.round(curMinH * sy));
-        (obj as any).minHeight = newH;
+        const targetW = Math.max(140, Math.round(curW * sx));
+        const targetH = Math.max(140, Math.round(curMinH * sy));
+        (obj as any).minHeight = targetH;
         obj.set({
-          width: newW,
+          width: targetW,
           scaleX: 1,
           scaleY: 1
         });
         obj.initDimensions();
+        if (fixedPoint && (obj as any).setPositionByOrigin) {
+          (obj as any).setPositionByOrigin(fixedPoint, originX, originY);
+        }
         obj.setCoords();
       }
     }
@@ -1546,8 +1607,17 @@ const initFabric = () => {
   });
   canvas.on('object:rotating', updateStickyToolbar);
 
-  // Handle resizing with rAF throttling and synchronous renderAll to avoid blank flashing
+  // Handle resizing with rAF throttling and interaction-aware deferral to prevent clearing in-progress strokes
   let resizeRafId: number | null = null;
+  let pendingResize: { w: number; h: number } | null = null;
+
+  const performCanvasResize = (w: number, h: number) => {
+    if (!canvas || !wrapperRef.value) return;
+    if (Math.abs(canvas.getWidth() - w) < 2 && Math.abs(canvas.getHeight() - h) < 2) return;
+    canvas.setDimensions({ width: w, height: h });
+    canvas.renderAll();
+  };
+
   const resizeObserver = new ResizeObserver(() => {
     if (resizeRafId) cancelAnimationFrame(resizeRafId);
     resizeRafId = requestAnimationFrame(() => {
@@ -1555,10 +1625,14 @@ const initFabric = () => {
         const w = wrapperRef.value.clientWidth;
         const h = wrapperRef.value.clientHeight;
         whiteboardContainerWidth.value = w;
-        if (canvas.getWidth() !== w || canvas.getHeight() !== h) {
-          canvas.setDimensions({ width: w, height: h });
-          canvas.renderAll();
+
+        // If user is actively drawing, selecting, or dragging, DEFER canvas dimensions change until mouse:up!
+        const isInteracting = (canvas as any)._isCurrentlyDrawing || (canvas as any)._groupSelector || isDragging || isQuickShapeResizing || pencilStrokePoints.length > 0;
+        if (isInteracting) {
+          pendingResize = { w, h };
+          return;
         }
+        performCanvasResize(w, h);
       }
     });
   });
@@ -2513,8 +2587,8 @@ const handleStopBroadcast = async () => {
   const dataUrl = getCanvasSnapshot(0.7);
   emit('save-state', json, dataUrl, currentAssetId.value);
   hasUnsavedChanges.value = false;
-  roomStore.endWhiteboardSession();
-  emit('close');
+  await roomStore.endWhiteboardSession();
+  displayToast('Broadcast stopped — Switched to Local Sketchpad ✨');
 };
 
 const handleCloseRequest = () => {
@@ -2850,7 +2924,7 @@ onUnmounted(() => {
     <!-- Header -->
     <div
       class="absolute top-4 left-4 z-10 flex items-center gap-2 transition-opacity duration-200"
-      :class="{ 'opacity-30': isHoveringSend }"
+      :class="{ 'opacity-70': isHoveringSend }"
     >
       <div v-if="roomStore.currentRoom?.whiteboardActive" class="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-indigo-600/90 shadow-sm border border-indigo-400 flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-white animate-pulse">
         <Radio class="w-3.5 h-3.5" />
@@ -2884,7 +2958,7 @@ onUnmounted(() => {
     
     <div
       class="absolute top-4 right-4 z-10 flex items-center gap-1 sm:gap-2 transition-opacity duration-200"
-      :class="{ 'opacity-30': isHoveringSend }"
+      :class="{ 'opacity-70': isHoveringSend }"
     >
       <button v-if="roomStore.currentRoom?.whiteboardActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid" @click="handleStopBroadcast()" class="px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl bg-rose-500/90 hover:bg-rose-600 text-white shadow-sm transition text-xs font-semibold flex items-center gap-1 cursor-pointer">
         <X class="w-3.5 h-3.5" />
@@ -2920,7 +2994,7 @@ onUnmounted(() => {
     <!-- Canvas Wrapper with glowing Send viewport border on hover -->
     <div
       ref="wrapperRef"
-      class="flex-1 w-full h-full relative cursor-crosshair transition-all duration-300"
+      class="flex-1 w-full h-full relative cursor-crosshair transition-[box-shadow] duration-200"
       :class="{ 'ring-4 ring-inset ring-sky-400/90 shadow-[inset_0_0_40px_rgba(56,189,248,0.35)]': isHoveringSend }"
       @contextmenu.prevent
     >
@@ -2929,13 +3003,17 @@ onUnmounted(() => {
       <!-- Send Viewport Capture Framing Guide / Viewfinder -->
       <div
         v-if="isHoveringSend"
-        class="absolute inset-4 sm:inset-8 border-2 border-dashed border-sky-400 pointer-events-none rounded-2xl z-20 flex flex-col justify-between p-3 animate-in fade-in duration-200"
+        class="absolute inset-4 sm:inset-8 border-2 border-dashed border-sky-400 pointer-events-none rounded-2xl z-30 flex flex-col justify-start p-3 animate-in fade-in duration-200"
       >
-        <div class="flex justify-between items-center text-[11px] font-mono font-medium text-sky-400 bg-sky-950/90 px-2.5 py-1 rounded-lg w-max border border-sky-500/40">
-          <span>📷 Viewport Snapshot Area</span>
-        </div>
-        <div class="text-right text-[10px] font-mono text-sky-300/90 bg-slate-900/90 px-2 py-0.5 rounded self-end border border-slate-700">
-          Full visible screen will be captured to chat
+        <div class="flex justify-between items-center w-full">
+          <!-- Top Left -->
+          <div class="text-[11px] font-mono font-medium text-sky-400 bg-sky-950/90 px-2.5 py-1 rounded-lg border border-sky-500/40 shadow-sm">
+            <span>📷 Viewport Snapshot Area</span>
+          </div>
+          <!-- Top Right -->
+          <div class="text-[10px] font-mono text-sky-300/90 bg-slate-900/90 px-2.5 py-1 rounded-lg border border-slate-700 shadow-sm">
+            Full visible screen will be captured to chat
+          </div>
         </div>
       </div>
 
@@ -3078,7 +3156,7 @@ onUnmounted(() => {
       <div
         class="flex flex-col gap-1.5 transition-opacity duration-200"
         :class="[
-          { 'opacity-30': isHoveringSend },
+          { 'opacity-70': isHoveringSend },
           isStackedToolbar ? 'w-[220px] max-w-[92vw]' : 'w-[150px] sm:w-[200px]'
         ]"
       >
@@ -3111,7 +3189,7 @@ onUnmounted(() => {
         <div
           class="flex items-center transition-opacity duration-200"
           :class="[
-            { 'opacity-30': isHoveringSend },
+            { 'opacity-70': isHoveringSend },
             isNarrowToolbar ? 'gap-0.5' : 'gap-0.5 sm:gap-1'
           ]"
         >
@@ -3538,3 +3616,24 @@ onUnmounted(() => {
   </div>
 </template>
 
+<style scoped>
+:deep(.canvas-container) {
+  width: 100% !important;
+  height: 100% !important;
+  position: relative !important;
+}
+:deep(.lower-canvas) {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  z-index: 0 !important;
+  pointer-events: none !important;
+}
+:deep(.upper-canvas) {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  z-index: 1 !important;
+  pointer-events: auto !important;
+}
+</style>

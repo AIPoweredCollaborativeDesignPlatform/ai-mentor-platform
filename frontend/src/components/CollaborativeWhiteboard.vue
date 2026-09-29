@@ -56,7 +56,8 @@ const CUSTOM_PROPS = [
   'lockScalingX',
   'lockScalingY',
   'hasControls',
-  'isClosedLoop'
+  'isClosedLoop',
+  'padding'
 ];
 
 const hasUnsavedChanges = ref(false);
@@ -305,10 +306,15 @@ const liveNodeArrowSvg = computed(() => {
   const s0 = sPts[0];
   const sn = sPts[sPts.length - 1];
   const sDist = Math.hypot(sn.x - s0.x, sn.y - s0.y);
-  if (sDist < 4) return { pathD: '', headPoints: '', color, strokeWidth: screenWidth };
 
-  // If endpoints are brought close together, render as a smooth closed loop and hide arrowhead
-  const isClosed = sPts.length >= 3 && sDist < 25;
+  let totalScreenLen = 0;
+  for (let i = 1; i < sPts.length; i++) {
+    totalScreenLen += Math.hypot(sPts[i].x - sPts[i - 1].x, sPts[i].y - sPts[i - 1].y);
+  }
+  if (totalScreenLen < 6) return { pathD: '', headPoints: '', color, strokeWidth: screenWidth };
+
+  // If endpoints are brought close together or arrow is closed loop, render as a smooth closed loop and hide arrowhead
+  const isClosed = sPts.length >= 3 && (sDist < 25 || ((editingArrow.value as any)?.isClosedLoop && sDist < 35));
   if (isClosed) {
     const shaftSampled = [...sPts];
     shaftSampled[shaftSampled.length - 1] = { x: s0.x, y: s0.y };
@@ -335,6 +341,8 @@ const liveNodeArrowSvg = computed(() => {
       strokeWidth: screenWidth
     };
   }
+
+  if (sDist < 4) return { pathD: '', headPoints: '', color, strokeWidth: screenWidth };
 
   const headLen = Math.max(14, rawWidth * 3.6) * zoom;
   const headAngle = Math.PI / 6;
@@ -470,6 +478,9 @@ const onNodePointerDown = (index: number, e: PointerEvent) => {
         animFrameId = null;
         if (latestScenePt) {
           editingArrowPoints.value[index] = { ...latestScenePt };
+          if ((editingArrow.value as any)?.isClosedLoop && index === 0) {
+            editingArrowPoints.value[editingArrowPoints.value.length - 1] = { ...latestScenePt };
+          }
         }
       });
     }
@@ -484,6 +495,9 @@ const onNodePointerDown = (index: number, e: PointerEvent) => {
     }
     if (latestScenePt) {
       editingArrowPoints.value[index] = { ...latestScenePt };
+      if ((editingArrow.value as any)?.isClosedLoop && index === 0) {
+        editingArrowPoints.value[editingArrowPoints.value.length - 1] = { ...latestScenePt };
+      }
     }
     editingNodeIndex.value = null;
     isDraggingNode.value = false;
@@ -2710,6 +2724,7 @@ const setupStickyControls = (note: any) => {
 };
 
 const applyStickyNoteMethods = (note: any) => {
+  note.padding = 0;
   note.calcTextHeight = function() {
     const textH = fabric.Textbox.prototype.calcTextHeight.call(this);
     return Math.max(textH, (this as any).minHeight !== undefined ? (this as any).minHeight : 60);
@@ -2996,7 +3011,7 @@ const spawnStickyNote = (x: number, y: number, colorCfg = selectedStickyColor.va
     fill: colorCfg.text,
     textAlign: 'center',
     splitByGrapheme: true,
-    padding: 14,
+    padding: 0,
     rx: 0,
     ry: 0,
     strokeWidth: 0,

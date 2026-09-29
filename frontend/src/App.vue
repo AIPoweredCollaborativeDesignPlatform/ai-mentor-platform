@@ -13,7 +13,7 @@ import ToastContainer from './components/ToastContainer.vue';
     
     <!-- Unified hidden version number -->
     <div class="fixed bottom-1 right-2 text-[9px] text-slate-500/20 pointer-events-none select-none z-50 font-mono">
-    v1.9.8 (2026-09-29 11:48:18)
+    v1.9.9 (2026-09-29 12:15:07)
   </div>
   </div>
 </template>

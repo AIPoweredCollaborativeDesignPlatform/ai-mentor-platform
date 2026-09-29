@@ -360,15 +360,24 @@ let pencilStrokePoints: Array<{ x: number; y: number }> = [];
 let isPencilHolding = false;
 let pendingQuickShape: any = null;
 let lastPencilMovePos: { x: number; y: number } | null = null;
+let isMouseDown = false;
+let hasFlattenedShapeInCurrentStroke = false;
 
 // QuickShape continuous resize state
 let isQuickShapeResizing = false;
 let quickShapeActiveObj: any = null;
 let quickShapeAnchor = { x: 0, y: 0 };
 let quickShapeArrowP0: { x: number; y: number } | null = null;
-let quickShapeInitialDist = 1;
-let quickShapeInitialDistX = 1;
-let quickShapeInitialDistY = 1;
+let quickShapeP0Scene: fabric.Point | null = null;
+let quickShapeP0Local: fabric.Point | null = null;
+let quickShapeInitialSpanX = 1;
+let quickShapeInitialSpanY = 1;
+let quickShapeInitialSignX = 1;
+let quickShapeInitialSignY = 1;
+let quickShapeBaseScaleX = 1;
+let quickShapeBaseScaleY = 1;
+let lastSyncedJson = '';
+let pendingRemoteState: string | null = null;
 
 // Ramer-Douglas-Peucker (RDP) polygonal simplification
 const rdp = (points: Array<{ x: number; y: number }>, epsilon: number): Array<{ x: number; y: number }> => {
@@ -447,12 +456,13 @@ const createArrowFromPoints = (pts: Array<{ x: number; y: number }>) => {
       sampled.push(pn);
     }
 
-    // Direction smoothing: calculate tangent from a backward window of >= 25px or last 3 points
+    // Direction smoothing: calculate tangent from a backward window of >= 55px or 35% of length to prevent release jitter
     let pBack = sampled[Math.max(0, sampled.length - 2)];
     let accumBack = 0;
+    const tangentWindow = Math.min(lineLen * 0.65, Math.max(55, lineLen * 0.35));
     for (let i = sampled.length - 1; i >= 1; i--) {
       accumBack += Math.hypot(sampled[i].x - sampled[i - 1].x, sampled[i].y - sampled[i - 1].y);
-      if (accumBack >= Math.max(25, lineLen * 0.2)) {
+      if (accumBack >= tangentWindow) {
         pBack = sampled[i - 1];
         break;
       }
@@ -534,7 +544,10 @@ const createArrowFromPoints = (pts: Array<{ x: number; y: number }>) => {
     perPixelTargetFind: true
   });
   (arrow as any).isArrow = true;
+  (arrow as any).arrowPoints = pts.map(p => ({ x: p.x, y: p.y }));
   (arrow as any).arrowP0 = { x: p0.x, y: p0.y };
+  (arrow as any).arrowPn = { x: pn.x, y: pn.y };
+  (arrow as any).initialMatrix = arrow.calcTransformMatrix();
   return arrow;
 };
 
@@ -735,6 +748,7 @@ const createSmoothedShape = (pts: Array<{ x: number; y: number }>) => {
 const onPencilHoldDetected = () => {
   if (!canvas || !isDrawingMode.value || pencilStrokePoints.length < 5) return;
   isPencilHolding = true;
+  hasFlattenedShapeInCurrentStroke = true;
 
   const shape = createSmoothedShape(pencilStrokePoints);
   if (!shape) return;
@@ -747,6 +761,7 @@ const onPencilHoldDetected = () => {
   }
 
   canvas.add(shape);
+  shape.setCoords();
   canvas.setActiveObject(shape);
   canvas.requestRenderAll();
   updateSelectionState();
@@ -757,12 +772,21 @@ const onPencilHoldDetected = () => {
   const p0 = pencilStrokePoints[0];
   const pn = pencilStrokePoints[pencilStrokePoints.length - 1];
 
-  // Scaling anchor is bound to the very first pen-down point p0
+  // Scaling anchor is rigidly bound to the initial pen-down point p0
+  quickShapeP0Scene = new fabric.Point(p0.x, p0.y);
+  if ((shape as any).toLocalPoint) {
+    quickShapeP0Local = (shape as any).toLocalPoint(quickShapeP0Scene, 'left', 'top');
+  } else {
+    quickShapeP0Local = new fabric.Point(p0.x - shape.left, p0.y - shape.top);
+  }
   quickShapeAnchor = { x: p0.x, y: p0.y };
   quickShapeArrowP0 = { x: p0.x, y: p0.y };
-  quickShapeInitialDist = Math.max(10, Math.hypot(pn.x - p0.x, pn.y - p0.y));
-  quickShapeInitialDistX = Math.max(10, Math.abs(pn.x - p0.x));
-  quickShapeInitialDistY = Math.max(10, Math.abs(pn.y - p0.y));
+  quickShapeInitialSpanX = Math.max(15, Math.abs(pn.x - p0.x));
+  quickShapeInitialSpanY = Math.max(15, Math.abs(pn.y - p0.y));
+  quickShapeInitialSignX = Math.sign(pn.x - p0.x) || 1;
+  quickShapeInitialSignY = Math.sign(pn.y - p0.y) || 1;
+  quickShapeBaseScaleX = shape.scaleX || 1;
+  quickShapeBaseScaleY = shape.scaleY || 1;
   pendingQuickShape = null;
 };
 
@@ -778,7 +802,10 @@ const initFabric = () => {
     isDrawingMode: true,
     backgroundColor: '',
     width: wrapperRef.value.clientWidth,
-    height: wrapperRef.value.clientHeight
+    height: wrapperRef.value.clientHeight,
+    selectionColor: 'rgba(99, 102, 241, 0.18)',
+    selectionBorderColor: '#6366f1',
+    selectionLineWidth: 1.5
   });
 
   // Guard against browser native context menu anywhere on canvas wrapper and elements
@@ -958,8 +985,9 @@ const initFabric = () => {
 
   // Sync and history on changes
   canvas.on('path:created', (e: any) => {
-    if (isPencilHolding || isQuickShapeResizing || currentTool.value === 'arrow') {
+    if (hasFlattenedShapeInCurrentStroke || isPencilHolding || isQuickShapeResizing || currentTool.value === 'arrow') {
       if (e.path) canvas?.remove(e.path);
+      hasFlattenedShapeInCurrentStroke = false;
       return;
     }
     if (e.path) {
@@ -975,31 +1003,74 @@ const initFabric = () => {
   canvas.on('object:modified', (e: any) => {
     const obj = e?.target;
     if (obj && (obj.isStickyNote || obj.stickyColorConfig)) {
+      const transform = (e as any).transform || (canvas as any)?._currentTransform;
+      const originX = transform?.originX || 'left';
+      const originY = transform?.originY || 'top';
+      const fixedPoint = (obj as any).getPositionByOrigin ? (obj as any).getPositionByOrigin(originX, originY) : null;
+
       const sx = obj.scaleX || 1;
       const sy = obj.scaleY || 1;
-      if (sx !== 1 || sy !== 1) {
-        const transform = (e as any).transform || (canvas as any)?._currentTransform;
-        const originX = transform?.originX || 'left';
-        const originY = transform?.originY || 'top';
-        const fixedPoint = (obj as any).getPositionByOrigin ? (obj as any).getPositionByOrigin(originX, originY) : null;
+      const curW = obj.width || 180;
+      const curMinH = (obj as any).minHeight !== undefined ? (obj as any).minHeight : (obj.height || 180);
 
-        const curW = obj.width || 180;
-        const curMinH = (obj as any).minHeight || obj.height || 180;
-        const targetW = Math.max(140, Math.round(curW * sx));
-        const targetH = Math.max(140, Math.round(curMinH * sy));
-        (obj as any).minHeight = targetH;
-        obj.set({
-          width: targetW,
-          scaleX: 1,
-          scaleY: 1
-        });
-        obj.initDimensions();
-        if (fixedPoint && (obj as any).setPositionByOrigin) {
-          (obj as any).setPositionByOrigin(fixedPoint, originX, originY);
+      const minW = 125;
+      const minH = 60;
+      let targetW = Math.round(curW * sx);
+      let targetH = Math.round(curMinH * sy);
+      if (targetW < minW) targetW = minW;
+      if (targetH < minH) targetH = minH;
+
+      (obj as any).minHeight = targetH;
+      obj.set({
+        width: targetW,
+        scaleX: 1,
+        scaleY: 1
+      });
+      obj.initDimensions();
+      if (fixedPoint && (obj as any).setPositionByOrigin) {
+        (obj as any).setPositionByOrigin(fixedPoint, originX, originY);
+      }
+      obj.setCoords();
+    }
+
+    // Reconstruct arrow with pristine scale 1.0 and un-stretched arrowhead after scaling
+    if (canvas && obj && (obj as any).isArrow && (obj as any).arrowPoints && (obj as any).initialMatrix && ((obj.scaleX && obj.scaleX !== 1) || (obj.scaleY && obj.scaleY !== 1))) {
+      try {
+        const M0 = (obj as any).initialMatrix;
+        const M1 = obj.calcTransformMatrix();
+        const invM0 = fabric.util.invertTransform(M0);
+        const M_delta = fabric.util.multiplyTransformMatrices(M1, invM0);
+        const newPts = (obj as any).arrowPoints.map((pt: any) => fabric.util.transformPoint(pt, M_delta));
+        const newArrow = createArrowFromPoints(newPts);
+        if (newArrow && canvas) {
+          (newArrow as any).isLocked = (obj as any).isLocked;
+          if ((obj as any).isLocked) {
+            newArrow.set({
+              lockMovementX: true,
+              lockMovementY: true,
+              lockRotation: true,
+              lockScalingX: true,
+              lockScalingY: true,
+              hasControls: false
+            });
+          }
+          const allObjs = canvas.getObjects();
+          const idx = allObjs.indexOf(obj);
+          canvas.remove(obj);
+          if (idx !== -1) {
+            canvas.insertAt(idx, newArrow);
+          } else {
+            canvas.add(newArrow);
+          }
+          newArrow.setCoords();
+          canvas.setActiveObject(newArrow);
+          canvas.requestRenderAll();
         }
-        obj.setCoords();
+      } catch (err) {
+        console.warn('Failed to bake arrow scaling:', err);
       }
     }
+
     if (!isInternalChange) {
       saveHistoryState();
       syncToFirebase();
@@ -1161,6 +1232,9 @@ const initFabric = () => {
 
     if (e.button !== 0) return;
 
+    isMouseDown = true;
+    hasFlattenedShapeInCurrentStroke = false;
+
     const scenePoint = canvas.getScenePoint(e);
 
     // Pencil / Arrow drawing mode: smart switch if object was clicked, else start tracking for QuickShape hold
@@ -1318,37 +1392,34 @@ const initFabric = () => {
       } else if (quickShapeActiveObj.type === 'line') {
         quickShapeActiveObj.set({ x1: quickShapeAnchor.x, y1: quickShapeAnchor.y, x2: curScene.x, y2: curScene.y });
         quickShapeActiveObj.setCoords();
-      } else if (quickShapeActiveObj.type === 'ellipse') {
-        const rx = Math.max(5, Math.abs(curScene.x - quickShapeAnchor.x) / 2);
-        const ry = Math.max(5, Math.abs(curScene.y - quickShapeAnchor.y) / 2);
-        const left = Math.min(quickShapeAnchor.x, curScene.x) + rx;
-        const top = Math.min(quickShapeAnchor.y, curScene.y) + ry;
-        quickShapeActiveObj.set({ left, top, rx, ry });
-        quickShapeActiveObj.setCoords();
-      } else if (quickShapeActiveObj.type === 'rect' || quickShapeActiveObj.type === 'triangle') {
-        const left = Math.min(quickShapeAnchor.x, curScene.x);
-        const top = Math.min(quickShapeAnchor.y, curScene.y);
-        const w = Math.max(10, Math.abs(curScene.x - quickShapeAnchor.x));
-        const h = Math.max(10, Math.abs(curScene.y - quickShapeAnchor.y));
-        quickShapeActiveObj.set({
-          left,
-          top,
-          width: w,
-          height: h
-        });
-        quickShapeActiveObj.setCoords();
       } else {
-        const dx = curScene.x - quickShapeAnchor.x;
-        const dy = curScene.y - quickShapeAnchor.y;
-        const initX = Math.max(10, quickShapeInitialDistX);
-        const initY = Math.max(10, quickShapeInitialDistY);
+        const p0 = quickShapeAnchor;
+        const curSpanX = curScene.x - p0.x;
+        const curSpanY = curScene.y - p0.y;
+
+        const rawScaleX = Math.abs(curSpanX) / (quickShapeInitialSpanX || 15);
+        const rawScaleY = Math.abs(curSpanY) / (quickShapeInitialSpanY || 15);
+
+        const targetScaleX = Math.max(0.05, (quickShapeBaseScaleX || 1) * rawScaleX);
+        const targetScaleY = Math.max(0.05, (quickShapeBaseScaleY || 1) * rawScaleY);
+
+        const flipX = (Math.sign(curSpanX) !== quickShapeInitialSignX && Math.sign(curSpanX) !== 0);
+        const flipY = (Math.sign(curSpanY) !== quickShapeInitialSignY && Math.sign(curSpanY) !== 0);
+
         quickShapeActiveObj.set({
-          scaleX: Math.max(0.05, Math.abs(dx) / initX),
-          scaleY: Math.max(0.05, Math.abs(dy) / initY),
-          flipX: dx < 0,
-          flipY: dy < 0
+          scaleX: targetScaleX,
+          scaleY: targetScaleY,
+          flipX: flipX,
+          flipY: flipY
         });
         quickShapeActiveObj.setCoords();
+
+        if (quickShapeP0Scene && quickShapeP0Local && quickShapeActiveObj.toGlobalPoint) {
+          const curGlobal = quickShapeActiveObj.toGlobalPoint(quickShapeP0Local);
+          quickShapeActiveObj.left += (quickShapeP0Scene.x - curGlobal.x);
+          quickShapeActiveObj.top += (quickShapeP0Scene.y - curGlobal.y);
+          quickShapeActiveObj.setCoords();
+        }
       }
       canvas.requestRenderAll();
       return;
@@ -1401,6 +1472,7 @@ const initFabric = () => {
   canvas.on('mouse:up', (opt) => {
     if (!canvas) return;
     const e = opt.e as MouseEvent;
+    isMouseDown = false;
 
     if (pencilHoldTimer) {
       clearTimeout(pencilHoldTimer);
@@ -1417,6 +1489,12 @@ const initFabric = () => {
     if (pendingResize) {
       performCanvasResize(pendingResize.w, pendingResize.h);
       pendingResize = null;
+    }
+
+    // Flush any deferred remote Firebase sync that arrived during drawing or dragging
+    if (pendingRemoteState) {
+      loadFromFirebase(pendingRemoteState);
+      pendingRemoteState = null;
     }
 
     // Finish QuickShape continuous resize mode
@@ -1578,29 +1656,48 @@ const initFabric = () => {
   canvas.on('object:scaling', (e: any) => {
     const obj = e.target;
     if (obj && (obj.isStickyNote || obj.stickyColorConfig)) {
+      const transform = (e as any).transform || (canvas as any)?._currentTransform;
+      const originX = transform?.originX || 'left';
+      const originY = transform?.originY || 'top';
+      const fixedPoint = (obj as any).getPositionByOrigin ? (obj as any).getPositionByOrigin(originX, originY) : null;
+
       const sx = obj.scaleX || 1;
       const sy = obj.scaleY || 1;
-      if (sx !== 1 || sy !== 1) {
-        const transform = (e as any).transform || (canvas as any)?._currentTransform;
-        const originX = transform?.originX || 'left';
-        const originY = transform?.originY || 'top';
-        const fixedPoint = (obj as any).getPositionByOrigin ? (obj as any).getPositionByOrigin(originX, originY) : null;
+      const curW = obj.width || 180;
+      const curMinH = (obj as any).minHeight !== undefined ? (obj as any).minHeight : (obj.height || 180);
 
-        const curW = obj.width || 180;
-        const curMinH = (obj as any).minHeight || obj.height || 180;
-        const targetW = Math.max(140, Math.round(curW * sx));
-        const targetH = Math.max(140, Math.round(curMinH * sy));
-        (obj as any).minHeight = targetH;
-        obj.set({
-          width: targetW,
-          scaleX: 1,
-          scaleY: 1
-        });
-        obj.initDimensions();
-        if (fixedPoint && (obj as any).setPositionByOrigin) {
-          (obj as any).setPositionByOrigin(fixedPoint, originX, originY);
+      const minW = 125;
+      const minH = 60;
+      let targetW = Math.round(curW * sx);
+      let targetH = Math.round(curMinH * sy);
+      if (targetW < minW) targetW = minW;
+      if (targetH < minH) targetH = minH;
+
+      (obj as any).minHeight = targetH;
+      obj.set({
+        width: targetW,
+        scaleX: 1,
+        scaleY: 1
+      });
+      obj.initDimensions();
+      if (fixedPoint && (obj as any).setPositionByOrigin) {
+        (obj as any).setPositionByOrigin(fixedPoint, originX, originY);
+      }
+      obj.setCoords();
+    }
+
+    if (obj && obj.isArrow) {
+      const objects = obj.getObjects ? obj.getObjects() : (obj._objects || []);
+      if (objects.length >= 2) {
+        const head = objects[1];
+        if (head) {
+          const sx = obj.scaleX || 1;
+          const sy = obj.scaleY || 1;
+          head.set({
+            scaleX: 1 / sx,
+            scaleY: 1 / sy
+          });
         }
-        obj.setCoords();
       }
     }
     updateStickyToolbar();
@@ -1697,11 +1794,11 @@ const rehydrateCanvasObjects = () => {
       o.lockUniScaling = true;
       const orig = o.calcTextHeight.bind(o);
       o.calcTextHeight = function() {
-        return Math.max(orig(), (this as any).minHeight || 180);
+        return Math.max(orig(), (this as any).minHeight !== undefined ? (this as any).minHeight : 60);
       };
       (o as any)._getTopOffset = function() {
         const linesH = orig();
-        const h = (this as any).height || 180;
+        const h = (this as any).height || (this as any).minHeight || 60;
         const extraOffset = Math.max(0, (h - linesH) / 2);
         return -h / 2 + extraOffset;
       };
@@ -1742,6 +1839,7 @@ const saveHistoryState = () => {
 const syncToFirebase = () => {
   if (isInternalChange || !canvas || !roomStore.currentRoom?.whiteboardActive) return;
   const json = getSerializedCanvasJson();
+  lastSyncedJson = json;
   roomStore.syncWhiteboardState(json);
 };
 
@@ -1765,6 +1863,15 @@ const loadFromFirebase = async (json: string) => {
 
 watch(() => roomStore.currentRoom?.whiteboardState, (newState, oldState) => {
   if (newState && newState !== oldState && roomStore.currentRoom?.whiteboardActive) {
+    // Ignore echo of local changes
+    if (newState === lastSyncedJson) return;
+
+    // Defer loading if user is actively drawing, selecting, or dragging
+    const isInteracting = isMouseDown || (canvas as any)?._groupSelector || isDragging || isQuickShapeResizing || pencilStrokePoints.length > 0;
+    if (isInteracting) {
+      pendingRemoteState = newState;
+      return;
+    }
     loadFromFirebase(newState);
   }
 });
@@ -1870,11 +1977,11 @@ const spawnStickyNote = (x: number, y: number, colorCfg = selectedStickyColor.va
   const origCalcTextHeight = note.calcTextHeight.bind(note);
   note.calcTextHeight = function() {
     const actualH = origCalcTextHeight();
-    return Math.max(actualH, (this as any).minHeight || 180);
+    return Math.max(actualH, (this as any).minHeight !== undefined ? (this as any).minHeight : 60);
   };
   (note as any)._getTopOffset = function() {
     const linesH = origCalcTextHeight();
-    const h = (this as any).height || 180;
+    const h = (this as any).height || (this as any).minHeight || 60;
     const extraOffset = Math.max(0, (h - linesH) / 2);
     return -h / 2 + extraOffset;
   };
@@ -2924,7 +3031,7 @@ onUnmounted(() => {
     <!-- Header -->
     <div
       class="absolute top-4 left-4 z-10 flex items-center gap-2 transition-opacity duration-200"
-      :class="{ 'opacity-70': isHoveringSend }"
+      :class="{ 'opacity-15': isHoveringSend }"
     >
       <div v-if="roomStore.currentRoom?.whiteboardActive" class="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-indigo-600/90 shadow-sm border border-indigo-400 flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-white animate-pulse">
         <Radio class="w-3.5 h-3.5" />
@@ -2958,7 +3065,7 @@ onUnmounted(() => {
     
     <div
       class="absolute top-4 right-4 z-10 flex items-center gap-1 sm:gap-2 transition-opacity duration-200"
-      :class="{ 'opacity-70': isHoveringSend }"
+      :class="{ 'opacity-15': isHoveringSend }"
     >
       <button v-if="roomStore.currentRoom?.whiteboardActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid" @click="handleStopBroadcast()" class="px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl bg-rose-500/90 hover:bg-rose-600 text-white shadow-sm transition text-xs font-semibold flex items-center gap-1 cursor-pointer">
         <X class="w-3.5 h-3.5" />
@@ -3021,6 +3128,7 @@ onUnmounted(() => {
       <div
         v-if="stickyToolbarPosition.visible && activeStickyNote"
         class="absolute z-30 flex items-center gap-1.5 p-1.5 bg-slate-900/95 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl transition-all animate-in fade-in zoom-in-95 pointer-events-auto"
+        :class="{ 'opacity-15': isHoveringSend }"
         @mousedown.prevent
         :style="{
           left: `${stickyToolbarPosition.x}px`,
@@ -3156,7 +3264,7 @@ onUnmounted(() => {
       <div
         class="flex flex-col gap-1.5 transition-opacity duration-200"
         :class="[
-          { 'opacity-70': isHoveringSend },
+          { 'opacity-15': isHoveringSend },
           isStackedToolbar ? 'w-[220px] max-w-[92vw]' : 'w-[150px] sm:w-[200px]'
         ]"
       >
@@ -3182,14 +3290,17 @@ onUnmounted(() => {
 
       <!-- Main Tools Bar -->
       <div
-        class="h-9 sm:h-10 bg-white/95 rounded-2xl shadow-xl border border-slate-200 flex items-center transition-all duration-300"
-        :class="isNarrowToolbar ? 'p-1 gap-0.5' : 'p-1 sm:p-1.5 gap-0.5 sm:gap-1'"
+        class="h-9 sm:h-10 rounded-2xl border flex items-center transition-all duration-200"
+        :class="[
+          isHoveringSend ? 'bg-white/10 border-white/10 shadow-none' : 'bg-white/95 border-slate-200 shadow-xl',
+          isNarrowToolbar ? 'p-1 gap-0.5' : 'p-1 sm:p-1.5 gap-0.5 sm:gap-1'
+        ]"
       >
         <!-- Tool items that dim when hovering send -->
         <div
           class="flex items-center transition-opacity duration-200"
           :class="[
-            { 'opacity-70': isHoveringSend },
+            { 'opacity-15': isHoveringSend },
             isNarrowToolbar ? 'gap-0.5' : 'gap-0.5 sm:gap-1'
           ]"
         >
@@ -3249,7 +3360,7 @@ onUnmounted(() => {
             </div>
           </div>
           
-          <div class="w-px h-4 bg-slate-200 mx-0.5"></div>
+          <div class="w-px h-4 bg-slate-200 mx-0.5 transition-opacity duration-200" :class="{ 'opacity-15': isHoveringSend }"></div>
           
           <!-- Colors: Full swatches when wide, single picker when compact -->
           <template v-if="isFullColorsVisible">
@@ -3285,7 +3396,7 @@ onUnmounted(() => {
             </div>
           </template>
           
-          <div class="w-px h-4 bg-slate-200 mx-0.5"></div>
+          <div class="w-px h-4 bg-slate-200 mx-0.5 transition-opacity duration-200" :class="{ 'opacity-15': isHoveringSend }"></div>
           
           <div class="flex items-center" :class="isNarrowToolbar ? 'gap-0.5' : 'gap-0.5 sm:gap-1'">
             <input ref="fileInputRef" type="file" accept="image/*" class="hidden" @change="handleImageUpload" />
@@ -3296,15 +3407,18 @@ onUnmounted(() => {
           </div>
         </div>
         
-        <div class="w-px h-4 bg-slate-200 mx-0.5"></div>
+        <div class="w-px h-4 bg-slate-200 mx-0.5 transition-opacity duration-200" :class="{ 'opacity-15': isHoveringSend }"></div>
         
         <!-- Send Viewport Button: always fully interactive and bright -->
         <button
           @click="handleSendToChat"
           @mouseenter="isHoveringSend = true"
           @mouseleave="isHoveringSend = false"
-          class="rounded-xl bg-sky-500 hover:bg-sky-600 active:bg-sky-700 text-white transition flex items-center gap-1.5 text-xs font-medium cursor-pointer shadow-xs shrink-0 select-none z-10"
-          :class="isSendTextVisible ? 'px-2.5 py-1 sm:py-1.5' : isNarrowToolbar ? 'p-1' : 'p-1.5 px-2'"
+          class="rounded-xl bg-sky-500 hover:bg-sky-600 active:bg-sky-700 text-white transition-all flex items-center gap-1.5 text-xs font-medium cursor-pointer shadow-lg shrink-0 select-none z-30 opacity-100"
+          :class="[
+            isSendTextVisible ? 'px-2.5 py-1 sm:py-1.5' : isNarrowToolbar ? 'p-1' : 'p-1.5 px-2',
+            isHoveringSend ? 'ring-2 ring-sky-300 scale-105' : 'shadow-xs'
+          ]"
           title="Send visible viewport area to chat"
         >
           <Send class="w-3.5 h-3.5" />

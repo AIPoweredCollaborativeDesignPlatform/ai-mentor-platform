@@ -4,7 +4,7 @@ import { useRoomStore } from '../stores/room';
 import { useAuthStore } from '../stores/auth';
 import * as fabric from 'fabric';
 import {
-  X, Pencil, Image as ImageIcon, Undo2, Trash2, Maximize, Minimize, Check, Loader2, Sparkles, Send, Radio, Settings2, MousePointer2, Type, Square, Circle, Triangle, Minus, ArrowUpRight, Group, Ungroup, BringToFront, SendToBack, MoveUp, MoveDown, Copy, Scissors, ClipboardPaste, AlertTriangle, AlertCircle, RefreshCw, ChevronDown, ChevronUp, StickyNote, MoreHorizontal, Lock, Unlock, HelpCircle
+  X, Pencil, Image as ImageIcon, Undo2, Redo2, Trash2, Maximize, Minimize, Check, Loader2, Sparkles, Send, Radio, Settings2, MousePointer2, Type, Square, Circle, Triangle, Minus, ArrowUpRight, Group, Ungroup, BringToFront, SendToBack, MoveUp, MoveDown, Copy, Scissors, ClipboardPaste, AlertTriangle, AlertCircle, RefreshCw, ChevronDown, ChevronUp, StickyNote, MoreHorizontal, Lock, Unlock, HelpCircle
 } from 'lucide-vue-next';
 import { generateSvgForWhiteboard } from '../services/ai';
 
@@ -103,6 +103,7 @@ const currentTool = ref('draw'); // 'select', 'draw', 'text', 'sticky', 'rect', 
 
 let isInternalChange = false;
 const historyStack = ref<string[]>([]);
+const redoStack = ref<string[]>([]);
 
 // Selection & Context Menu state
 let clipboard: any = null;
@@ -154,7 +155,7 @@ const updateStickyToolbar = () => {
 
       stickyToolbarPosition.value = {
         x: screenX,
-        y: screenY + 12,
+        y: screenY + 28,
         visible: true
       };
     } else {
@@ -163,7 +164,7 @@ const updateStickyToolbar = () => {
       const screenY = (bound.top + bound.height) * vpt[3] + vpt[5];
       stickyToolbarPosition.value = {
         x: screenX,
-        y: screenY + 12,
+        y: screenY + 28,
         visible: true
       };
     }
@@ -200,34 +201,31 @@ const updateSelectionState = () => {
   );
   if (active && (active.type?.toLowerCase() === 'activeselection' || active instanceof fabric.ActiveSelection)) {
     const targets = active.getObjects ? active.getObjects() : active._objects || [];
-    const anyLocked = targets.some((o: any) => o.isLocked === true);
     const allLocked = targets.length > 0 && targets.every((o: any) => o.isLocked === true);
-    isObjectLocked.value = anyLocked || allLocked;
-    if (anyLocked || allLocked) {
-      active.set({
-        lockMovementX: true,
-        lockMovementY: true,
-        lockRotation: true,
-        lockScalingX: true,
-        lockScalingY: true,
-        hasControls: false
-      });
-    }
+    const anyLocked = targets.some((o: any) => o.isLocked === true);
+    isObjectLocked.value = anyLocked;
+    active.set({
+      lockMovementX: allLocked,
+      lockMovementY: allLocked,
+      lockRotation: allLocked,
+      lockScalingX: allLocked,
+      lockScalingY: allLocked,
+      hasControls: !allLocked
+    });
   } else if (active && (active.type?.toLowerCase() === 'group' || active instanceof fabric.Group) && !active.isStickyNote) {
     const targets = active.getObjects ? active.getObjects() : active._objects || [];
-    const anyLocked = targets.some((o: any) => o.isLocked === true);
     const allLocked = targets.length > 0 && targets.every((o: any) => o.isLocked === true);
-    isObjectLocked.value = !!active.isLocked || anyLocked || allLocked;
-    if (active.isLocked || anyLocked || allLocked) {
-      active.set({
-        lockMovementX: true,
-        lockMovementY: true,
-        lockRotation: true,
-        lockScalingX: true,
-        lockScalingY: true,
-        hasControls: false
-      });
-    }
+    const anyLocked = targets.some((o: any) => o.isLocked === true);
+    isObjectLocked.value = !!active.isLocked || anyLocked;
+    const shouldFreeze = !!active.isLocked || allLocked;
+    active.set({
+      lockMovementX: shouldFreeze,
+      lockMovementY: shouldFreeze,
+      lockRotation: shouldFreeze,
+      lockScalingX: shouldFreeze,
+      lockScalingY: shouldFreeze,
+      hasControls: !shouldFreeze
+    });
   } else {
     isObjectLocked.value = !!(active && active.isLocked === true);
   }
@@ -369,6 +367,8 @@ let quickShapeActiveObj: any = null;
 let quickShapeAnchor = { x: 0, y: 0 };
 let quickShapeArrowP0: { x: number; y: number } | null = null;
 let quickShapeInitialDist = 1;
+let quickShapeInitialDistX = 1;
+let quickShapeInitialDistY = 1;
 
 // Ramer-Douglas-Peucker (RDP) polygonal simplification
 const rdp = (points: Array<{ x: number; y: number }>, epsilon: number): Array<{ x: number; y: number }> => {
@@ -602,33 +602,6 @@ const createSmoothedShape = (pts: Array<{ x: number; y: number }>) => {
       });
     }
 
-    // Five-pointed Star (pentagram with 5 vertices, or outline star with 10 alternating vertices)
-    if (numCorners === 5 || numCorners === 6 || numCorners === 10 || numCorners === 9 || numCorners === 11) {
-      displayToast('Snapped to 5-Point Star ✨');
-      const starPoints: Array<{ x: number; y: number }> = [];
-      const R = Math.max(15, maxDim / 2);
-      const r = R * 0.4;
-      for (let i = 0; i < 10; i++) {
-        const angle = -Math.PI / 2 + (i * Math.PI) / 5;
-        const rad = i % 2 === 0 ? R : r;
-        starPoints.push({
-          x: cx + rad * Math.cos(angle),
-          y: cy + rad * Math.sin(angle)
-        });
-      }
-      return new fabric.Polygon(starPoints, {
-        stroke: activeColor.value,
-        strokeWidth: strokeWidth.value,
-        fill: 'transparent',
-        strokeLineJoin: 'round',
-        originX: 'center',
-        originY: 'center',
-        left: cx,
-        top: cy,
-        perPixelTargetFind: true
-      });
-    }
-
     // Fallback if somewhat round
     if (radialMeanDev < 0.15) {
       displayToast('Snapped to Circle / Ellipse ✨');
@@ -726,7 +699,8 @@ const onPencilHoldDetected = () => {
   const shape = createSmoothedShape(pencilStrokePoints);
   if (!shape) return;
 
-  // Clear in-progress brush line from contextTop
+  // Clear in-progress brush line and disable drawing mode during quick shape hold-resizing to prevent ghost strokes
+  canvas.isDrawingMode = false;
   canvas.clearContext(canvas.contextTop);
   if ((canvas.freeDrawingBrush as any)?._points) {
     (canvas.freeDrawingBrush as any)._points = [];
@@ -752,6 +726,8 @@ const onPencilHoldDetected = () => {
   quickShapeAnchor = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
   quickShapeArrowP0 = { x: p0.x, y: p0.y };
   quickShapeInitialDist = Math.max(10, Math.hypot(pn.x - quickShapeAnchor.x, pn.y - quickShapeAnchor.y));
+  quickShapeInitialDistX = Math.max(10, Math.abs(pn.x - quickShapeAnchor.x));
+  quickShapeInitialDistY = Math.max(10, Math.abs(pn.y - quickShapeAnchor.y));
   pendingQuickShape = null;
 };
 
@@ -793,11 +769,6 @@ const initFabric = () => {
     };
 
     return candidates.filter((obj: any) => {
-      if (obj.isLocked) return false;
-      if (obj.type === 'group' && !obj.isStickyNote) {
-        const children = obj.getObjects ? obj.getObjects() : obj._objects || [];
-        if (children.some((c: any) => c.isLocked)) return false;
-      }
       const tl = new fabric.Point(rect.left, rect.top);
       const br = tl.add(new fabric.Point(rect.width, rect.height));
       if (obj.isContainedWithinRect && obj.isContainedWithinRect(tl, br)) {
@@ -966,7 +937,26 @@ const initFabric = () => {
     }
   });
 
-  canvas.on('object:modified', () => {
+  canvas.on('object:modified', (e: any) => {
+    const obj = e?.target;
+    if (obj && (obj.isStickyNote || obj.stickyColorConfig)) {
+      const sx = obj.scaleX || 1;
+      const sy = obj.scaleY || 1;
+      if (sx !== 1 || sy !== 1) {
+        const curW = obj.width || 180;
+        const curMinH = (obj as any).minHeight || obj.height || 180;
+        const newW = Math.max(100, Math.round(curW * sx));
+        const newH = Math.max(100, Math.round(curMinH * sy));
+        (obj as any).minHeight = newH;
+        obj.set({
+          width: newW,
+          scaleX: 1,
+          scaleY: 1
+        });
+        obj.initDimensions();
+        obj.setCoords();
+      }
+    }
     if (!isInternalChange) {
       saveHistoryState();
       syncToFirebase();
@@ -1149,9 +1139,11 @@ const initFabric = () => {
       quickShapeActiveObj = null;
       pendingQuickShape = null;
       if (pencilHoldTimer) clearTimeout(pencilHoldTimer);
-      pencilHoldTimer = setTimeout(() => {
-        onPencilHoldDetected();
-      }, 650);
+      if (currentTool.value !== 'arrow') {
+        pencilHoldTimer = setTimeout(() => {
+          onPencilHoldDetected();
+        }, 650);
+      }
     }
 
     // Sticky Note tool: smart switch if clicked on existing object, else spawn sticky note on empty space
@@ -1301,11 +1293,13 @@ const initFabric = () => {
         });
         quickShapeActiveObj.setCoords();
       } else {
-        const curDist = Math.max(10, Math.hypot(curScene.x - quickShapeAnchor.x, curScene.y - quickShapeAnchor.y));
-        const scale = curDist / quickShapeInitialDist;
+        const distX = Math.max(5, Math.abs(curScene.x - quickShapeAnchor.x));
+        const distY = Math.max(5, Math.abs(curScene.y - quickShapeAnchor.y));
+        const initX = Math.max(10, quickShapeInitialDistX);
+        const initY = Math.max(10, quickShapeInitialDistY);
         quickShapeActiveObj.set({
-          scaleX: Math.max(0.1, scale),
-          scaleY: Math.max(0.1, scale)
+          scaleX: Math.max(0.05, distX / initX),
+          scaleY: Math.max(0.05, distY / initY)
         });
         quickShapeActiveObj.setCoords();
       }
@@ -1313,8 +1307,8 @@ const initFabric = () => {
       return;
     }
 
-    // Normal pencil drawing: track points for hold-to-straighten
-    if (isDrawingMode.value && lastPencilMovePos) {
+    // Normal pencil drawing: track points for hold-to-straighten (ONLY for 'draw', NOT for 'arrow')
+    if (isDrawingMode.value && currentTool.value !== 'arrow' && lastPencilMovePos) {
       const scenePoint = canvas.getScenePoint(e);
       pencilStrokePoints.push(scenePoint);
       const moveDist = Math.hypot(scenePoint.x - lastPencilMovePos.x, scenePoint.y - lastPencilMovePos.y);
@@ -1325,6 +1319,9 @@ const initFabric = () => {
           onPencilHoldDetected();
         }, 650);
       }
+    } else if (isDrawingMode.value && currentTool.value === 'arrow') {
+      const scenePoint = canvas.getScenePoint(e);
+      pencilStrokePoints.push(scenePoint);
     }
 
     if (!drawingObject || !drawingStartPoint) return;
@@ -1381,6 +1378,9 @@ const initFabric = () => {
       updateSelectionState();
       quickShapeActiveObj = null;
       pencilStrokePoints = [];
+      if (currentTool.value === 'draw' || currentTool.value === 'arrow') {
+        canvas.isDrawingMode = true;
+      }
       return;
     }
 
@@ -1466,15 +1466,28 @@ const initFabric = () => {
     const obj = e.target;
     if (!obj) return;
 
-    // 1. If group or activeSelection contains locked children, keep it strictly stationary
+    // 1. If group or activeSelection contains locked children, keep locked children strictly stationary in world coordinates
     if (obj.type === 'activeselection' || (obj.type === 'group' && !obj.isStickyNote)) {
       const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
-      const hasLocked = targets.some((o: any) => o.isLocked);
-      if (hasLocked) {
+      const lockedChildren = targets.filter((o: any) => o.isLocked);
+      const unlockedChildren = targets.filter((o: any) => !o.isLocked);
+      if (unlockedChildren.length === 0) {
         if (obj._dragStartLeft !== undefined) obj.left = obj._dragStartLeft;
         if (obj._dragStartTop !== undefined) obj.top = obj._dragStartTop;
         obj.setCoords();
         return;
+      }
+      if (lockedChildren.length > 0 && obj._dragStartLeft !== undefined && obj._dragStartTop !== undefined) {
+        const deltaX = obj.left - obj._dragStartLeft;
+        const deltaY = obj.top - obj._dragStartTop;
+        lockedChildren.forEach((child: any) => {
+          if (child._dragStartLeft !== undefined && child._dragStartTop !== undefined) {
+            child.left = child._dragStartLeft - deltaX;
+            child.top = child._dragStartTop - deltaY;
+            child.setCoords();
+          }
+        });
+        (obj as any).dirty = true;
       }
     }
 
@@ -1509,7 +1522,28 @@ const initFabric = () => {
     }
     updateStickyToolbar();
   });
-  canvas.on('object:scaling', updateStickyToolbar);
+  canvas.on('object:scaling', (e: any) => {
+    const obj = e.target;
+    if (obj && (obj.isStickyNote || obj.stickyColorConfig)) {
+      const sx = obj.scaleX || 1;
+      const sy = obj.scaleY || 1;
+      if (sx !== 1 || sy !== 1) {
+        const curW = obj.width || 180;
+        const curMinH = (obj as any).minHeight || obj.height || 180;
+        const newW = Math.max(100, Math.round(curW * sx));
+        const newH = Math.max(100, Math.round(curMinH * sy));
+        (obj as any).minHeight = newH;
+        obj.set({
+          width: newW,
+          scaleX: 1,
+          scaleY: 1
+        });
+        obj.initDimensions();
+        obj.setCoords();
+      }
+    }
+    updateStickyToolbar();
+  });
   canvas.on('object:rotating', updateStickyToolbar);
 
   // Handle resizing with rAF throttling and synchronous renderAll to avoid blank flashing
@@ -1533,13 +1567,16 @@ const initFabric = () => {
   // Load initial state or set up clean baseline
   if (props.initialJson) {
     historyStack.value = [];
+    redoStack.value = [];
     loadFromFirebase(props.initialJson);
     hasUnsavedChanges.value = false;
   } else if (roomStore.currentRoom?.whiteboardActive && roomStore.currentRoom?.whiteboardState) {
     historyStack.value = [];
+    redoStack.value = [];
     loadFromFirebase(roomStore.currentRoom.whiteboardState);
   } else {
     historyStack.value = [];
+    redoStack.value = [];
     saveHistoryState(); // Initial baseline state only for brand-new whiteboard!
   }
 };
@@ -1625,6 +1662,7 @@ const saveHistoryState = () => {
   if (historyStack.value.length > 1) {
     hasUnsavedChanges.value = true;
   }
+  redoStack.value = [];
 };
 
 const syncToFirebase = () => {
@@ -1646,6 +1684,7 @@ const loadFromFirebase = async (json: string) => {
     historyStack.value.push(json);
     if (historyStack.value.length > 50) historyStack.value.shift();
   }
+  redoStack.value = [];
 
   isInternalChange = false;
 };
@@ -2312,7 +2351,8 @@ const undo = async () => {
   }
 
   isInternalChange = true;
-  historyStack.value.pop(); // remove current state
+  const currentState = historyStack.value.pop()!; // remove current state
+  redoStack.value.push(currentState);
   const previousState = historyStack.value[historyStack.value.length - 1];
   await canvas.loadFromJSON(previousState);
   rehydrateCanvasObjects();
@@ -2320,6 +2360,28 @@ const undo = async () => {
   syncToFirebase();
   updateSelectionState();
   isInternalChange = false;
+  displayToast('Undo (Ctrl+Z)');
+};
+
+const redo = async () => {
+  if (!canvas || redoStack.value.length === 0) return;
+
+  if (isIsolationMode.value) {
+    isIsolationMode.value = false;
+    isolatedGroup = null;
+    isolatedItems = [];
+  }
+
+  isInternalChange = true;
+  const nextState = redoStack.value.pop()!;
+  historyStack.value.push(nextState);
+  await canvas.loadFromJSON(nextState);
+  rehydrateCanvasObjects();
+  canvas.requestRenderAll();
+  syncToFirebase();
+  updateSelectionState();
+  isInternalChange = false;
+  displayToast('Redo (Ctrl+Y)');
 };
 
 const handleImageUpload = (e: Event) => {
@@ -2559,7 +2621,14 @@ const handleKeydown = (e: KeyboardEvent) => {
     }
   } else if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
     e.preventDefault();
-    undo();
+    if (e.shiftKey) {
+      redo();
+    } else {
+      undo();
+    }
+  } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
+    e.preventDefault();
+    redo();
   } else if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
     e.preventDefault();
     copySelection();
@@ -2903,6 +2972,15 @@ onUnmounted(() => {
         </button>
         <button
           @mousedown.prevent
+          @click="toggleLockSelected"
+          class="p-1 hover:bg-slate-800 rounded-lg transition cursor-pointer"
+          :class="isObjectLocked ? 'text-amber-400 hover:text-amber-300' : 'text-slate-300 hover:text-white'"
+          :title="isObjectLocked ? 'Unlock Note (Ctrl+L)' : 'Lock Note (Ctrl+L)'"
+        >
+          <component :is="isObjectLocked ? Unlock : Lock" class="w-3.5 h-3.5" />
+        </button>
+        <button
+          @mousedown.prevent
           @click="deleteSelected"
           class="p-1 hover:bg-rose-950/60 text-rose-400 hover:text-rose-300 rounded-lg transition cursor-pointer"
           title="Delete Note"
@@ -3135,6 +3213,7 @@ onUnmounted(() => {
             <input ref="fileInputRef" type="file" accept="image/*" class="hidden" @change="handleImageUpload" />
             <button @click="fileInputRef?.click()" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="isNarrowToolbar ? 'p-1' : 'p-1.5'" title="Add Image"><ImageIcon class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
             <button @click="undo" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="[{'opacity-50 cursor-not-allowed': historyStack.length <= 1}, isNarrowToolbar ? 'p-1' : 'p-1.5']" title="Undo (Ctrl+Z)" :disabled="historyStack.length <= 1"><Undo2 class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
+            <button @click="redo" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="[{'opacity-50 cursor-not-allowed': redoStack.length === 0}, isNarrowToolbar ? 'p-1' : 'p-1.5']" title="Redo (Ctrl+Y / Ctrl+Shift+Z)" :disabled="redoStack.length === 0"><Redo2 class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
             <button @click="deleteSelected" class="rounded-xl hover:bg-rose-100 text-rose-500 transition cursor-pointer" :class="isNarrowToolbar ? 'p-1' : 'p-1.5'" title="Delete Selected (Del)"><Trash2 class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
           </div>
         </div>
@@ -3369,6 +3448,15 @@ onUnmounted(() => {
               <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Ctrl</kbd>
               <span class="text-slate-500 text-[10px]">+</span>
               <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Z</kbd>
+            </div>
+          </div>
+          <!-- Redo -->
+          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
+            <span class="text-slate-300 font-medium">Redo</span>
+            <div class="flex items-center gap-1">
+              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Ctrl</kbd>
+              <span class="text-slate-500 text-[10px]">+</span>
+              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Y</kbd>
             </div>
           </div>
           <!-- Select All -->

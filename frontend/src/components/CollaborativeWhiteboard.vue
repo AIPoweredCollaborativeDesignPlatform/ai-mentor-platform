@@ -1,8 +1,20 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
+import { ref, shallowRef, toRaw, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { useRoomStore } from '../stores/room';
 import { useAuthStore } from '../stores/auth';
 import * as fabric from 'fabric';
+
+// Globally disable objectCaching so scaling and zooming always render 100% crisp vector!
+(fabric as any).Object.prototype.objectCaching = false;
+if ((fabric as any).Path) (fabric as any).Path.prototype.objectCaching = false;
+if ((fabric as any).IText) (fabric as any).IText.prototype.objectCaching = false;
+if ((fabric as any).Textbox) (fabric as any).Textbox.prototype.objectCaching = false;
+if ((fabric as any).Line) (fabric as any).Line.prototype.objectCaching = false;
+if ((fabric as any).Group) (fabric as any).Group.prototype.objectCaching = false;
+if ((fabric as any).Polygon) (fabric as any).Polygon.prototype.objectCaching = false;
+if ((fabric as any).Rect) (fabric as any).Rect.prototype.objectCaching = false;
+if ((fabric as any).Circle) (fabric as any).Circle.prototype.objectCaching = false;
+if ((fabric as any).Triangle) (fabric as any).Triangle.prototype.objectCaching = false;
 import {
   X, Pencil, Image as ImageIcon, Undo2, Redo2, Trash2, Maximize, Minimize, Check, Loader2, Sparkles, Send, Radio, Settings2, MousePointer2, Type, Square, Circle, Triangle, Minus, ArrowUpRight, Group, Ungroup, BringToFront, SendToBack, MoveUp, MoveDown, Copy, Scissors, ClipboardPaste, AlertTriangle, AlertCircle, RefreshCw, ChevronDown, ChevronUp, StickyNote, MoreHorizontal, Lock, Unlock, HelpCircle, Waypoints
 } from 'lucide-vue-next';
@@ -102,21 +114,22 @@ const stickyColors: StickyColorConfig[] = [
 
 const selectedStickyColor = ref<StickyColorConfig>(stickyColors[0]);
 const isStickyMenuOpen = ref(false);
-const activeStickyNote = ref<any>(null);
+const activeStickyNote = shallowRef<any>(null);
 const stickyToolbarPosition = ref({ x: 0, y: 0, visible: false });
 
 // Arrow Floating Toolbar & Node Editing State
-const activeArrow = ref<any>(null);
+const activeArrow = shallowRef<any>(null);
 const arrowToolbarPosition = ref({ x: 0, y: 0, visible: false });
 const isArrowNodeEditing = ref(false);
-const editingArrow = ref<any>(null);
+const editingArrow = shallowRef<any>(null);
 const editingNodeIndex = ref<number | null>(null);
 const editingArrowPoints = ref<Array<{ x: number; y: number }>>([]);
+const isDraggingNode = ref(false);
 const viewportVersion = ref(0);
 let liveArrowPreview: any = null;
 
 const isLineOrArrow = (obj: any): boolean => {
-  return !!(obj && ((obj as any).isArrow || (obj as any).isStraightLine || obj.type === 'line'));
+  return !!(obj && (obj as any).isArrow);
 };
 
 const isBrushMenuOpen = ref(false);
@@ -256,21 +269,89 @@ const nodeScreenPolyline = computed(() => {
   }).join(' ');
 });
 
+const liveNodeArrowSvg = computed(() => {
+  void viewportVersion.value;
+  if (!isArrowNodeEditing.value || !isDraggingNode.value || !editingArrow.value || !canvas) {
+    return { pathD: '', headPoints: '', color: '#0f172a', strokeWidth: 3 };
+  }
+  const pts = editingArrowPoints.value;
+  if (pts.length < 2) return { pathD: '', headPoints: '', color: '#0f172a', strokeWidth: 3 };
+
+  const color = (editingArrow.value as any).arrowColor || activeColor.value;
+  const rawWidth = (editingArrow.value as any).arrowStrokeWidth || strokeWidth.value;
+  const zoom = canvas.getZoom();
+  const screenWidth = rawWidth * zoom;
+
+  const sPts = pts.map(p => getNodeScreenPos(p));
+  const s0 = sPts[0];
+  const sn = sPts[sPts.length - 1];
+  const sDist = Math.hypot(sn.x - s0.x, sn.y - s0.y);
+  if (sDist < 4) return { pathD: '', headPoints: '', color, strokeWidth: screenWidth };
+
+  const headLen = Math.max(14, rawWidth * 3.6) * zoom;
+  const headAngle = Math.PI / 6;
+
+  let maxDev = 0;
+  for (const pt of sPts) {
+    const dist = Math.abs((sn.y - s0.y) * pt.x - (sn.x - s0.x) * pt.y + sn.x * s0.y - sn.y * s0.x) / sDist;
+    if (dist > maxDev) maxDev = dist;
+  }
+  const isStraight = maxDev < Math.max(16 * zoom, sDist * 0.12) || sPts.length <= 3;
+
+  let tangentAngle = Math.atan2(sn.y - s0.y, sn.x - s0.x);
+  if (!isStraight && sPts.length >= 2) {
+    const sBack = sPts[sPts.length - 2];
+    tangentAngle = Math.atan2(sn.y - sBack.y, sn.x - sBack.x);
+  }
+
+  const shaftCut = headLen * 0.55;
+  const shaftEndX = sn.x - shaftCut * Math.cos(tangentAngle);
+  const shaftEndY = sn.y - shaftCut * Math.sin(tangentAngle);
+
+  const w1x = sn.x - headLen * Math.cos(tangentAngle - headAngle);
+  const w1y = sn.y - headLen * Math.sin(tangentAngle - headAngle);
+  const w2x = sn.x - headLen * Math.cos(tangentAngle + headAngle);
+  const w2y = sn.y - headLen * Math.sin(tangentAngle + headAngle);
+  const headPoints = `${sn.x.toFixed(1)},${sn.y.toFixed(1)} ${w1x.toFixed(1)},${w1y.toFixed(1)} ${w2x.toFixed(1)},${w2y.toFixed(1)}`;
+
+  let pathD = '';
+  if (isStraight || sPts.length < 3) {
+    pathD = `M ${s0.x.toFixed(1)} ${s0.y.toFixed(1)} L ${shaftEndX.toFixed(1)} ${shaftEndY.toFixed(1)}`;
+  } else {
+    const shaftSampled = [...sPts];
+    shaftSampled[shaftSampled.length - 1] = { x: shaftEndX, y: shaftEndY };
+    pathD = `M ${shaftSampled[0].x.toFixed(1)} ${shaftSampled[0].y.toFixed(1)}`;
+    const m = shaftSampled.length - 1;
+    for (let i = 0; i < m; i++) {
+      const pPrev = shaftSampled[Math.max(0, i - 1)];
+      const pCur = shaftSampled[i];
+      const pNext = shaftSampled[i + 1];
+      const pAfter = shaftSampled[Math.min(m, i + 2)];
+
+      const cp1x = pCur.x + (pNext.x - pPrev.x) / 6;
+      const cp1y = pCur.y + (pNext.y - pPrev.y) / 6;
+      const cp2x = pNext.x - (pAfter.x - pCur.x) / 6;
+      const cp2y = pNext.y - (pAfter.y - pCur.y) / 6;
+
+      pathD += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${pNext.x.toFixed(1)} ${pNext.y.toFixed(1)}`;
+    }
+  }
+
+  return {
+    pathD,
+    headPoints,
+    color,
+    strokeWidth: screenWidth
+  };
+});
+
 const enterArrowNodeEditing = (arrow: any) => {
-  if (!arrow || !isLineOrArrow(arrow)) return;
+  if (!arrow || !(arrow as any).isArrow) return;
   isArrowNodeEditing.value = true;
   editingArrow.value = arrow;
 
   if (Array.isArray(arrow.arrowPoints) && arrow.arrowPoints.length > 0) {
     editingArrowPoints.value = arrow.arrowPoints.map((p: any) => ({ x: p.x, y: p.y }));
-  } else if (arrow.type === 'line') {
-    const pts = [
-      { x: arrow.x1 ?? 0, y: arrow.y1 ?? 0 },
-      { x: arrow.x2 ?? 0, y: arrow.y2 ?? 0 }
-    ];
-    arrow.arrowPoints = pts;
-    arrow.isStraightLine = true;
-    editingArrowPoints.value = pts.map(p => ({ ...p }));
   } else {
     return;
   }
@@ -291,12 +372,14 @@ const exitArrowNodeEditing = () => {
   isArrowNodeEditing.value = false;
   editingArrow.value = null;
   editingNodeIndex.value = null;
+  isDraggingNode.value = false;
 
   if (arrow && canvas) {
     arrow.set({
       hasControls: !arrow.isLocked,
       selectable: true,
-      evented: true
+      evented: true,
+      visible: true
     });
     arrow.setCoords();
     canvas.setActiveObject(arrow);
@@ -311,82 +394,15 @@ const onNodePointerDown = (index: number, e: PointerEvent) => {
   e.preventDefault();
   e.stopPropagation();
   editingNodeIndex.value = index;
+  isDraggingNode.value = true;
+
+  if (editingArrow.value) {
+    editingArrow.value.visible = false;
+    canvas?.requestRenderAll();
+  }
 
   let animFrameId: number | null = null;
   let latestScenePt: { x: number; y: number } | null = null;
-
-  const updateGeometry = () => {
-    if (!latestScenePt || !canvas || !editingArrow.value) return;
-    editingArrowPoints.value[index] = { ...latestScenePt };
-    const pts = editingArrowPoints.value;
-
-    let updatedObj: any;
-    if (editingArrow.value.isArrow) {
-      const color = (editingArrow.value as any).arrowColor || activeColor.value;
-      const width = (editingArrow.value as any).arrowStrokeWidth || strokeWidth.value;
-      updatedObj = createArrowFromPoints(pts, color, width, true);
-    } else if (editingArrow.value.type === 'line' || (editingArrow.value as any).isStraightLine) {
-      const color = (editingArrow.value as any).stroke || activeColor.value;
-      const width = (editingArrow.value as any).strokeWidth || strokeWidth.value;
-      if (pts.length === 2) {
-        updatedObj = new fabric.Line([pts[0].x, pts[0].y, pts[1].x, pts[1].y], {
-          stroke: color,
-          strokeWidth: width,
-          strokeLineCap: 'round',
-          strokeUniform: true,
-          perPixelTargetFind: true
-        });
-        (updatedObj as any).isStraightLine = true;
-        (updatedObj as any).arrowPoints = pts.map(p => ({ x: p.x, y: p.y }));
-      } else {
-        let pathD = `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`;
-        const m = pts.length - 1;
-        for (let i = 0; i < m; i++) {
-          const pPrev = pts[Math.max(0, i - 1)];
-          const pCur = pts[i];
-          const pNext = pts[i + 1];
-          const pAfter = pts[Math.min(m, i + 2)];
-          const cp1x = pCur.x + (pNext.x - pPrev.x) / 6;
-          const cp1y = pCur.y + (pNext.y - pPrev.y) / 6;
-          const cp2x = pNext.x - (pAfter.x - pCur.x) / 6;
-          const cp2y = pNext.y - (pAfter.y - pCur.y) / 6;
-          pathD += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${pNext.x.toFixed(1)} ${pNext.y.toFixed(1)}`;
-        }
-        updatedObj = new fabric.Path(pathD, {
-          stroke: color,
-          strokeWidth: width,
-          fill: 'transparent',
-          strokeLineCap: 'round',
-          strokeLineJoin: 'round',
-          strokeUniform: true,
-          perPixelTargetFind: true
-        });
-        (updatedObj as any).isStraightLine = false;
-        (updatedObj as any).arrowPoints = pts.map(p => ({ x: p.x, y: p.y }));
-      }
-    }
-
-    if (updatedObj && canvas) {
-      updatedObj.set({
-        hasControls: false,
-        selectable: true,
-        evented: true
-      });
-      (updatedObj as any).isLocked = (editingArrow.value as any).isLocked;
-      (updatedObj as any).arrowId = (editingArrow.value as any).arrowId || Math.random().toString(36).substring(2, 9);
-
-      const allObjs = canvas.getObjects();
-      const curIdx = allObjs.indexOf(editingArrow.value);
-      if (curIdx !== -1) {
-        canvas.remove(editingArrow.value);
-        canvas.insertAt(curIdx, updatedObj);
-      } else {
-        canvas.add(updatedObj);
-      }
-      editingArrow.value = updatedObj;
-      canvas.requestRenderAll();
-    }
-  };
 
   const onPointerMove = (ev: PointerEvent) => {
     if (!canvas || !wrapperRef.value || !editingArrow.value) return;
@@ -402,7 +418,9 @@ const onNodePointerDown = (index: number, e: PointerEvent) => {
     if (!animFrameId) {
       animFrameId = requestAnimationFrame(() => {
         animFrameId = null;
-        updateGeometry();
+        if (latestScenePt) {
+          editingArrowPoints.value[index] = { ...latestScenePt };
+        }
       });
     }
   };
@@ -414,20 +432,44 @@ const onNodePointerDown = (index: number, e: PointerEvent) => {
       cancelAnimationFrame(animFrameId);
       animFrameId = null;
     }
-    updateGeometry();
+    if (latestScenePt) {
+      editingArrowPoints.value[index] = { ...latestScenePt };
+    }
     editingNodeIndex.value = null;
+    isDraggingNode.value = false;
 
     if (editingArrow.value && canvas) {
-      const currentId = (editingArrow.value as any).arrowId;
-      if (currentId) {
-        const objs = canvas.getObjects();
-        objs.forEach((o: any) => {
-          if (o !== editingArrow.value && (o as any).arrowId === currentId) {
-            canvas?.remove(o);
-          }
+      const color = (editingArrow.value as any).arrowColor || activeColor.value;
+      const width = (editingArrow.value as any).arrowStrokeWidth || strokeWidth.value;
+      const isLocked = !!(editingArrow.value as any).isLocked;
+      const arrowId = (editingArrow.value as any).arrowId;
+
+      const finalArrow = createArrowFromPoints(editingArrowPoints.value, color, width, true);
+      if (finalArrow) {
+        finalArrow.set({
+          hasControls: false,
+          selectable: true,
+          evented: true,
+          visible: true
         });
+        (finalArrow as any).isLocked = isLocked;
+        (finalArrow as any).arrowId = arrowId;
+
+        const rawOld = toRaw(editingArrow.value);
+        const allObjs = canvas.getObjects();
+        const curIdx = allObjs.indexOf(rawOld);
+        if (curIdx !== -1) {
+          canvas.remove(rawOld);
+          canvas.insertAt(curIdx, finalArrow);
+        } else {
+          canvas.remove(rawOld);
+          canvas.add(finalArrow);
+        }
+        editingArrow.value = finalArrow;
+        finalArrow.setCoords();
+      } else {
+        editingArrow.value.visible = true;
       }
-      editingArrow.value.setCoords();
       canvas.requestRenderAll();
       saveHistoryState();
       syncToFirebase();
@@ -468,39 +510,27 @@ const straightenEditingArrow = () => {
   }));
 
   editingArrowPoints.value = straightened;
-  let updatedObj: any;
-  if (editingArrow.value.isArrow) {
-    const color = (editingArrow.value as any).arrowColor || activeColor.value;
-    const width = (editingArrow.value as any).arrowStrokeWidth || strokeWidth.value;
-    updatedObj = createArrowFromPoints(straightened, color, width, true);
-  } else {
-    const color = (editingArrow.value as any).stroke || activeColor.value;
-    const width = (editingArrow.value as any).strokeWidth || strokeWidth.value;
-    updatedObj = new fabric.Line([p0.x, p0.y, pn.x, pn.y], {
-      stroke: color,
-      strokeWidth: width,
-      strokeLineCap: 'round',
-      strokeUniform: true,
-      perPixelTargetFind: true
-    });
-    (updatedObj as any).isStraightLine = true;
-    (updatedObj as any).arrowPoints = straightened;
-  }
+  const color = (editingArrow.value as any).arrowColor || activeColor.value;
+  const width = (editingArrow.value as any).arrowStrokeWidth || strokeWidth.value;
+  const updatedObj = createArrowFromPoints(straightened, color, width, true);
 
   if (updatedObj && canvas) {
     updatedObj.set({
       hasControls: false,
       selectable: true,
-      evented: true
+      evented: true,
+      visible: true
     });
     (updatedObj as any).isLocked = (editingArrow.value as any).isLocked;
     (updatedObj as any).arrowId = (editingArrow.value as any).arrowId || Math.random().toString(36).substring(2, 9);
     const allObjs = canvas.getObjects();
-    const curIdx = allObjs.indexOf(editingArrow.value);
+    const rawOld = toRaw(editingArrow.value);
+    const curIdx = allObjs.indexOf(rawOld);
     if (curIdx !== -1) {
-      canvas.remove(editingArrow.value);
+      canvas.remove(rawOld);
       canvas.insertAt(curIdx, updatedObj);
     } else {
+      canvas.remove(rawOld);
       canvas.add(updatedObj);
     }
     editingArrow.value = updatedObj;
@@ -962,8 +992,9 @@ const createArrowFromPoints = (
       }
       const totalArcLen = cumDist[cumDist.length - 1];
 
-      // Limit node count strictly to between 3 and 5 nodes, perfectly equidistant along the curve
-      const nodeCount = Math.min(5, Math.max(3, Math.round(totalArcLen / 80)));
+      // Drop a node every fixed distance step (~26px) with no artificial ceiling
+      const step = 26;
+      const nodeCount = Math.max(3, Math.round(totalArcLen / step) + 1);
       sampled = [];
 
       for (let k = 0; k < nodeCount; k++) {
@@ -1224,19 +1255,13 @@ const createSmoothedShape = (pts: Array<{ x: number; y: number }>) => {
 
   if (maxDev < Math.max(15, lineLen * 0.08)) {
     displayToast('Snapped to straight line ✨');
-    const straightLine = new fabric.Line([p0.x, p0.y, pn.x, pn.y], {
+    return new fabric.Line([p0.x, p0.y, pn.x, pn.y], {
       stroke: activeColor.value,
       strokeWidth: strokeWidth.value,
       strokeLineCap: 'round',
       strokeUniform: true,
       perPixelTargetFind: true
     });
-    (straightLine as any).isStraightLine = true;
-    (straightLine as any).arrowPoints = lineLen < 160 ?
-      [{ x: p0.x, y: p0.y }, { x: pn.x, y: pn.y }] :
-      [{ x: p0.x, y: p0.y }, { x: (p0.x + pn.x) / 2, y: (p0.y + pn.y) / 2 }, { x: pn.x, y: pn.y }];
-    (straightLine as any).arrowId = Math.random().toString(36).substring(2, 9);
-    return straightLine;
   }
 
   // 4. Open stroke: Catmull-Rom cubic Bezier spline
@@ -1258,17 +1283,13 @@ const createSmoothedShape = (pts: Array<{ x: number; y: number }>) => {
   }
 
   if (sampled.length < 3) {
-    const straightLine = new fabric.Line([p0.x, p0.y, pn.x, pn.y], {
+    return new fabric.Line([p0.x, p0.y, pn.x, pn.y], {
       stroke: activeColor.value,
       strokeWidth: strokeWidth.value,
       strokeLineCap: 'round',
       strokeUniform: true,
       perPixelTargetFind: true
     });
-    (straightLine as any).isStraightLine = true;
-    (straightLine as any).arrowPoints = [{ x: p0.x, y: p0.y }, { x: pn.x, y: pn.y }];
-    (straightLine as any).arrowId = Math.random().toString(36).substring(2, 9);
-    return straightLine;
   }
 
   let pathD = `M ${sampled[0].x.toFixed(1)} ${sampled[0].y.toFixed(1)}`;
@@ -1570,8 +1591,8 @@ const initFabric = () => {
   canvas.on('object:modified', (e: any) => {
     const obj = e?.target;
     if (obj && (obj.isStickyNote || obj.stickyColorConfig)) {
-      const sx = obj.scaleX || 1;
-      const sy = obj.scaleY || 1;
+      const sx = Math.abs(obj.scaleX || 1);
+      const sy = Math.abs(obj.scaleY || 1);
       if (sx !== 1 || sy !== 1) {
         const transform = (e as any).transform || (canvas as any)?._currentTransform;
         const originX = transform?.originX || 'left';
@@ -1581,12 +1602,17 @@ const initFabric = () => {
         const curW = obj.width || 180;
         const curMinH = (obj as any).minHeight !== undefined ? (obj as any).minHeight : (obj.height || 180);
 
-        let targetW = Math.max(125, Math.round(curW * sx));
-        let targetH = Math.max(60, Math.round(curMinH * sy));
+        let targetW = Math.max(80, Math.round(curW * sx));
+        let targetH = Math.max(80, Math.round(curMinH * sy));
+
+        // Proportional font size scaling for sticky note
+        const curFontSize = obj.fontSize || 18;
+        const newFontSize = Math.max(10, Math.min(120, Math.round(curFontSize * sx)));
 
         (obj as any).minHeight = targetH;
         obj.set({
           width: targetW,
+          fontSize: newFontSize,
           scaleX: 1,
           scaleY: 1
         });
@@ -1594,6 +1620,25 @@ const initFabric = () => {
         if (fixedPoint && (obj as any).setPositionByOrigin) {
           (obj as any).setPositionByOrigin(fixedPoint, originX, originY);
         }
+        obj.setCoords();
+      }
+    }
+
+    // Minimum selectable dimension clamp for general objects
+    if (obj && !obj.isStickyNote && !(obj as any).isArrow) {
+      const minDim = 20;
+      const curW = Math.abs((obj.width || 0) * (obj.scaleX || 1));
+      const curH = Math.abs((obj.height || 0) * (obj.scaleY || 1));
+      let changed = false;
+      if (obj.width && curW < minDim) {
+        obj.scaleX = (obj.scaleX < 0 ? -1 : 1) * (minDim / obj.width);
+        changed = true;
+      }
+      if (obj.height && curH < minDim) {
+        obj.scaleY = (obj.scaleY < 0 ? -1 : 1) * (minDim / obj.height);
+        changed = true;
+      }
+      if (changed) {
         obj.setCoords();
       }
     }
@@ -2245,14 +2290,6 @@ const initFabric = () => {
         canvas.remove(drawingObject);
         canvas.requestRenderAll();
       } else {
-        if (currentTool.value === 'line' && drawingStartPoint) {
-          (drawingObject as any).isStraightLine = true;
-          (drawingObject as any).arrowPoints = [
-            { x: drawingStartPoint.x, y: drawingStartPoint.y },
-            { x: (drawingObject as any).x2, y: (drawingObject as any).y2 }
-          ];
-          (drawingObject as any).arrowId = Math.random().toString(36).substring(2, 9);
-        }
         drawingObject.set({ selectable: true, evented: true, perPixelTargetFind: true });
         drawingObject.setCoords();
         canvas.setActiveObject(drawingObject);
@@ -2275,7 +2312,7 @@ const initFabric = () => {
       target.enterEditing();
       return;
     }
-    if (isLineOrArrow(target)) {
+    if (target.isArrow) {
       enterArrowNodeEditing(target);
       return;
     }
@@ -2361,15 +2398,37 @@ const initFabric = () => {
     updateStickyToolbar();
     updateArrowToolbar();
   });
-  canvas.on('object:scaling', () => {
+  canvas.on('object:scaling', (e: any) => {
+    const obj = e?.target;
+    if (obj) {
+      if (obj.isStickyNote || obj.stickyColorConfig) {
+        const minNoteSize = 80;
+        const curW = (obj.width || 180) * Math.abs(obj.scaleX || 1);
+        if (curW < minNoteSize && obj.width) {
+          const clamped = minNoteSize / obj.width;
+          obj.scaleX = clamped;
+          obj.scaleY = clamped;
+        }
+      } else {
+        const minDim = 20;
+        const curW = Math.abs((obj.width || 0) * (obj.scaleX || 1));
+        const curH = Math.abs((obj.height || 0) * (obj.scaleY || 1));
+        if (curW < minDim && obj.width) {
+          obj.scaleX = (obj.scaleX < 0 ? -1 : 1) * (minDim / obj.width);
+        }
+        if (curH < minDim && obj.height) {
+          obj.scaleY = (obj.scaleY < 0 ? -1 : 1) * (minDim / obj.height);
+        }
+      }
+    }
     updateStickyToolbar();
     updateArrowToolbar();
   });
   canvas.on('object:resizing', (e: any) => {
-    const obj = e.target;
+    const obj = e?.target;
     if (obj && (obj.isStickyNote || obj.stickyColorConfig)) {
-      if (obj.width < 125) {
-        obj.width = 125;
+      if (obj.width < 80) {
+        obj.width = 80;
         obj.initDimensions();
         obj.setCoords();
       }
@@ -2486,36 +2545,24 @@ const changeStickyHeight = (eventData: any, transform: any, x: number, y: number
 
 const setupStickyControls = (note: any) => {
   note.controls = {
-    ...fabric.controlsUtils.createTextboxDefaultControls(),
-    mr: new fabric.Control({
-      x: 0.5,
-      y: 0,
-      actionHandler: changeStickyWidth,
-      cursorStyleHandler: fabric.controlsUtils.scaleSkewCursorStyleHandler,
-      actionName: 'resizing'
-    }),
-    ml: new fabric.Control({
-      x: -0.5,
-      y: 0,
-      actionHandler: changeStickyWidth,
-      cursorStyleHandler: fabric.controlsUtils.scaleSkewCursorStyleHandler,
-      actionName: 'resizing'
-    }),
-    mb: new fabric.Control({
-      x: 0,
-      y: 0.5,
-      actionHandler: changeStickyHeight,
-      cursorStyleHandler: fabric.controlsUtils.scaleSkewCursorStyleHandler,
-      actionName: 'resizing'
-    }),
-    mt: new fabric.Control({
-      x: 0,
-      y: -0.5,
-      actionHandler: changeStickyHeight,
-      cursorStyleHandler: fabric.controlsUtils.scaleSkewCursorStyleHandler,
-      actionName: 'resizing'
-    })
+    tl: (fabric as any).Object.prototype.controls.tl,
+    tr: (fabric as any).Object.prototype.controls.tr,
+    bl: (fabric as any).Object.prototype.controls.bl,
+    br: (fabric as any).Object.prototype.controls.br
   };
+  note.setControlsVisibility({
+    tl: true,
+    tr: true,
+    bl: true,
+    br: true,
+    ml: false,
+    mr: false,
+    mt: false,
+    mb: false,
+    mtr: false
+  });
+  note.hasRotatingPoint = false;
+  note.lockUniScaling = true;
 };
 
 const applyStickyNoteMethods = (note: any) => {
@@ -2559,7 +2606,9 @@ const rehydrateCanvasObjects = () => {
       o.minHeight = o.minHeight || 180;
       o.textAlign = 'center';
       o.splitByGrapheme = true;
-      o.lockUniScaling = false;
+      o.lockUniScaling = true;
+      o.hasRotatingPoint = false;
+      o.objectCaching = false;
       applyStickyNoteMethods(o);
       o.initDimensions();
     }
@@ -2617,19 +2666,11 @@ const rehydrateCanvasObjects = () => {
 const syncNodeEditingStateAfterReload = () => {
   if (!isArrowNodeEditing.value || !canvas) return;
   const currentEditingId = (editingArrow.value as any)?.arrowId;
-  const allTargets = canvas.getObjects().filter((o: any) => isLineOrArrow(o) && ((o as any).arrowPoints || o.type === 'line'));
+  const allTargets = canvas.getObjects().filter((o: any) => (o as any).isArrow && (o as any).arrowPoints);
   const match = (currentEditingId ? allTargets.find((o: any) => (o as any).arrowId === currentEditingId) : null) || allTargets[0];
   if (match) {
     editingArrow.value = match;
-    if ((match as any).arrowPoints) {
-      editingArrowPoints.value = (match as any).arrowPoints.map((p: any) => ({ x: p.x, y: p.y }));
-    } else if (match.type === 'line') {
-      const lineObj = match as any;
-      editingArrowPoints.value = [
-        { x: lineObj.x1 ?? 0, y: lineObj.y1 ?? 0 },
-        { x: lineObj.x2 ?? 0, y: lineObj.y2 ?? 0 }
-      ];
-    }
+    editingArrowPoints.value = (match as any).arrowPoints.map((p: any) => ({ x: p.x, y: p.y }));
     match.set({
       hasControls: false,
       selectable: true,
@@ -2789,7 +2830,9 @@ const spawnStickyNote = (x: number, y: number, colorCfg = selectedStickyColor.va
       offsetY: 4
     }),
     perPixelTargetFind: true,
-    lockUniScaling: false
+    lockUniScaling: true,
+    hasRotatingPoint: false,
+    objectCaching: false
   });
 
   (note as any).isStickyNote = true;
@@ -2813,7 +2856,7 @@ const spawnStickyNote = (x: number, y: number, colorCfg = selectedStickyColor.va
 };
 
 const changeStickyNoteColor = (note: any, colorCfg: StickyColorConfig) => {
-  if (!canvas || !note) return;
+  if (!canvas || !note || note.isLocked) return;
   const wasEditing = !!note.isEditing;
   const selStart = note.selectionStart;
   const selEnd = note.selectionEnd;
@@ -2847,7 +2890,9 @@ const duplicateStickyNote = async (note: any) => {
     top: (note.top || 0) + 24,
     evented: true,
     perPixelTargetFind: true,
-    lockUniScaling: false
+    lockUniScaling: true,
+    hasRotatingPoint: false,
+    objectCaching: false
   });
   (cloned as any).isStickyNote = true;
   (cloned as any).stickyColorConfig = (note as any).stickyColorConfig;
@@ -3461,6 +3506,7 @@ const applyColorToSelected = (color: string) => {
   if (!canvas) return;
   const activeObj = canvas.getActiveObject();
   if (activeObj) {
+    if ((activeObj as any).isLocked) return;
     if (activeObj.isType('path')) {
       activeObj.set({ stroke: color });
     } else if (activeObj.isType('i-text')) {
@@ -3982,10 +4028,11 @@ onUnmounted(() => {
             v-for="color in stickyColors"
             :key="color.name"
             @mousedown.prevent
-            @click="changeStickyNoteColor(activeStickyNote, color)"
-            class="w-4 h-4 rounded-full border border-black/20 hover:scale-125 transition transform cursor-pointer"
+            @click="!isObjectLocked && changeStickyNoteColor(activeStickyNote, color)"
+            :disabled="isObjectLocked"
+            class="w-4 h-4 rounded-full border border-black/20 hover:scale-125 transition transform cursor-pointer disabled:opacity-30 disabled:hover:scale-100 disabled:cursor-not-allowed"
             :style="{ backgroundColor: color.bg }"
-            :title="color.name"
+            :title="isObjectLocked ? 'Note is locked' : color.name"
           ></button>
         </div>
         <div class="w-px h-4 bg-slate-700"></div>
@@ -4021,7 +4068,7 @@ onUnmounted(() => {
         v-if="isArrowNodeEditing && editingArrow"
         class="absolute inset-0 pointer-events-none z-30"
       >
-        <!-- Connecting guide lines between nodes for clear visual path -->
+        <!-- Connecting guide lines and live preview between nodes -->
         <svg class="w-full h-full absolute inset-0 pointer-events-none">
           <polyline
             :points="nodeScreenPolyline"
@@ -4030,6 +4077,25 @@ onUnmounted(() => {
             stroke-width="1.5"
             stroke-dasharray="4,4"
             class="opacity-70"
+          />
+          <!-- Live Arrow Shaft Preview during Node Drag -->
+          <path
+            v-if="isDraggingNode && liveNodeArrowSvg.pathD"
+            :d="liveNodeArrowSvg.pathD"
+            fill="none"
+            :stroke="liveNodeArrowSvg.color"
+            :stroke-width="liveNodeArrowSvg.strokeWidth"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+          <!-- Live Arrowhead Preview during Node Drag -->
+          <polygon
+            v-if="isDraggingNode && liveNodeArrowSvg.headPoints"
+            :points="liveNodeArrowSvg.headPoints"
+            :fill="liveNodeArrowSvg.color"
+            :stroke="liveNodeArrowSvg.color"
+            stroke-width="1"
+            stroke-linejoin="round"
           />
         </svg>
 
@@ -4081,15 +4147,6 @@ onUnmounted(() => {
         >
           <Waypoints class="w-3.5 h-3.5 text-indigo-400" />
           <span>Edit Nodes</span>
-        </button>
-        <button
-          @mousedown.prevent
-          @click="straightenSelectedArrow(activeArrow)"
-          class="px-2 py-1 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition cursor-pointer flex items-center gap-1.5 text-xs font-medium whitespace-nowrap"
-          title="Straighten existing nodes into a line"
-        >
-          <Sparkles class="w-3.5 h-3.5 text-amber-400" />
-          <span>Straighten</span>
         </button>
         <div class="w-px h-4 bg-slate-700"></div>
         <button

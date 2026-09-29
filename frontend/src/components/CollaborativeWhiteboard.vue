@@ -401,72 +401,8 @@ const rdp = (points: Array<{ x: number; y: number }>, epsilon: number): Array<{ 
   }
 };
 
-// Detects and trims terminal deflection/flick hooks from curved strokes
-const trimTerminalHook = (pts: Array<{ x: number; y: number }>): Array<{ x: number; y: number }> => {
-  if (pts.length < 8) return pts;
-  const cumDist: number[] = [0];
-  for (let i = 1; i < pts.length; i++) {
-    cumDist.push(cumDist[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y));
-  }
-  const totalLen = cumDist[cumDist.length - 1];
-  if (totalLen < 35) return pts;
-
-  // Maximum terminal hook window: up to 45px or last 30% of stroke
-  const maxHookWindow = Math.min(45, totalLen * 0.30);
-  let hookStartIdx = pts.length - 1;
-  while (hookStartIdx > 2 && cumDist[hookStartIdx] > totalLen - maxHookWindow) {
-    hookStartIdx--;
-  }
-
-  // Preceding body reference window: 35px preceding hookStartIdx
-  let bodyStartIdx = hookStartIdx;
-  while (bodyStartIdx > 0 && cumDist[bodyStartIdx] > cumDist[hookStartIdx] - 35) {
-    bodyStartIdx--;
-  }
-
-  const pBodyStart = pts[bodyStartIdx];
-  const pBodyEnd = pts[hookStartIdx];
-  const bodyDx = pBodyEnd.x - pBodyStart.x;
-  const bodyDy = pBodyEnd.y - pBodyStart.y;
-  const bodyLen = Math.hypot(bodyDx, bodyDy);
-  if (bodyLen < 10) return pts;
-
-  const bodyAngle = Math.atan2(bodyDy, bodyDx);
-
-  // Scan from hookStartIdx to the end for sudden angular deflection > ~34° (0.6 rad)
-  for (let i = hookStartIdx + 1; i < pts.length; i++) {
-    const segDx = pts[i].x - pts[i - 1].x;
-    const segDy = pts[i].y - pts[i - 1].y;
-    const segLen = Math.hypot(segDx, segDy);
-    if (segLen < 2) continue;
-
-    const segAngle = Math.atan2(segDy, segDx);
-    let diff = Math.abs(segAngle - bodyAngle);
-    while (diff > Math.PI) diff = Math.abs(diff - 2 * Math.PI);
-
-    const chordDx = pts[i].x - pts[hookStartIdx].x;
-    const chordDy = pts[i].y - pts[hookStartIdx].y;
-    const chordLen = Math.hypot(chordDx, chordDy);
-    let chordDiff = 0;
-    if (chordLen >= 5) {
-      const chordAngle = Math.atan2(chordDy, chordDx);
-      chordDiff = Math.abs(chordAngle - bodyAngle);
-      while (chordDiff > Math.PI) chordDiff = Math.abs(chordDiff - 2 * Math.PI);
-    }
-
-    if (diff > 0.6 || chordDiff > 0.6) {
-      const trimmed = pts.slice(0, Math.max(hookStartIdx, i));
-      return trimmed.length >= 2 ? trimmed : pts;
-    }
-  }
-
-  return pts;
-};
-
 // Generates an Arrow object with shaft and arrowhead oriented precisely with end tangent
-const createArrowFromPoints = (rawPts: Array<{ x: number; y: number }>) => {
-  if (rawPts.length < 2) return null;
-  const pts = trimTerminalHook(rawPts);
+const createArrowFromPoints = (pts: Array<{ x: number; y: number }>) => {
   if (pts.length < 2) return null;
   const p0 = pts[0];
   const pn = pts[pts.length - 1];
@@ -489,7 +425,7 @@ const createArrowFromPoints = (rawPts: Array<{ x: number; y: number }>) => {
   const isStraight = maxDev < Math.max(16, lineLen * 0.12) || pts.length <= 4;
 
   if (isStraight) {
-    // For straight line: tangent is purely the chord angle (start to end), immune to end jitter
+    // For straight line: tangent is purely the chord angle (start to end)
     tangentAngle = Math.atan2(pn.y - p0.y, pn.x - p0.x);
     // Terminate shaft slightly inside the arrowhead body so rounded stroke cap does not poke out past the tip
     const shaftCut = headLen * 0.55;
@@ -520,17 +456,8 @@ const createArrowFromPoints = (rawPts: Array<{ x: number; y: number }>) => {
       sampled.push(pn);
     }
 
-    // Direction smoothing: calculate tangent from a backward window of >= 55px or 35% of length to prevent release jitter
-    let pBack = sampled[Math.max(0, sampled.length - 2)];
-    let accumBack = 0;
-    const tangentWindow = Math.min(lineLen * 0.65, Math.max(55, lineLen * 0.35));
-    for (let i = sampled.length - 1; i >= 1; i--) {
-      accumBack += Math.hypot(sampled[i].x - sampled[i - 1].x, sampled[i].y - sampled[i - 1].y);
-      if (accumBack >= tangentWindow) {
-        pBack = sampled[i - 1];
-        break;
-      }
-    }
+    // Direct terminal tangent from preceding sampled point
+    const pBack = sampled[Math.max(0, sampled.length - 2)];
     tangentAngle = Math.atan2(pn.y - pBack.y, pn.x - pBack.x);
 
     // Shorten end of shaft by cutting the last segment so rounded cap does not poke out past tip
@@ -618,10 +545,10 @@ const createArrowFromPoints = (rawPts: Array<{ x: number; y: number }>) => {
     perPixelTargetFind: true
   });
   (arrow as any).isArrow = true;
-  (arrow as any).lockUniScaling = true;
   (arrow as any).arrowPoints = pts.map(p => ({ x: p.x, y: p.y }));
   (arrow as any).arrowP0 = { x: p0.x, y: p0.y };
   (arrow as any).arrowPn = { x: pn.x, y: pn.y };
+  (arrow as any).initialMatrix = arrow.calcTransformMatrix();
   return arrow;
 };
 
@@ -830,9 +757,11 @@ const onPencilHoldDetected = () => {
   // Clear in-progress brush line and disable drawing mode during quick shape hold-resizing to prevent ghost strokes
   canvas.isDrawingMode = false;
   canvas.clearContext(canvas.contextTop);
-  if ((canvas.freeDrawingBrush as any)?._points) {
+  if (canvas.freeDrawingBrush) {
     (canvas.freeDrawingBrush as any)._points = [];
+    (canvas.freeDrawingBrush as any).oldEnd = void 0;
   }
+  (canvas as any)._isCurrentlyDrawing = false;
 
   canvas.add(shape);
   shape.setCoords();
@@ -846,13 +775,11 @@ const onPencilHoldDetected = () => {
   const p0 = pencilStrokePoints[0];
   const pn = pencilStrokePoints[pencilStrokePoints.length - 1];
 
-  // Scaling anchor is rigidly bound to the initial pen-down point p0
+  // Scaling anchor is rigidly bound to the initial pen-down point p0 using Fabric transform matrices
   quickShapeP0Scene = new fabric.Point(p0.x, p0.y);
-  if ((shape as any).toLocalPoint) {
-    quickShapeP0Local = (shape as any).toLocalPoint(quickShapeP0Scene, 'left', 'top');
-  } else {
-    quickShapeP0Local = new fabric.Point(p0.x - shape.left, p0.y - shape.top);
-  }
+  const invM = fabric.util.invertTransform(shape.calcTransformMatrix());
+  quickShapeP0Local = fabric.util.transformPoint(quickShapeP0Scene, invM);
+
   quickShapeAnchor = { x: p0.x, y: p0.y };
   quickShapeArrowP0 = { x: p0.x, y: p0.y };
   quickShapeInitialSpanX = Math.max(15, Math.abs(pn.x - p0.x));
@@ -879,7 +806,8 @@ const initFabric = () => {
     height: wrapperRef.value.clientHeight,
     selectionColor: 'rgba(99, 102, 241, 0.18)',
     selectionBorderColor: '#6366f1',
-    selectionLineWidth: 1.5
+    selectionLineWidth: 1.5,
+    uniformScaling: false
   });
 
   // Guard against browser native context menu anywhere on canvas wrapper and elements
@@ -1061,7 +989,6 @@ const initFabric = () => {
   canvas.on('path:created', (e: any) => {
     if (hasFlattenedShapeInCurrentStroke || isPencilHolding || isQuickShapeResizing || currentTool.value === 'arrow') {
       if (e.path) canvas?.remove(e.path);
-      hasFlattenedShapeInCurrentStroke = false;
       return;
     }
     if (e.path) {
@@ -1077,34 +1004,75 @@ const initFabric = () => {
   canvas.on('object:modified', (e: any) => {
     const obj = e?.target;
     if (obj && (obj.isStickyNote || obj.stickyColorConfig)) {
-      const transform = (e as any).transform || (canvas as any)?._currentTransform;
-      const originX = transform?.originX || 'left';
-      const originY = transform?.originY || 'top';
-      const fixedPoint = (obj as any).getPositionByOrigin ? (obj as any).getPositionByOrigin(originX, originY) : null;
-
       const sx = obj.scaleX || 1;
       const sy = obj.scaleY || 1;
-      const curW = obj.width || 180;
-      const curMinH = (obj as any).minHeight !== undefined ? (obj as any).minHeight : (obj.height || 180);
+      if (sx !== 1 || sy !== 1) {
+        const transform = (e as any).transform || (canvas as any)?._currentTransform;
+        const originX = transform?.originX || 'left';
+        const originY = transform?.originY || 'top';
+        const fixedPoint = (obj as any).getPositionByOrigin ? (obj as any).getPositionByOrigin(originX, originY) : null;
 
-      const minW = 125;
-      const minH = 60;
-      let targetW = Math.round(curW * sx);
-      let targetH = Math.round(curMinH * sy);
-      if (targetW < minW) targetW = minW;
-      if (targetH < minH) targetH = minH;
+        const curW = obj.width || 180;
+        const curMinH = (obj as any).minHeight !== undefined ? (obj as any).minHeight : (obj.height || 180);
 
-      (obj as any).minHeight = targetH;
-      obj.set({
-        width: targetW,
-        scaleX: 1,
-        scaleY: 1
-      });
-      obj.initDimensions();
-      if (fixedPoint && (obj as any).setPositionByOrigin) {
-        (obj as any).setPositionByOrigin(fixedPoint, originX, originY);
+        let targetW = Math.max(125, Math.round(curW * sx));
+        let targetH = Math.max(60, Math.round(curMinH * sy));
+
+        (obj as any).minHeight = targetH;
+        obj.set({
+          width: targetW,
+          scaleX: 1,
+          scaleY: 1
+        });
+        obj.initDimensions();
+        if (fixedPoint && (obj as any).setPositionByOrigin) {
+          (obj as any).setPositionByOrigin(fixedPoint, originX, originY);
+        }
+        obj.setCoords();
       }
-      obj.setCoords();
+    }
+
+    // Reconstruct arrow with fixed pristine arrowhead size and vector crispness
+    if (obj && (obj as any).isArrow && (obj as any).arrowPoints && (obj as any).initialMatrix) {
+      if ((obj.scaleX && obj.scaleX !== 1) || (obj.scaleY && obj.scaleY !== 1)) {
+        setTimeout(() => {
+          try {
+            if (!canvas) return;
+            const M0 = (obj as any).initialMatrix;
+            const M1 = obj.calcTransformMatrix();
+            const invM0 = fabric.util.invertTransform(M0);
+            const M_delta = fabric.util.multiplyTransformMatrices(M1, invM0);
+            const newPts = (obj as any).arrowPoints.map((pt: any) => fabric.util.transformPoint(pt, M_delta));
+            const newArrow = createArrowFromPoints(newPts);
+            if (newArrow && canvas) {
+              (newArrow as any).isLocked = (obj as any).isLocked;
+              if ((obj as any).isLocked) {
+                newArrow.set({
+                  lockMovementX: true,
+                  lockMovementY: true,
+                  lockRotation: true,
+                  lockScalingX: true,
+                  lockScalingY: true,
+                  hasControls: false
+                });
+              }
+              const allObjs = canvas.getObjects();
+              const idx = allObjs.indexOf(obj);
+              if (idx !== -1) {
+                canvas.remove(obj);
+                canvas.insertAt(idx, newArrow);
+                newArrow.setCoords();
+                canvas.setActiveObject(newArrow);
+                canvas.requestRenderAll();
+                saveHistoryState();
+                syncToFirebase();
+              }
+            }
+          } catch (err) {
+            console.warn('Failed to bake arrow scaling:', err);
+          }
+        }, 0);
+      }
     }
 
     if (!isInternalChange) {
@@ -1270,6 +1238,9 @@ const initFabric = () => {
 
     isMouseDown = true;
     hasFlattenedShapeInCurrentStroke = false;
+    canvas.getObjects().forEach((o: any) => {
+      o._persisted = true;
+    });
 
     const scenePoint = canvas.getScenePoint(e);
 
@@ -1450,10 +1421,11 @@ const initFabric = () => {
         });
         quickShapeActiveObj.setCoords();
 
-        if (quickShapeP0Scene && quickShapeP0Local && quickShapeActiveObj.toGlobalPoint) {
-          const curGlobal = quickShapeActiveObj.toGlobalPoint(quickShapeP0Local);
-          quickShapeActiveObj.left += (quickShapeP0Scene.x - curGlobal.x);
-          quickShapeActiveObj.top += (quickShapeP0Scene.y - curGlobal.y);
+        if (quickShapeP0Scene && quickShapeP0Local) {
+          const curM = quickShapeActiveObj.calcTransformMatrix();
+          const curGlobalP0 = fabric.util.transformPoint(quickShapeP0Local, curM);
+          quickShapeActiveObj.left += (quickShapeP0Scene.x - curGlobalP0.x);
+          quickShapeActiveObj.top += (quickShapeP0Scene.y - curGlobalP0.y);
           quickShapeActiveObj.setCoords();
         }
       }
@@ -1537,6 +1509,21 @@ const initFabric = () => {
     if (isQuickShapeResizing && quickShapeActiveObj) {
       isQuickShapeResizing = false;
       isPencilHolding = false;
+      (canvas as any)._isCurrentlyDrawing = false;
+      if (canvas.freeDrawingBrush) {
+        (canvas.freeDrawingBrush as any)._points = [];
+        (canvas.freeDrawingBrush as any).oldEnd = void 0;
+      }
+      canvas.clearContext(canvas.contextTop);
+
+      // Clean up any stray path added by the brush during this gesture
+      const allObjs = canvas?.getObjects() || [];
+      allObjs.forEach((o: any) => {
+        if (o.type === 'path' && o !== quickShapeActiveObj && !o._persisted) {
+          canvas?.remove(o);
+        }
+      });
+
       quickShapeActiveObj.setCoords();
       canvas.setActiveObject(quickShapeActiveObj);
       canvas.requestRenderAll();
@@ -1689,38 +1676,7 @@ const initFabric = () => {
     }
     updateStickyToolbar();
   });
-  canvas.on('object:scaling', (e: any) => {
-    const obj = e.target;
-    if (obj && (obj.isStickyNote || obj.stickyColorConfig)) {
-      const transform = (e as any).transform || (canvas as any)?._currentTransform;
-      const originX = transform?.originX || 'left';
-      const originY = transform?.originY || 'top';
-      const fixedPoint = (obj as any).getPositionByOrigin ? (obj as any).getPositionByOrigin(originX, originY) : null;
-
-      const sx = obj.scaleX || 1;
-      const sy = obj.scaleY || 1;
-      const curW = obj.width || 180;
-      const curMinH = (obj as any).minHeight !== undefined ? (obj as any).minHeight : (obj.height || 180);
-
-      const minW = 125;
-      const minH = 60;
-      let targetW = Math.round(curW * sx);
-      let targetH = Math.round(curMinH * sy);
-      if (targetW < minW) targetW = minW;
-      if (targetH < minH) targetH = minH;
-
-      (obj as any).minHeight = targetH;
-      obj.set({
-        width: targetW,
-        scaleX: 1,
-        scaleY: 1
-      });
-      obj.initDimensions();
-      if (fixedPoint && (obj as any).setPositionByOrigin) {
-        (obj as any).setPositionByOrigin(fixedPoint, originX, originY);
-      }
-      obj.setCoords();
-    }
+  canvas.on('object:scaling', () => {
     updateStickyToolbar();
   });
   canvas.on('object:resizing', (e: any) => {
@@ -1861,8 +1817,29 @@ const setupStickyControls = (note: any) => {
       actionHandler: changeStickyHeight,
       cursorStyleHandler: fabric.controlsUtils.scaleSkewCursorStyleHandler,
       actionName: 'resizing'
+    }),
+    mt: new fabric.Control({
+      x: 0,
+      y: -0.5,
+      actionHandler: changeStickyHeight,
+      cursorStyleHandler: fabric.controlsUtils.scaleSkewCursorStyleHandler,
+      actionName: 'resizing'
     })
   };
+};
+
+const applyStickyNoteMethods = (note: any) => {
+  note.calcTextHeight = function() {
+    const textH = fabric.Textbox.prototype.calcTextHeight.call(this);
+    return Math.max(textH, (this as any).minHeight !== undefined ? (this as any).minHeight : 60);
+  };
+  (note as any)._getTopOffset = function() {
+    const textH = fabric.Textbox.prototype.calcTextHeight.call(this);
+    const h = (this as any).height || (this as any).minHeight || 60;
+    const extraOffset = Math.max(0, (h - textH) / 2);
+    return -h / 2 + extraOffset;
+  };
+  setupStickyControls(note);
 };
 
 // Rehydrate custom attributes, methods, and constraints after deserializing from JSON
@@ -1893,17 +1870,7 @@ const rehydrateCanvasObjects = () => {
       o.textAlign = 'center';
       o.splitByGrapheme = true;
       o.lockUniScaling = false;
-      const orig = o.calcTextHeight.bind(o);
-      o.calcTextHeight = function() {
-        return Math.max(orig(), (this as any).minHeight !== undefined ? (this as any).minHeight : 60);
-      };
-      (o as any)._getTopOffset = function() {
-        const linesH = orig();
-        const h = (this as any).height || (this as any).minHeight || 60;
-        const extraOffset = Math.max(0, (h - linesH) / 2);
-        return -h / 2 + extraOffset;
-      };
-      setupStickyControls(o);
+      applyStickyNoteMethods(o);
       o.initDimensions();
     }
 
@@ -2083,20 +2050,7 @@ const spawnStickyNote = (x: number, y: number, colorCfg = selectedStickyColor.va
   (note as any).stickyColorConfig = colorCfg;
   (note as any).minHeight = 180;
   (note as any).isLocked = false;
-
-  // Guarantee square baseline, auto dynamic height expansion on multi-line text, and centered text/cursor
-  const origCalcTextHeight = note.calcTextHeight.bind(note);
-  note.calcTextHeight = function() {
-    const actualH = origCalcTextHeight();
-    return Math.max(actualH, (this as any).minHeight !== undefined ? (this as any).minHeight : 60);
-  };
-  (note as any)._getTopOffset = function() {
-    const linesH = origCalcTextHeight();
-    const h = (this as any).height || (this as any).minHeight || 60;
-    const extraOffset = Math.max(0, (h - linesH) / 2);
-    return -h / 2 + extraOffset;
-  };
-  setupStickyControls(note);
+  applyStickyNoteMethods(note);
   note.initDimensions();
 
   canvas.add(note);
@@ -2152,7 +2106,8 @@ const duplicateStickyNote = async (note: any) => {
   (cloned as any).isStickyNote = true;
   (cloned as any).stickyColorConfig = (note as any).stickyColorConfig;
   (cloned as any).minHeight = (note as any).minHeight || 180;
-  setupStickyControls(cloned);
+  applyStickyNoteMethods(cloned);
+  cloned.initDimensions();
   canvas.add(cloned);
   canvas.setActiveObject(cloned);
   canvas.requestRenderAll();

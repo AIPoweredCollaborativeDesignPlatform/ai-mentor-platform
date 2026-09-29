@@ -379,6 +379,8 @@ const enterArrowNodeEditing = (arrow: any) => {
     selectable: true,
     evented: true
   });
+  (arrow as any)._nodeDragLastLeft = arrow.left;
+  (arrow as any)._nodeDragLastTop = arrow.top;
   canvas?.discardActiveObject();
   canvas?.requestRenderAll();
   updateSelectionState();
@@ -678,6 +680,7 @@ const duplicateArrow = (arrow: any) => {
     saveHistoryState();
     syncToFirebase();
     updateSelectionState();
+    displayToast('Duplicated');
   }
 };
 
@@ -1000,43 +1003,31 @@ const createArrowFromPoints = (
       // In node edit mode or preserved transform, keep exact knot points
       sampled = pts.map(p => ({ x: p.x, y: p.y }));
     } else {
-      // Compute total arc length of simplified path
-      const cumDist: number[] = [0];
-      for (let i = 1; i < simplifiedPts.length; i++) {
-        const d = Math.hypot(simplifiedPts[i].x - simplifiedPts[i - 1].x, simplifiedPts[i].y - simplifiedPts[i - 1].y);
-        cumDist.push(cumDist[i - 1] + d);
-      }
-      const totalArcLen = cumDist[cumDist.length - 1];
-
-      // Drop an anchor node approximately every ~150px as requested by user
+      // Illustrator-style incremental forward anchor placement (~150px per anchor)
+      // Anchors placed earlier remain permanently fixed at their spatial coordinates.
+      // Drawing forward only appends new movement to the tip without shifting existing nodes.
       const step = 150;
-      const nodeCount = Math.max(2, Math.round(totalArcLen / step) + 1);
-      sampled = [];
+      sampled = [{ x: simplifiedPts[0].x, y: simplifiedPts[0].y }];
+      let lastAnchor = simplifiedPts[0];
+      let distFromLastAnchor = 0;
 
-      for (let k = 0; k < nodeCount; k++) {
-        if (k === 0) {
-          sampled.push({ x: simplifiedPts[0].x, y: simplifiedPts[0].y });
-        } else if (k === nodeCount - 1) {
-          sampled.push({ x: pn.x, y: pn.y });
-        } else {
-          const targetDist = (k / (nodeCount - 1)) * totalArcLen;
-          let segIdx = 1;
-          while (segIdx < cumDist.length && cumDist[segIdx] < targetDist) {
-            segIdx++;
-          }
-          if (segIdx < cumDist.length) {
-            const segLen = cumDist[segIdx] - cumDist[segIdx - 1];
-            const ratio = segLen > 1e-4 ? (targetDist - cumDist[segIdx - 1]) / segLen : 0;
-            const pA = simplifiedPts[segIdx - 1];
-            const pB = simplifiedPts[segIdx];
-            sampled.push({
-              x: pA.x + ratio * (pB.x - pA.x),
-              y: pA.y + ratio * (pB.y - pA.y)
-            });
-          } else {
-            sampled.push({ x: pn.x, y: pn.y });
-          }
+      for (let i = 1; i < simplifiedPts.length - 1; i++) {
+        const segDist = Math.hypot(simplifiedPts[i].x - simplifiedPts[i - 1].x, simplifiedPts[i].y - simplifiedPts[i - 1].y);
+        distFromLastAnchor += segDist;
+        if (distFromLastAnchor >= step) {
+          sampled.push({ x: simplifiedPts[i].x, y: simplifiedPts[i].y });
+          lastAnchor = simplifiedPts[i];
+          distFromLastAnchor = 0;
         }
+      }
+
+      // Final point (current mouse position)
+      const distToTip = Math.hypot(pn.x - lastAnchor.x, pn.y - lastAnchor.y);
+      if (distToTip < 45 && sampled.length > 1) {
+        // If the tip is very close to the last dropped anchor, merge to prevent a cramped stub at the head
+        sampled[sampled.length - 1] = { x: pn.x, y: pn.y };
+      } else {
+        sampled.push({ x: pn.x, y: pn.y });
       }
     }
     finalPts = sampled.map(p => ({ x: p.x, y: p.y }));
@@ -1707,6 +1698,11 @@ const initFabric = () => {
       }
     }
 
+    if (isArrowNodeEditing.value && editingArrow.value && obj === editingArrow.value) {
+      obj._nodeDragLastLeft = obj.left;
+      obj._nodeDragLastTop = obj.top;
+    }
+
     if (!isInternalChange) {
       saveHistoryState();
       syncToFirebase();
@@ -2364,7 +2360,15 @@ const initFabric = () => {
     const baseW = target.width || minDim;
     const baseH = target.height || minDim;
     const minSide = Math.min(baseW, baseH);
-    target.minScaleLimit = Math.max(0.01, minDim / (minSide > 0 ? minSide : minDim));
+    const curScale = Math.min(Math.abs(target.scaleX || 1), Math.abs(target.scaleY || 1));
+
+    if (minSide > minDim) {
+      // Normal object: allow scaling down until size reaches minDim
+      target.minScaleLimit = Math.max(0.01, minDim / minSide);
+    } else {
+      // Micro object or dot (already <= minDim): never force minScaleLimit above current scale!
+      target.minScaleLimit = Math.min(curScale, 0.05);
+    }
 
     if (target.type === 'activeselection' || (target.type === 'group' && !target.isStickyNote)) {
       const children = target.getObjects ? target.getObjects() : target._objects || [];
@@ -2379,6 +2383,23 @@ const initFabric = () => {
   canvas.on('object:moving', (e: any) => {
     const obj = e.target;
     if (!obj) return;
+
+    // 0. If in arrow node editing mode and dragging the arrow body itself, synchronize all node handles in real time
+    if (isArrowNodeEditing.value && editingArrow.value && obj === editingArrow.value) {
+      const prevL = obj._nodeDragLastLeft !== undefined ? obj._nodeDragLastLeft : obj.left;
+      const prevT = obj._nodeDragLastTop !== undefined ? obj._nodeDragLastTop : obj.top;
+      const dx = obj.left - prevL;
+      const dy = obj.top - prevT;
+      obj._nodeDragLastLeft = obj.left;
+      obj._nodeDragLastTop = obj.top;
+      if (dx !== 0 || dy !== 0) {
+        editingArrowPoints.value = editingArrowPoints.value.map((pt: any) => ({
+          x: pt.x + dx,
+          y: pt.y + dy
+        }));
+        (editingArrow.value as any).arrowPoints = editingArrowPoints.value.map((p: any) => ({ ...p }));
+      }
+    }
 
     // 1. If group or activeSelection contains locked children, keep locked children strictly stationary in world coordinates
     if (obj.type === 'activeselection' || (obj.type === 'group' && !obj.isStickyNote)) {
@@ -2437,7 +2458,20 @@ const initFabric = () => {
     updateStickyToolbar();
     updateArrowToolbar();
   });
-  canvas.on('object:scaling', () => {
+  canvas.on('object:scaling', (e: any) => {
+    const obj = e?.target;
+    if (obj) {
+      if (obj.isStickyNote || obj.stickyColorConfig) {
+        const s = Math.max(Math.abs(obj.scaleX || 1), Math.abs(obj.scaleY || 1));
+        obj.scaleX = (obj.scaleX < 0 ? -1 : 1) * s;
+        obj.scaleY = (obj.scaleY < 0 ? -1 : 1) * s;
+      }
+      obj.setCoords();
+      if ((obj.type === 'activeselection' || obj.type === 'activeSelection') && obj.forEachObject) {
+        obj.forEachObject((c: any) => c.setCoords());
+      }
+      canvas?.requestRenderAll();
+    }
     updateStickyToolbar();
     updateArrowToolbar();
   });
@@ -2562,11 +2596,35 @@ const changeStickyHeight = (eventData: any, transform: any, x: number, y: number
 
 const setupStickyControls = (note: any) => {
   const defaultControls = fabric.controlsUtils?.createObjectDefaultControls?.() || {};
+
+  const makeStickyCornerControl = (baseControl: any) => {
+    if (!baseControl) return baseControl;
+    const origHandler = baseControl.actionHandler;
+    return new (fabric as any).Control({
+      ...baseControl,
+      actionHandler: (eventData: any, transform: any, x: number, y: number) => {
+        // Enforce proportional uniform scaling by forcing shiftKey / uniScaleKey on the event
+        const forcedEvent = {
+          ...eventData,
+          shiftKey: true,
+          [transform.target?.canvas?.uniScaleKey || 'shiftKey']: true
+        };
+        const res = origHandler ? origHandler(forcedEvent, transform, x, y) : false;
+        if (transform.target) {
+          const s = Math.max(Math.abs(transform.target.scaleX || 1), Math.abs(transform.target.scaleY || 1));
+          transform.target.scaleX = (transform.target.scaleX < 0 ? -1 : 1) * s;
+          transform.target.scaleY = (transform.target.scaleY < 0 ? -1 : 1) * s;
+        }
+        return res;
+      }
+    });
+  };
+
   note.controls = {
-    tl: defaultControls.tl,
-    tr: defaultControls.tr,
-    bl: defaultControls.bl,
-    br: defaultControls.br
+    tl: makeStickyCornerControl(defaultControls.tl),
+    tr: makeStickyCornerControl(defaultControls.tr),
+    bl: makeStickyCornerControl(defaultControls.bl),
+    br: makeStickyCornerControl(defaultControls.br)
   };
   note.setControlsVisibility({
     tl: true,
@@ -2772,12 +2830,14 @@ const copySelection = async () => {
   const activeObj = canvas.getActiveObject();
   if (activeObj) {
     clipboard = await activeObj.clone();
+    displayToast('Copied (Ctrl+C)');
   }
 };
 
 const cutSelection = async () => {
   await copySelection();
   deleteSelected();
+  displayToast('Cut (Ctrl+X)');
 };
 
 const pasteSelection = async (targetPoint?: { x: number; y: number }) => {
@@ -2821,6 +2881,7 @@ const pasteSelection = async (targetPoint?: { x: number; y: number }) => {
   saveHistoryState();
   syncToFirebase();
   updateSelectionState();
+  displayToast('Pasted (Ctrl+V)');
 };
 
 // Sticky Note Actions (Native unified fabric.Textbox with instant typing mode)
@@ -2923,6 +2984,7 @@ const duplicateStickyNote = async (note: any) => {
   saveHistoryState();
   syncToFirebase();
   updateSelectionState();
+  displayToast('Duplicated');
 };
 
 // Group Isolation Mode Actions
@@ -3050,6 +3112,7 @@ const toggleLockSelected = () => {
   saveHistoryState();
   syncToFirebase();
   updateSelectionState();
+  displayToast(newLocked ? 'Locked (Ctrl+L)' : 'Unlocked (Ctrl+L)');
 };
 
 // Quick save action (Ctrl+S)
@@ -4018,30 +4081,36 @@ onUnmounted(() => {
     <!-- Group Isolation Mode Top Floating Banner -->
     <div
       v-if="isIsolationMode"
-      class="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 px-4 py-2 bg-slate-900/95 border border-indigo-500/80 rounded-2xl shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95"
+      class="absolute left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-1.5 sm:py-2 bg-slate-900/95 border border-indigo-500/80 rounded-2xl shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 whitespace-nowrap select-none shrink-0 pointer-events-auto transition-all"
+      :class="whiteboardContainerWidth < 640 ? 'top-14' : 'top-4'"
     >
-      <div class="flex items-center gap-2 text-indigo-300 font-semibold text-xs">
-        <Group class="w-4 h-4 text-indigo-400" />
-        <span>Group Isolation Mode</span>
-        <span class="text-slate-400 font-normal hidden sm:inline">(Press ESC or Exit to return)</span>
+      <div class="flex items-center gap-1.5 sm:gap-2 text-indigo-300 font-semibold text-xs whitespace-nowrap shrink-0">
+        <Group class="w-4 h-4 text-indigo-400 shrink-0" />
+        <span v-if="whiteboardContainerWidth >= 640">Group Isolation Mode</span>
+        <span v-else-if="whiteboardContainerWidth >= 480">Group Isolation</span>
+        <span v-else>Isolation</span>
+        <span v-if="whiteboardContainerWidth >= 768" class="text-slate-400 font-normal">(ESC to return)</span>
       </div>
       <button
         @click="exitGroupIsolation"
-        class="px-2.5 py-1 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition cursor-pointer"
+        class="px-2 sm:px-2.5 py-1 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition cursor-pointer whitespace-nowrap shrink-0 shadow-sm"
       >
-        Exit Isolation
+        <span v-if="whiteboardContainerWidth >= 640">Exit Isolation</span>
+        <span v-else>Exit</span>
       </button>
     </div>
 
     <!-- Arrow & Line Node Editing Mode Top Floating Banner -->
     <div
       v-if="isArrowNodeEditing"
-      class="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-1.5 sm:py-2 bg-slate-900/95 border border-indigo-500/80 rounded-2xl shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 whitespace-nowrap select-none shrink-0"
+      class="absolute left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-1.5 sm:py-2 bg-slate-900/95 border border-indigo-500/80 rounded-2xl shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 whitespace-nowrap select-none shrink-0 pointer-events-auto transition-all"
+      :class="whiteboardContainerWidth < 640 ? 'top-14' : 'top-4'"
     >
-      <div class="flex items-center gap-2 text-indigo-300 font-semibold text-xs whitespace-nowrap shrink-0">
+      <div class="flex items-center gap-1.5 sm:gap-2 text-indigo-300 font-semibold text-xs whitespace-nowrap shrink-0">
         <Waypoints class="w-4 h-4 text-indigo-400 shrink-0" />
-        <span class="whitespace-nowrap font-medium">Node Edit Mode</span>
-        <span class="text-slate-400 font-normal hidden sm:inline whitespace-nowrap">(Drag nodes to sculpt curve, ESC to exit)</span>
+        <span v-if="whiteboardContainerWidth >= 480" class="whitespace-nowrap font-medium">Node Edit Mode</span>
+        <span v-else class="whitespace-nowrap font-medium">Node Edit</span>
+        <span v-if="whiteboardContainerWidth >= 768" class="text-slate-400 font-normal whitespace-nowrap">(Drag nodes to sculpt curve, ESC to exit)</span>
       </div>
       <div class="flex items-center gap-1.5 shrink-0">
         <button

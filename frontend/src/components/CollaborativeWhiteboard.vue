@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { useRoomStore } from '../stores/room';
 import { useAuthStore } from '../stores/auth';
 import * as fabric from 'fabric';
@@ -48,6 +48,12 @@ const authStore = useAuthStore();
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 const fileInputRef = ref<HTMLInputElement | null>(null);
 const wrapperRef = ref<HTMLDivElement | null>(null);
+const rootRef = ref<HTMLDivElement | null>(null);
+
+const whiteboardContainerWidth = ref(800);
+const isColorPickerOpen = ref(false);
+const isCompactToolbar = computed(() => whiteboardContainerWidth.value < 780);
+const isNarrowToolbar = computed(() => whiteboardContainerWidth.value < 540);
 
 let canvas: fabric.Canvas | null = null;
 
@@ -191,7 +197,32 @@ const updateSelectionState = () => {
   );
   if (active && (active.type?.toLowerCase() === 'activeselection' || active._objects)) {
     const targets = active.getObjects ? active.getObjects() : active._objects;
-    isObjectLocked.value = targets.length > 0 && targets.every((o: any) => o.isLocked === true);
+    const allLocked = targets.length > 0 && targets.every((o: any) => o.isLocked === true);
+    isObjectLocked.value = allLocked;
+    if (allLocked) {
+      active.set({
+        lockMovementX: true,
+        lockMovementY: true,
+        lockRotation: true,
+        lockScalingX: true,
+        lockScalingY: true,
+        hasControls: false
+      });
+    }
+  } else if (active && (active.type?.toLowerCase() === 'group' || active instanceof fabric.Group) && !active.isStickyNote) {
+    const targets = active.getObjects ? active.getObjects() : active._objects || [];
+    const allLocked = targets.length > 0 && targets.every((o: any) => o.isLocked === true);
+    isObjectLocked.value = !!active.isLocked || allLocked;
+    if (active.isLocked || allLocked) {
+      active.set({
+        lockMovementX: true,
+        lockMovementY: true,
+        lockRotation: true,
+        lockScalingX: true,
+        lockScalingY: true,
+        hasControls: false
+      });
+    }
   } else {
     isObjectLocked.value = !!(active && active.isLocked === true);
   }
@@ -809,7 +840,7 @@ const initFabric = () => {
     ctx.fillStyle = '#f8fafc';
     ctx.fillRect(screenX, screenY, screenW, screenH);
 
-    // 4. Draw dot grid ONLY inside workspace boundary
+    // 4. Draw dot grid ONLY inside workspace boundary (fully synchronized with scene panning)
     const baseSpacing = 28;
     const screenSpacing = baseSpacing * zoom;
 
@@ -819,14 +850,21 @@ const initFabric = () => {
       ctx.rect(screenX, screenY, screenW, screenH);
       ctx.clip();
 
-      ctx.fillStyle = '#94a3b8';
-      const dotRadius = Math.max(1.0, Math.min(2.5, 1.2 * Math.sqrt(zoom)));
+      ctx.fillStyle = 'rgba(148, 163, 184, 0.35)';
+      const dotRadius = Math.max(0.8, Math.min(2.0, 1.0 * Math.sqrt(zoom)));
 
-      const startX = screenX + (((0 - screenX) % screenSpacing + screenSpacing) % screenSpacing);
-      const startY = screenY + (((0 - screenY) % screenSpacing + screenSpacing) % screenSpacing);
+      const minVisibleSceneX = Math.max(0, -screenX / zoom);
+      const maxVisibleSceneX = Math.min(WORKSPACE_WIDTH, (width - screenX) / zoom);
+      const minVisibleSceneY = Math.max(0, -screenY / zoom);
+      const maxVisibleSceneY = Math.min(WORKSPACE_HEIGHT, (height - screenY) / zoom);
 
-      for (let x = startX; x < screenX + screenW; x += screenSpacing) {
-        for (let y = startY; y < screenY + screenH; y += screenSpacing) {
+      const firstSceneX = Math.ceil(minVisibleSceneX / baseSpacing) * baseSpacing;
+      const firstSceneY = Math.ceil(minVisibleSceneY / baseSpacing) * baseSpacing;
+
+      for (let sx = firstSceneX; sx <= maxVisibleSceneX; sx += baseSpacing) {
+        const x = screenX + sx * zoom;
+        for (let sy = firstSceneY; sy <= maxVisibleSceneY; sy += baseSpacing) {
+          const y = screenY + sy * zoom;
           ctx.beginPath();
           ctx.arc(x, y, dotRadius, 0, Math.PI * 2);
           ctx.fill();
@@ -995,14 +1033,14 @@ const initFabric = () => {
     const activeObj = canvas.getActiveObject();
 
     if (!hitTarget && activeObj) {
-      const scenePoint = canvas.getScenePoint(e);
-      if ((activeObj as any).shouldStartTransform?.(e) || (activeObj as any).findControl?.(scenePoint)) {
+      const vpPoint = canvas.getViewportPoint(e);
+      if ((activeObj as any).findControl?.(vpPoint)) {
         hitTarget = activeObj;
       }
     }
 
     if (hitTarget && hitTarget !== (canvas as any).clipPath) {
-      if (isDrawingMode.value || currentTool.value === 'sticky' || currentTool.value === 'arrow') {
+      if (isDrawingMode.value || currentTool.value === 'sticky' || currentTool.value === 'arrow' || ['rect', 'circle', 'triangle', 'line'].includes(currentTool.value)) {
         toggleMode(false);
         currentTool.value = 'select';
         canvas.isDrawingMode = false;
@@ -1155,6 +1193,22 @@ const initFabric = () => {
 
     // Shapes
     if (['rect', 'circle', 'triangle', 'line'].includes(currentTool.value)) {
+      const activeObj = canvas.getActiveObject();
+      const found = opt.target || canvas.findTarget(e);
+      const hitTarget = (found as any)?.target || found || null;
+      const vpPoint = canvas.getViewportPoint(e);
+      const isControlHit = activeObj && ((activeObj as any).findControl?.(vpPoint));
+
+      if (isControlHit || (hitTarget && hitTarget !== (canvas as any).clipPath)) {
+        currentTool.value = 'select';
+        if (hitTarget && hitTarget !== activeObj) {
+          canvas.setActiveObject(hitTarget as fabric.FabricObject);
+          canvas.requestRenderAll();
+          updateSelectionState();
+        }
+        return;
+      }
+
       canvas.selection = false;
       drawingStartPoint = { x: scenePoint.x, y: scenePoint.y };
       const options = {
@@ -1380,34 +1434,70 @@ const initFabric = () => {
     }
   });
 
-  // Clamp moving objects strictly within workspace boundary using stable bounding rect
+  // Record initial positions before transform to preserve locked child objects
+  canvas.on('before:transform', (opt: any) => {
+    const target = opt.transform?.target;
+    if (!target) return;
+    target._dragStartLeft = target.left;
+    target._dragStartTop = target.top;
+    if (target.type === 'activeselection' || (target.type === 'group' && !target.isStickyNote)) {
+      const children = target.getObjects ? target.getObjects() : target._objects || [];
+      children.forEach((c: any) => {
+        c._dragStartLeft = c.left;
+        c._dragStartTop = c.top;
+      });
+    }
+  });
+
+  // Clamp moving objects strictly within workspace boundary and preserve locked child positions
   canvas.on('object:moving', (e: any) => {
     const obj = e.target;
     if (!obj) return;
 
-    // Use true absolute bounding box in canvas workspace space
-    const bound = obj.getBoundingRect ? obj.getBoundingRect(true) : null;
+    // 1. If group or activeSelection contains locked children, keep locked children pinned to initial scene coordinates
+    if (obj.type === 'activeselection' || (obj.type === 'group' && !obj.isStickyNote)) {
+      const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
+      const lockedChildren = targets.filter((o: any) => o.isLocked);
+      if (lockedChildren.length > 0 && obj._dragStartLeft !== undefined && obj._dragStartTop !== undefined) {
+        const deltaX = obj.left - obj._dragStartLeft;
+        const deltaY = obj.top - obj._dragStartTop;
+        lockedChildren.forEach((child: any) => {
+          if (child._dragStartLeft !== undefined && child._dragStartTop !== undefined) {
+            child.left = child._dragStartLeft - deltaX;
+            child.top = child._dragStartTop - deltaY;
+            child.setCoords();
+          }
+        });
+      }
+    }
+
+    // 2. Strict boundary clamping: flush coordinates first to obtain true bounding box
+    obj.setCoords();
+    let bound = obj.getBoundingRect ? obj.getBoundingRect() : null;
     if (bound) {
-      const diffX = obj.left - bound.left;
-      const diffY = obj.top - bound.top;
-
-      let targetLeft = bound.left;
-      let targetTop = bound.top;
-
       if (bound.width >= WORKSPACE_WIDTH) {
-        targetLeft = 0;
+        obj.left = 0;
       } else {
-        targetLeft = Math.max(0, Math.min(WORKSPACE_WIDTH - bound.width, bound.left));
+        if (bound.left < 0) {
+          obj.left += (0 - bound.left);
+        } else if (bound.left + bound.width > WORKSPACE_WIDTH) {
+          obj.left -= (bound.left + bound.width - WORKSPACE_WIDTH);
+        }
       }
 
-      if (bound.height >= WORKSPACE_HEIGHT) {
-        targetTop = 0;
-      } else {
-        targetTop = Math.max(0, Math.min(WORKSPACE_HEIGHT - bound.height, bound.top));
+      obj.setCoords();
+      bound = obj.getBoundingRect ? obj.getBoundingRect() : null;
+      if (bound) {
+        if (bound.height >= WORKSPACE_HEIGHT) {
+          obj.top = 0;
+        } else {
+          if (bound.top < 0) {
+            obj.top += (0 - bound.top);
+          } else if (bound.top + bound.height > WORKSPACE_HEIGHT) {
+            obj.top -= (bound.top + bound.height - WORKSPACE_HEIGHT);
+          }
+        }
       }
-
-      obj.left = targetLeft + diffX;
-      obj.top = targetTop + diffY;
       obj.setCoords();
     }
     updateStickyToolbar();
@@ -1423,6 +1513,7 @@ const initFabric = () => {
       if (canvas && wrapperRef.value) {
         const w = wrapperRef.value.clientWidth;
         const h = wrapperRef.value.clientHeight;
+        whiteboardContainerWidth.value = w;
         if (canvas.getWidth() !== w || canvas.getHeight() !== h) {
           canvas.setDimensions({ width: w, height: h });
           canvas.renderAll();
@@ -1748,7 +1839,17 @@ const enterGroupIsolation = (group: fabric.Group) => {
   isolatedItems = group.removeAll();
   canvas.remove(group);
   isolatedItems.forEach(item => {
-    item.set({ selectable: true, evented: true, perPixelTargetFind: true });
+    item.set({
+      selectable: true,
+      evented: true,
+      perPixelTargetFind: true,
+      lockMovementX: !!(item as any).isLocked,
+      lockMovementY: !!(item as any).isLocked,
+      lockRotation: !!(item as any).isLocked,
+      lockScalingX: !!(item as any).isLocked,
+      lockScalingY: !!(item as any).isLocked,
+      hasControls: !(item as any).isLocked
+    });
     canvas?.add(item);
   });
 
@@ -1777,6 +1878,20 @@ const exitGroupIsolation = () => {
     subTargetCheck: false,
     perPixelTargetFind: true
   });
+  const allLocked = isolatedItems.length > 0 && isolatedItems.every((o: any) => o.isLocked);
+  const anyLocked = isolatedItems.some((o: any) => o.isLocked);
+  (newGroup as any).hasLockedChildren = anyLocked;
+  if (allLocked) {
+    (newGroup as any).isLocked = true;
+    newGroup.set({
+      lockMovementX: true,
+      lockMovementY: true,
+      lockRotation: true,
+      lockScalingX: true,
+      lockScalingY: true,
+      hasControls: false
+    });
+  }
   canvas.add(newGroup);
   canvas.setActiveObject(newGroup);
   canvas.requestRenderAll();
@@ -1967,29 +2082,95 @@ const pasteAtContext = () => {
 
 const deleteSelected = () => {
   if (!canvas) return;
-  const activeObjects = canvas.getActiveObjects();
-  if (!activeObjects.length) return;
+  const activeObj = canvas.getActiveObject() as any;
+  if (!activeObj) return;
 
-  const lockedObjects = activeObjects.filter((obj: any) => obj.isLocked === true);
-  const deletable = activeObjects.filter((obj: any) => obj.isLocked !== true);
+  if (activeObj.type === 'activeselection') {
+    const targets = activeObj.getObjects();
+    const locked = targets.filter((obj: any) => obj.isLocked === true);
+    const deletable = targets.filter((obj: any) => obj.isLocked !== true);
 
-  if (lockedObjects.length > 0) {
-    displayToast('Locked objects cannot be deleted (Unlock with Ctrl+L first)');
+    if (locked.length > 0) {
+      displayToast('Locked objects cannot be deleted (Unlock with Ctrl+Shift+L first)');
+    }
+    if (deletable.length) {
+      canvas.discardActiveObject();
+      deletable.forEach((obj: any) => {
+        if (obj.isEditing && obj.exitEditing) obj.exitEditing();
+        canvas?.remove(obj);
+      });
+      if (locked.length === 1) {
+        canvas.setActiveObject(locked[0]);
+      } else if (locked.length > 1) {
+        const newSel = new fabric.ActiveSelection(locked, { canvas });
+        canvas.setActiveObject(newSel);
+      }
+      canvas.requestRenderAll();
+      saveHistoryState();
+      syncToFirebase();
+      updateSelectionState();
+    }
+    return;
   }
 
-  if (deletable.length) {
-    deletable.forEach((obj: any) => {
-      if (obj.isEditing && obj.exitEditing) {
-        obj.exitEditing();
-      }
-      canvas?.remove(obj);
-    });
+  if (activeObj.type === 'group' && !activeObj.isStickyNote) {
+    const targets = activeObj.getObjects ? activeObj.getObjects() : activeObj._objects || [];
+    const locked = targets.filter((obj: any) => obj.isLocked === true);
+    const deletable = targets.filter((obj: any) => obj.isLocked !== true);
+
+    if (locked.length > 0) {
+      displayToast('Locked objects inside group preserved');
+      canvas.remove(activeObj);
+      canvas.discardActiveObject();
+      locked.forEach((child: any) => {
+        const matrix = activeObj.calcTransformMatrix();
+        const pt = fabric.util.transformPoint({ x: child.left, y: child.top } as fabric.Point, matrix);
+        child.left = pt.x;
+        child.top = pt.y;
+        child.set({
+          selectable: true,
+          evented: true,
+          hasControls: false,
+          lockMovementX: true,
+          lockMovementY: true,
+          lockRotation: true,
+          lockScalingX: true,
+          lockScalingY: true,
+          isLocked: true
+        });
+        child.setCoords();
+        canvas?.add(child);
+      });
+      canvas.requestRenderAll();
+      saveHistoryState();
+      syncToFirebase();
+      updateSelectionState();
+      return;
+    }
+    if (activeObj.isLocked) {
+      displayToast('Locked group cannot be deleted (Unlock with Ctrl+Shift+L first)');
+      return;
+    }
+    canvas.remove(activeObj);
     canvas.discardActiveObject();
     canvas.requestRenderAll();
     saveHistoryState();
     syncToFirebase();
     updateSelectionState();
+    return;
   }
+
+  if (activeObj.isLocked) {
+    displayToast('Locked object cannot be deleted (Unlock with Ctrl+Shift+L first)');
+    return;
+  }
+
+  canvas.remove(activeObj);
+  canvas.discardActiveObject();
+  canvas.requestRenderAll();
+  saveHistoryState();
+  syncToFirebase();
+  updateSelectionState();
 };
 
 const selectAll = () => {
@@ -2171,9 +2352,14 @@ const handleImageUpload = (e: Event) => {
 const toggleMode = (drawing: boolean) => {
   currentTool.value = drawing ? 'draw' : 'select';
   if (canvas) {
+    if (drawing) {
+      canvas.discardActiveObject();
+    }
     isDrawingMode.value = drawing;
     canvas.isDrawingMode = drawing;
     canvas.selection = !drawing;
+    canvas.requestRenderAll();
+    updateSelectionState();
   }
 };
 
@@ -2342,9 +2528,11 @@ const handleKeydown = (e: KeyboardEvent) => {
     return;
   }
 
-  // 4. Ctrl+L: Lock / Unlock selected object (exit text editing first if active)
-  if ((e.ctrlKey || e.metaKey) && (e.key === 'l' || e.key === 'L')) {
+  // 4. Ctrl+L / Ctrl+Shift+L / Alt+L: Lock / Unlock selected object (exit text editing first if active)
+  const isLockKey = (e.key === 'l' || e.key === 'L') && ((e.ctrlKey || e.metaKey) || e.altKey);
+  if (isLockKey) {
     e.preventDefault();
+    e.stopPropagation();
     if (activeObj?.isEditing) {
       activeObj.exitEditing();
     }
@@ -2543,14 +2731,17 @@ const generateAIObject = async () => {
 
 const handleContextMenuCapture = (e: MouseEvent) => {
   const target = e.target as Node;
-  if (wrapperRef.value && (wrapperRef.value === target || wrapperRef.value.contains(target))) {
+  if (rootRef.value && (rootRef.value === target || rootRef.value.contains(target))) {
+    e.preventDefault();
+    e.stopPropagation();
+  } else if (wrapperRef.value && (wrapperRef.value === target || wrapperRef.value.contains(target))) {
     e.preventDefault();
     e.stopPropagation();
   }
 };
 
 onMounted(() => {
-  window.addEventListener('keydown', handleKeydown);
+  window.addEventListener('keydown', handleKeydown, { capture: true });
   window.addEventListener('click', handleWindowClick);
   window.addEventListener('paste', handleGlobalPaste);
   window.addEventListener('beforeunload', handleBeforeUnload);
@@ -2564,7 +2755,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-  window.removeEventListener('keydown', handleKeydown);
+  window.removeEventListener('keydown', handleKeydown, { capture: true });
   window.removeEventListener('click', handleWindowClick);
   window.removeEventListener('paste', handleGlobalPaste);
   window.removeEventListener('beforeunload', handleBeforeUnload);
@@ -2579,7 +2770,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="h-full w-full flex flex-col relative bg-slate-900 overflow-hidden">
+  <div ref="rootRef" class="h-full w-full flex flex-col relative bg-slate-900 overflow-hidden" @contextmenu.prevent>
     <!-- Header -->
     <div class="absolute top-4 left-4 z-10 flex items-center gap-2">
       <div v-if="roomStore.currentRoom?.whiteboardActive" class="px-3 py-1.5 rounded-full bg-indigo-600/90 backdrop-blur shadow-sm border border-indigo-400 flex items-center gap-2 text-xs font-semibold text-white animate-pulse">
@@ -2610,7 +2801,7 @@ onUnmounted(() => {
       </button>
     </div>
     
-    <div class="absolute top-4 right-4 z-10 flex items-center gap-2 transition-opacity duration-300" :class="{ 'opacity-20 pointer-events-none': isHoveringSend }">
+    <div class="absolute top-4 right-4 z-10 flex items-center gap-2 transition-all duration-300" :class="{ 'opacity-50 pointer-events-none backdrop-blur-md': isHoveringSend }">
       <button v-if="roomStore.currentRoom?.whiteboardActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid" @click="handleStopBroadcast()" class="px-3 py-1.5 rounded-xl bg-rose-500/90 hover:bg-rose-600 text-white shadow-sm transition text-xs font-semibold flex items-center gap-1 cursor-pointer">
         <X class="w-3.5 h-3.5" /> Stop Broadcast
       </button>
@@ -2652,12 +2843,12 @@ onUnmounted(() => {
       <!-- Send Viewport Capture Framing Guide / Viewfinder -->
       <div
         v-if="isHoveringSend"
-        class="absolute inset-4 sm:inset-8 border-2 border-dashed border-sky-400 pointer-events-none rounded-2xl z-20 flex flex-col justify-between p-3 animate-in fade-in duration-200"
+        class="absolute inset-4 sm:inset-8 border-2 border-dashed border-sky-400 pointer-events-none rounded-2xl z-20 flex flex-col justify-between p-3 animate-in fade-in duration-200 shadow-[0_0_0_9999px_rgba(15,23,42,0.45)]"
       >
-        <div class="flex justify-between items-center text-[11px] font-mono font-medium text-sky-400 bg-sky-950/80 px-2.5 py-1 rounded-lg w-max border border-sky-500/40">
+        <div class="flex justify-between items-center text-[11px] font-mono font-medium text-sky-400 bg-sky-950/90 px-2.5 py-1 rounded-lg w-max border border-sky-500/40 backdrop-blur-md">
           <span>📷 Viewport Snapshot Area</span>
         </div>
-        <div class="text-right text-[10px] font-mono text-sky-300/80 bg-slate-900/80 px-2 py-0.5 rounded self-end border border-slate-700">
+        <div class="text-right text-[10px] font-mono text-sky-300/90 bg-slate-900/90 px-2 py-0.5 rounded self-end border border-slate-700 backdrop-blur-md">
           Full visible screen will be captured to chat
         </div>
       </div>
@@ -2784,115 +2975,154 @@ onUnmounted(() => {
     </transition>
 
 
-    <div class="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 sm:gap-4 transition-all w-max max-w-[95%]">
-      
+    <div
+      class="absolute bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 transition-all duration-300 w-max max-w-[96%]"
+      :class="isNarrowToolbar ? 'flex-col items-center' : 'flex-row'"
+    >
       <!-- AI Input -->
-      <div class="flex flex-col gap-2 w-[190px] sm:w-[240px] transition-opacity duration-300" :class="{ 'opacity-20 pointer-events-none': isHoveringSend }">
-        <div v-if="isGeneratingSvg" class="h-11 sm:h-12 px-3 bg-slate-900/95 text-sky-400 text-xs font-medium rounded-2xl flex items-center justify-between gap-2 backdrop-blur border border-slate-700 shadow-xl">
+      <div
+        class="flex flex-col gap-2 transition-all duration-300"
+        :class="[
+          { 'opacity-50 pointer-events-none backdrop-blur-md': isHoveringSend },
+          isNarrowToolbar ? 'w-[200px]' : isCompactToolbar ? 'w-[140px]' : 'w-[190px] sm:w-[240px]'
+        ]"
+      >
+        <div v-if="isGeneratingSvg" class="h-10 sm:h-11 px-3 bg-slate-900/95 text-sky-400 text-xs font-medium rounded-2xl flex items-center justify-between gap-2 backdrop-blur border border-slate-700 shadow-xl">
           <span class="flex items-center gap-1.5 min-w-0 truncate">
             <Loader2 class="w-4 h-4 animate-spin text-sky-400 shrink-0" />
             <span class="truncate">Generating...</span>
           </span>
           <button
             @click="abortAiGeneration"
-            class="px-2.5 py-1 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-semibold transition cursor-pointer shrink-0"
+            class="px-2 py-0.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-semibold transition cursor-pointer shrink-0"
           >
             Stop
           </button>
         </div>
-        <form v-else @submit.prevent="generateAIObject" class="flex items-center h-11 sm:h-12 bg-white/95 backdrop-blur-md rounded-2xl shadow-xl border border-slate-200 p-1">
-          <input v-model="aiPrompt" type="text" placeholder="Generate icon, chart..." class="flex-1 bg-transparent px-3 py-1.5 text-xs focus:outline-none text-slate-700 placeholder-slate-400 min-w-0" />
-          <button type="submit" :disabled="!aiPrompt.trim()" class="p-2 rounded-xl bg-indigo-100 text-indigo-600 hover:bg-indigo-200 transition disabled:opacity-50 disabled:cursor-not-allowed shrink-0 cursor-pointer">
-            <Sparkles class="w-4 h-4" />
+        <form v-else @submit.prevent="generateAIObject" class="flex items-center h-10 sm:h-11 bg-white/95 backdrop-blur-md rounded-2xl shadow-xl border border-slate-200 p-1">
+          <input v-model="aiPrompt" type="text" :placeholder="isCompactToolbar ? 'AI Vector...' : 'Generate icon, chart...'" class="flex-1 bg-transparent px-2.5 py-1 text-xs focus:outline-none text-slate-700 placeholder-slate-400 min-w-0" />
+          <button type="submit" :disabled="!aiPrompt.trim()" class="p-1.5 rounded-xl bg-indigo-100 text-indigo-600 hover:bg-indigo-200 transition disabled:opacity-50 disabled:cursor-not-allowed shrink-0 cursor-pointer">
+            <Sparkles class="w-3.5 h-3.5" />
           </button>
         </form>
       </div>
 
       <!-- Main Tools -->
-      <div class="h-11 sm:h-12 bg-white/95 backdrop-blur-md rounded-2xl shadow-xl border border-slate-200 p-1.5 sm:p-2 flex items-center gap-1 sm:gap-2">
-        <div class="flex items-center gap-1 sm:gap-2 transition-opacity duration-300" :class="{ 'opacity-20 pointer-events-none': isHoveringSend }">
-          <button @click="toggleMode(false)" class="p-2 rounded-xl transition cursor-pointer" :class="currentTool === 'select' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'" title="Select / Move">
-            <MousePointer2 class="w-4 h-4" />
+      <div
+        class="h-10 sm:h-11 bg-white/95 backdrop-blur-md rounded-2xl shadow-xl border border-slate-200 p-1 sm:p-1.5 flex items-center gap-1 sm:gap-1.5 transition-all duration-300"
+        :class="{ 'opacity-50 pointer-events-none': isHoveringSend }"
+      >
+        <button @click="toggleMode(false)" class="p-1.5 rounded-xl transition cursor-pointer" :class="currentTool === 'select' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'" title="Select / Move">
+          <MousePointer2 class="w-4 h-4" />
+        </button>
+        
+        <div class="relative">
+          <button @click="toggleMode(true); isBrushMenuOpen = !isBrushMenuOpen" class="p-1.5 rounded-xl transition flex items-center gap-1 cursor-pointer" :class="currentTool !== 'select' && currentTool !== 'text' && currentTool !== 'sticky' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'" title="Draw & Shapes">
+            <Pencil class="w-4 h-4" />
           </button>
           
-          <div class="relative">
-            <button @click="toggleMode(true); isBrushMenuOpen = !isBrushMenuOpen" class="p-2 rounded-xl transition flex items-center gap-1 cursor-pointer" :class="currentTool !== 'select' && currentTool !== 'text' && currentTool !== 'sticky' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'" title="Draw & Shapes">
-              <Pencil class="w-4 h-4" />
-            </button>
-            
-            <div v-if="isBrushMenuOpen && isDrawingMode" class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-white rounded-xl shadow-xl border border-slate-200 p-3 flex flex-col gap-3 min-w-[140px]">
-              <div class="flex items-center justify-between gap-1">
-                <button v-for="size in strokeSizes" :key="size.value" @click="strokeWidth = size.value; isBrushMenuOpen = false" class="px-2 py-1 rounded-lg text-[10px] font-bold transition flex-1 cursor-pointer" :class="strokeWidth === size.value ? 'bg-indigo-100 text-indigo-700' : 'text-slate-400 hover:text-slate-600 bg-slate-50'">
-                  {{ size.label }}
-                </button>
-              </div>
-              <div class="h-px bg-slate-100"></div>
-              <div class="flex items-center gap-1 justify-between">
-                <button @click="addShape('rect')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Rectangle"><Square class="w-4 h-4" /></button>
-                <button @click="addShape('circle')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Circle / Ellipse"><Circle class="w-4 h-4" /></button>
-                <button @click="addShape('triangle')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Triangle"><Triangle class="w-4 h-4" /></button>
-                <button @click="addShape('line')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Line"><Minus class="w-4 h-4" /></button>
-                <button @click="addShape('arrow')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" :class="{ 'bg-indigo-100 text-indigo-600': currentTool === 'arrow' }" title="Arrow Brush (箭頭畫筆)"><ArrowUpRight class="w-4 h-4" /></button>
-              </div>
+          <div v-if="isBrushMenuOpen && isDrawingMode" class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-white rounded-xl shadow-xl border border-slate-200 p-3 flex flex-col gap-3 min-w-[140px] z-30">
+            <div class="flex items-center justify-between gap-1">
+              <button v-for="size in strokeSizes" :key="size.value" @click="strokeWidth = size.value; isBrushMenuOpen = false" class="px-2 py-1 rounded-lg text-[10px] font-bold transition flex-1 cursor-pointer" :class="strokeWidth === size.value ? 'bg-indigo-100 text-indigo-700' : 'text-slate-400 hover:text-slate-600 bg-slate-50'">
+                {{ size.label }}
+              </button>
             </div>
-          </div>
-          
-          <button @click="addText" class="p-2 rounded-xl transition cursor-pointer" :class="currentTool === 'text' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'" title="Add Text">
-            <Type class="w-4 h-4" />
-          </button>
-
-          <!-- Sticky Note Tool -->
-          <div class="relative">
-            <button
-              @click="addSticky(); isStickyMenuOpen = !isStickyMenuOpen"
-              class="p-2 rounded-xl transition flex items-center gap-1 cursor-pointer"
-              :class="currentTool === 'sticky' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'"
-              title="Sticky Note (便條紙)"
-            >
-              <StickyNote class="w-4 h-4" />
-            </button>
-            <div
-              v-if="isStickyMenuOpen"
-              class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-white rounded-xl shadow-xl border border-slate-200 p-2 flex items-center gap-1.5 z-20 min-w-max"
-            >
-              <button
-                v-for="color in stickyColors"
-                :key="color.name"
-                @click="addSticky(color); isStickyMenuOpen = false"
-                class="w-5 h-5 rounded-full border-2 transition transform hover:scale-110 cursor-pointer"
-                :class="selectedStickyColor.name === color.name ? 'border-indigo-500 scale-110 shadow-sm' : 'border-black/10 hover:border-black/30'"
-                :style="{ backgroundColor: color.bg }"
-                :title="color.name"
-              ></button>
+            <div class="h-px bg-slate-100"></div>
+            <div class="flex items-center gap-1 justify-between">
+              <button @click="addShape('rect')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Rectangle"><Square class="w-4 h-4" /></button>
+              <button @click="addShape('circle')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Circle / Ellipse"><Circle class="w-4 h-4" /></button>
+              <button @click="addShape('triangle')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Triangle"><Triangle class="w-4 h-4" /></button>
+              <button @click="addShape('line')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Line"><Minus class="w-4 h-4" /></button>
+              <button @click="addShape('arrow')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" :class="{ 'bg-indigo-100 text-indigo-600': currentTool === 'arrow' }" title="Arrow Brush (箭頭畫筆)"><ArrowUpRight class="w-4 h-4" /></button>
             </div>
-          </div>
-          
-          <div class="w-px h-6 bg-slate-200 mx-1 hidden sm:block"></div>
-          
-          <div class="flex items-center gap-1">
-            <button v-for="color in colors" :key="color" @click="applyColorToSelected(color)" class="w-4 h-4 sm:w-5 sm:h-5 rounded-full border-2 transition transform hover:scale-110 cursor-pointer" :class="activeColor === color ? 'border-indigo-400 scale-110 shadow-sm' : 'border-transparent opacity-80 hover:opacity-100'" :style="{ backgroundColor: color }"></button>
-          </div>
-          
-          <div class="w-px h-6 bg-slate-200 mx-1 hidden sm:block"></div>
-          
-          <div class="flex items-center gap-1">
-            <input ref="fileInputRef" type="file" accept="image/*" class="hidden" @change="handleImageUpload" />
-            <button @click="fileInputRef?.click()" class="p-1.5 rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" title="Add Image"><ImageIcon class="w-4 h-4" /></button>
-            <button @click="undo" class="p-1.5 rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" title="Undo (Ctrl+Z)" :disabled="historyStack.length <= 1" :class="{'opacity-50 cursor-not-allowed': historyStack.length <= 1}"><Undo2 class="w-4 h-4" /></button>
-            <button @click="deleteSelected" class="p-1.5 rounded-xl hover:bg-rose-100 text-rose-500 transition cursor-pointer" title="Delete Selected (Del)"><Trash2 class="w-4 h-4" /></button>
           </div>
         </div>
         
-        <div class="w-px h-6 bg-slate-200 mx-1"></div>
+        <button @click="addText" class="p-1.5 rounded-xl transition cursor-pointer" :class="currentTool === 'text' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'" title="Add Text">
+          <Type class="w-4 h-4" />
+        </button>
+
+        <!-- Sticky Note Tool -->
+        <div class="relative">
+          <button
+            @click="addSticky(); isStickyMenuOpen = !isStickyMenuOpen"
+            class="p-1.5 rounded-xl transition flex items-center gap-1 cursor-pointer"
+            :class="currentTool === 'sticky' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'"
+            title="Sticky Note (便條紙)"
+          >
+            <StickyNote class="w-4 h-4" />
+          </button>
+          <div
+            v-if="isStickyMenuOpen"
+            class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-white rounded-xl shadow-xl border border-slate-200 p-2 flex items-center gap-1.5 z-30 min-w-max"
+          >
+            <button
+              v-for="color in stickyColors"
+              :key="color.name"
+              @click="addSticky(color); isStickyMenuOpen = false"
+              class="w-5 h-5 rounded-full border-2 transition transform hover:scale-110 cursor-pointer"
+              :class="selectedStickyColor.name === color.name ? 'border-indigo-500 scale-110 shadow-sm' : 'border-black/10 hover:border-black/30'"
+              :style="{ backgroundColor: color.bg }"
+              :title="color.name"
+            ></button>
+          </div>
+        </div>
+        
+        <div class="w-px h-5 bg-slate-200 mx-0.5"></div>
+        
+        <!-- Adaptive Color Swatches: Full when wide, collapsed single button when compact -->
+        <template v-if="!isCompactToolbar">
+          <div class="flex items-center gap-1">
+            <button v-for="color in colors" :key="color" @click="applyColorToSelected(color)" class="w-4 h-4 sm:w-5 sm:h-5 rounded-full border-2 transition transform hover:scale-110 cursor-pointer" :class="activeColor === color ? 'border-indigo-400 scale-110 shadow-sm' : 'border-transparent opacity-80 hover:opacity-100'" :style="{ backgroundColor: color }"></button>
+          </div>
+        </template>
+        <template v-else>
+          <div class="relative">
+            <button
+              @click="isColorPickerOpen = !isColorPickerOpen"
+              class="p-1 rounded-xl hover:bg-slate-100 flex items-center gap-1 transition cursor-pointer"
+              title="Change Color"
+            >
+              <span class="w-4 h-4 rounded-full border border-black/20 shadow-xs" :style="{ backgroundColor: activeColor }"></span>
+              <ChevronUp v-if="isColorPickerOpen" class="w-3 h-3 text-slate-400" />
+              <ChevronDown v-else class="w-3 h-3 text-slate-400" />
+            </button>
+            <div
+              v-if="isColorPickerOpen"
+              class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-white rounded-xl shadow-xl border border-slate-200 p-2 flex items-center gap-1.5 z-30 min-w-max animate-in fade-in zoom-in-95"
+            >
+              <button
+                v-for="color in colors"
+                :key="color"
+                @click="applyColorToSelected(color); isColorPickerOpen = false"
+                class="w-5 h-5 rounded-full border-2 transition transform hover:scale-110 cursor-pointer"
+                :class="activeColor === color ? 'border-indigo-400 scale-110 shadow-sm' : 'border-transparent opacity-80 hover:opacity-100'"
+                :style="{ backgroundColor: color }"
+              ></button>
+            </div>
+          </div>
+        </template>
+        
+        <div class="w-px h-5 bg-slate-200 mx-0.5"></div>
+        
+        <div class="flex items-center gap-0.5">
+          <input ref="fileInputRef" type="file" accept="image/*" class="hidden" @change="handleImageUpload" />
+          <button @click="fileInputRef?.click()" class="p-1.5 rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" title="Add Image"><ImageIcon class="w-4 h-4" /></button>
+          <button @click="undo" class="p-1.5 rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" title="Undo (Ctrl+Z)" :disabled="historyStack.length <= 1" :class="{'opacity-50 cursor-not-allowed': historyStack.length <= 1}"><Undo2 class="w-4 h-4" /></button>
+          <button @click="deleteSelected" class="p-1.5 rounded-xl hover:bg-rose-100 text-rose-500 transition cursor-pointer" title="Delete Selected (Del)"><Trash2 class="w-4 h-4" /></button>
+        </div>
+        
+        <div class="w-px h-5 bg-slate-200 mx-0.5"></div>
         
         <button
           @click="handleSendToChat"
           @mouseenter="isHoveringSend = true"
           @mouseleave="isHoveringSend = false"
-          class="p-1.5 px-3 rounded-xl bg-sky-500 hover:bg-sky-600 text-white transition flex items-center gap-1.5 text-xs font-medium cursor-pointer shadow-xs shrink-0"
+          class="p-1.5 px-2.5 rounded-xl bg-sky-500 hover:bg-sky-600 text-white transition flex items-center gap-1.5 text-xs font-medium cursor-pointer shadow-xs shrink-0"
           title="Send visible viewport area to chat"
         >
-          <Send class="w-3.5 h-3.5" /> <span class="hidden sm:inline">Send Viewport</span>
+          <Send class="w-3.5 h-3.5" />
+          <span v-if="!isCompactToolbar">Send Viewport</span>
         </button>
       </div>
     </div>
@@ -2928,7 +3158,7 @@ onUnmounted(() => {
             <component :is="isObjectLocked ? Unlock : Lock" class="w-3.5 h-3.5" :class="isObjectLocked ? 'text-amber-400' : 'text-slate-400'" />
             {{ isObjectLocked ? 'Unlock Object' : 'Lock Object' }}
           </span>
-          <span class="text-[10px] text-slate-400 font-mono">Ctrl+L</span>
+          <span class="text-[10px] text-slate-400 font-mono">Ctrl+Shift+L</span>
         </button>
       </template>
 
@@ -3042,11 +3272,16 @@ onUnmounted(() => {
           </div>
           <!-- Lock / Unlock -->
           <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <span class="text-slate-300 font-medium">Lock / Unlock</span>
+            <div class="flex flex-col">
+              <span class="text-slate-300 font-medium">Lock / Unlock</span>
+              <span class="text-[10px] text-slate-500 font-normal">Also Ctrl+L / Alt+L</span>
+            </div>
             <div class="flex items-center gap-1">
-              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Ctrl</kbd>
+              <kbd class="px-1.5 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Ctrl</kbd>
               <span class="text-slate-500 text-[10px]">+</span>
-              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">L</kbd>
+              <kbd class="px-1.5 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Shift</kbd>
+              <span class="text-slate-500 text-[10px]">+</span>
+              <kbd class="px-1.5 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">L</kbd>
             </div>
           </div>
           <!-- Group Objects -->

@@ -55,7 +55,8 @@ const CUSTOM_PROPS = [
   'lockRotation',
   'lockScalingX',
   'lockScalingY',
-  'hasControls'
+  'hasControls',
+  'isClosedLoop'
 ];
 
 const hasUnsavedChanges = ref(false);
@@ -306,6 +307,35 @@ const liveNodeArrowSvg = computed(() => {
   const sDist = Math.hypot(sn.x - s0.x, sn.y - s0.y);
   if (sDist < 4) return { pathD: '', headPoints: '', color, strokeWidth: screenWidth };
 
+  // If endpoints are brought close together, render as a smooth closed loop and hide arrowhead
+  const isClosed = sPts.length >= 3 && sDist < 25;
+  if (isClosed) {
+    const shaftSampled = [...sPts];
+    shaftSampled[shaftSampled.length - 1] = { x: s0.x, y: s0.y };
+    let pathD = `M ${s0.x.toFixed(1)} ${s0.y.toFixed(1)}`;
+    const m = shaftSampled.length - 1;
+    for (let i = 0; i < m; i++) {
+      const pPrev = i === 0 ? shaftSampled[m - 1] : shaftSampled[i - 1];
+      const pCur = shaftSampled[i];
+      const pNext = shaftSampled[i + 1];
+      const pAfter = i + 1 === m ? shaftSampled[1] : shaftSampled[i + 2];
+
+      const cp1x = pCur.x + (pNext.x - pPrev.x) / 6;
+      const cp1y = pCur.y + (pNext.y - pPrev.y) / 6;
+      const cp2x = pNext.x - (pAfter.x - pCur.x) / 6;
+      const cp2y = pNext.y - (pAfter.y - pCur.y) / 6;
+
+      pathD += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${pNext.x.toFixed(1)} ${pNext.y.toFixed(1)}`;
+    }
+    pathD += ' Z';
+    return {
+      pathD,
+      headPoints: '',
+      color,
+      strokeWidth: screenWidth
+    };
+  }
+
   const headLen = Math.max(14, rawWidth * 3.6) * zoom;
   const headAngle = Math.PI / 6;
 
@@ -486,6 +516,9 @@ const onNodePointerDown = (index: number, e: PointerEvent) => {
           canvas.add(finalArrow);
         }
         editingArrow.value = finalArrow;
+        if (Array.isArray((finalArrow as any).arrowPoints)) {
+          editingArrowPoints.value = (finalArrow as any).arrowPoints.map((p: any) => ({ x: p.x, y: p.y }));
+        }
         finalArrow.setCoords();
       } else {
         editingArrow.value.visible = true;
@@ -924,17 +957,26 @@ const createArrowFromPoints = (
   if (pts.length < 2) return null;
   const p0 = pts[0];
   const pn = pts[pts.length - 1];
-  const lineLen = Math.hypot(pn.x - p0.x, pn.y - p0.y);
-  if (lineLen < 6) return null;
+  let totalArcLen = 0;
+  for (let i = 1; i < pts.length; i++) {
+    totalArcLen += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+  }
+  if (totalArcLen < 6) return null;
+
+  const endpointDist = Math.hypot(pn.x - p0.x, pn.y - p0.y);
+  const isClosedLoop = pts.length >= 3 && totalArcLen >= 30 && endpointDist < 30;
+  const lineLen = endpointDist;
 
   const color = customColor || activeColor.value;
   const width = customWidth || strokeWidth.value;
 
   // 1. Straight line check: perpendicular deviation from chord p0 -> pn
   let maxDev = 0;
-  for (const pt of pts) {
-    const dist = Math.abs((pn.y - p0.y) * pt.x - (pn.x - p0.x) * pt.y + pn.x * p0.y - pn.y * p0.x) / lineLen;
-    if (dist > maxDev) maxDev = dist;
+  if (!isClosedLoop && lineLen > 0) {
+    for (const pt of pts) {
+      const dist = Math.abs((pn.y - p0.y) * pt.x - (pn.x - p0.x) * pt.y + pn.x * p0.y - pn.y * p0.x) / lineLen;
+      if (dist > maxDev) maxDev = dist;
+    }
   }
 
   const headLen = Math.max(14, width * 3.6);
@@ -943,7 +985,7 @@ const createArrowFromPoints = (
   let shaft: any;
   let tangentAngle = Math.atan2(pn.y - p0.y, pn.x - p0.x);
 
-  const isStraight = maxDev < Math.max(16, lineLen * 0.12) || pts.length <= 3;
+  const isStraight = !isClosedLoop && (maxDev < Math.max(16, lineLen * 0.12) || pts.length <= 3);
   let finalPts: Array<{ x: number; y: number }>;
 
   if (isStraight) {
@@ -972,15 +1014,12 @@ const createArrowFromPoints = (
         finalPts = [{ x: p0.x, y: p0.y }, { x: pn.x, y: pn.y }];
       }
     } else {
-      // Newly created straight arrow: strictly 2 or 3 evenly spaced nodes to avoid dozens of points
-      if (lineLen < 160) {
-        finalPts = [{ x: p0.x, y: p0.y }, { x: pn.x, y: pn.y }];
-      } else {
-        finalPts = [
-          { x: p0.x, y: p0.y },
-          { x: (p0.x + pn.x) / 2, y: (p0.y + pn.y) / 2 },
-          { x: pn.x, y: pn.y }
-        ];
+      // Straight arrow: evenly distributed nodes at ~50px intervals
+      const numSegments = Math.max(1, Math.round(lineLen / 50));
+      finalPts = [];
+      for (let i = 0; i <= numSegments; i++) {
+        const t = i / numSegments;
+        finalPts.push({ x: p0.x + t * (pn.x - p0.x), y: p0.y + t * (pn.y - p0.y) });
       }
     }
 
@@ -1003,10 +1042,10 @@ const createArrowFromPoints = (
       // In node edit mode or preserved transform, keep exact knot points
       sampled = pts.map(p => ({ x: p.x, y: p.y }));
     } else {
-      // Illustrator-style incremental forward anchor placement (~150px per anchor)
+      // Illustrator-style incremental forward anchor placement (~50px per anchor)
       // Anchors placed earlier remain permanently fixed at their spatial coordinates.
       // Drawing forward only appends new movement to the tip without shifting existing nodes.
-      const step = 150;
+      const step = 50;
       sampled = [{ x: simplifiedPts[0].x, y: simplifiedPts[0].y }];
       let lastAnchor = simplifiedPts[0];
       let distFromLastAnchor = 0;
@@ -1023,12 +1062,17 @@ const createArrowFromPoints = (
 
       // Final point (current mouse position)
       const distToTip = Math.hypot(pn.x - lastAnchor.x, pn.y - lastAnchor.y);
-      if (distToTip < 45 && sampled.length > 1) {
+      if (distToTip < 25 && sampled.length > 1) {
         // If the tip is very close to the last dropped anchor, merge to prevent a cramped stub at the head
         sampled[sampled.length - 1] = { x: pn.x, y: pn.y };
       } else {
         sampled.push({ x: pn.x, y: pn.y });
       }
+    }
+
+    if (isClosedLoop) {
+      // Snap end point to start point to form seamless closed loop
+      sampled[sampled.length - 1] = { x: p0.x, y: p0.y };
     }
     finalPts = sampled.map(p => ({ x: p.x, y: p.y }));
 
@@ -1054,9 +1098,13 @@ const createArrowFromPoints = (
 
     // Replace final point in sampled with the cut shaftEnd
     const shaftSampled = [...sampled];
-    shaftSampled[shaftSampled.length - 1] = { x: shaftEndX, y: shaftEndY };
+    if (!isClosedLoop) {
+      shaftSampled[shaftSampled.length - 1] = { x: shaftEndX, y: shaftEndY };
+    } else {
+      shaftSampled[shaftSampled.length - 1] = { x: p0.x, y: p0.y };
+    }
 
-    if (shaftSampled.length < 3) {
+    if (!isClosedLoop && shaftSampled.length < 3) {
       shaft = new fabric.Line([p0.x, p0.y, shaftEndX, shaftEndY], {
         stroke: color,
         strokeWidth: width,
@@ -1068,10 +1116,10 @@ const createArrowFromPoints = (
       let pathD = `M ${shaftSampled[0].x.toFixed(1)} ${shaftSampled[0].y.toFixed(1)}`;
       const m = shaftSampled.length - 1;
       for (let i = 0; i < m; i++) {
-        const pPrev = shaftSampled[Math.max(0, i - 1)];
+        const pPrev = (isClosedLoop && i === 0) ? shaftSampled[m - 1] : shaftSampled[Math.max(0, i - 1)];
         const pCur = shaftSampled[i];
         const pNext = shaftSampled[i + 1];
-        const pAfter = shaftSampled[Math.min(m, i + 2)];
+        const pAfter = (isClosedLoop && i + 1 === m) ? shaftSampled[1] : shaftSampled[Math.min(m, i + 2)];
 
         const cp1x = pCur.x + (pNext.x - pPrev.x) / 6;
         const cp1y = pCur.y + (pNext.y - pPrev.y) / 6;
@@ -1079,6 +1127,9 @@ const createArrowFromPoints = (
         const cp2y = pNext.y - (pAfter.y - pCur.y) / 6;
 
         pathD += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${pNext.x.toFixed(1)} ${pNext.y.toFixed(1)}`;
+      }
+      if (isClosedLoop) {
+        pathD += ' Z';
       }
 
       shaft = new fabric.Path(pathD, {
@@ -1093,38 +1144,41 @@ const createArrowFromPoints = (
     }
   }
 
-  // 2. Arrowhead triangle oriented along tangentAngle
-  const w1x = pn.x - headLen * Math.cos(tangentAngle - headAngle);
-  const w1y = pn.y - headLen * Math.sin(tangentAngle - headAngle);
-  const w2x = pn.x - headLen * Math.cos(tangentAngle + headAngle);
-  const w2y = pn.y - headLen * Math.sin(tangentAngle + headAngle);
+  let head: any = null;
+  if (!isClosedLoop) {
+    // 2. Arrowhead triangle oriented along tangentAngle
+    const w1x = pn.x - headLen * Math.cos(tangentAngle - headAngle);
+    const w1y = pn.y - headLen * Math.sin(tangentAngle - headAngle);
+    const w2x = pn.x - headLen * Math.cos(tangentAngle + headAngle);
+    const w2y = pn.y - headLen * Math.sin(tangentAngle + headAngle);
 
-  const head = new fabric.Polygon(
-    [
-      { x: pn.x, y: pn.y },
-      { x: w1x, y: w1y },
-      { x: w2x, y: w2y }
-    ],
-    {
-      fill: color,
-      stroke: color,
-      strokeWidth: 1,
-      strokeLineJoin: 'round',
-      strokeUniform: true,
-      perPixelTargetFind: true
-    }
-  );
+    head = new fabric.Polygon(
+      [
+        { x: pn.x, y: pn.y },
+        { x: w1x, y: w1y },
+        { x: w2x, y: w2y }
+      ],
+      {
+        fill: color,
+        stroke: color,
+        strokeWidth: 1,
+        strokeLineJoin: 'round',
+        strokeUniform: true,
+        perPixelTargetFind: true
+      }
+    );
+    head.set({
+      objectCaching: false,
+      strokeUniform: true
+    });
+  }
 
   shaft.set({
     objectCaching: false,
     strokeUniform: true
   });
-  head.set({
-    objectCaching: false,
-    strokeUniform: true
-  });
 
-  const arrow = new fabric.Group([shaft, head], {
+  const arrow = new fabric.Group(head ? [shaft, head] : [shaft], {
     selectable: true,
     evented: true,
     strokeUniform: true,
@@ -1136,8 +1190,9 @@ const createArrowFromPoints = (
   (arrow as any).arrowColor = color;
   (arrow as any).arrowStrokeWidth = width;
   (arrow as any).isStraightArrow = isStraight;
+  (arrow as any).isClosedLoop = isClosedLoop;
   (arrow as any).arrowP0 = { x: p0.x, y: p0.y };
-  (arrow as any).arrowPn = { x: pn.x, y: pn.y };
+  (arrow as any).arrowPn = isClosedLoop ? { x: p0.x, y: p0.y } : { x: pn.x, y: pn.y };
   (arrow as any).arrowId = Math.random().toString(36).substring(2, 9);
   (arrow as any).initialMatrix = arrow.calcTransformMatrix();
   return arrow;
@@ -1637,64 +1692,77 @@ const initFabric = () => {
       }
     }
 
-    // Minimum selectable dimension clamp for general objects
-    if (obj && !obj.isStickyNote && !(obj as any).isArrow) {
-      const minDim = 20;
-      const curW = Math.abs((obj.width || 0) * (obj.scaleX || 1));
-      const curH = Math.abs((obj.height || 0) * (obj.scaleY || 1));
-      let changed = false;
-      if (obj.width && curW < minDim) {
-        obj.scaleX = (obj.scaleX < 0 ? -1 : 1) * (minDim / obj.width);
-        changed = true;
-      }
-      if (obj.height && curH < minDim) {
-        obj.scaleY = (obj.scaleY < 0 ? -1 : 1) * (minDim / obj.height);
-        changed = true;
-      }
-      if (changed) {
-        obj.setCoords();
-      }
-    }
-
     // Reconstruct arrow with fixed pristine arrowhead size, preserved points, and vector crispness
-    if (obj && (obj as any).isArrow && (obj as any).arrowPoints) {
-      if ((obj.scaleX && obj.scaleX !== 1) || (obj.scaleY && obj.scaleY !== 1)) {
-        try {
-          if (canvas) {
-            const M0 = (obj as any).initialMatrix || obj.calcTransformMatrix();
-            const M1 = obj.calcTransformMatrix();
-            const invM0 = fabric.util.invertTransform(M0);
-            const M_delta = fabric.util.multiplyTransformMatrices(M1, invM0);
-            const newPts = (obj as any).arrowPoints.map((pt: any) => fabric.util.transformPoint(pt, M_delta));
-            const newArrow = createArrowFromPoints(newPts, (obj as any).arrowColor, (obj as any).arrowStrokeWidth, true);
-            if (newArrow) {
-              (newArrow as any).isLocked = (obj as any).isLocked;
-              (newArrow as any).arrowId = (obj as any).arrowId || Math.random().toString(36).substring(2, 9);
-              if ((obj as any).isLocked) {
-                newArrow.set({
-                  lockMovementX: true,
-                  lockMovementY: true,
-                  lockRotation: true,
-                  lockScalingX: true,
-                  lockScalingY: true,
-                  hasControls: false
-                });
-              }
-              const allObjs = canvas.getObjects();
-              const idx = allObjs.indexOf(obj);
-              if (idx !== -1) {
-                canvas.remove(obj);
-                canvas.insertAt(idx, newArrow);
-                newArrow.setCoords();
+    const syncArrowTransform = (arrowObj: any) => {
+      if (!arrowObj || !(arrowObj as any).isArrow || !Array.isArray((arrowObj as any).arrowPoints)) return;
+      try {
+        if (!canvas) return;
+        const M0 = (arrowObj as any).initialMatrix || arrowObj.calcTransformMatrix();
+        const M1 = arrowObj.calcTransformMatrix();
+        let matrixChanged = false;
+        for (let i = 0; i < 6; i++) {
+          if (Math.abs(M1[i] - M0[i]) > 1e-4) {
+            matrixChanged = true;
+            break;
+          }
+        }
+        if (!matrixChanged) return;
+
+        const invM0 = fabric.util.invertTransform(M0);
+        const M_delta = fabric.util.multiplyTransformMatrices(M1, invM0);
+        const newPts = (arrowObj as any).arrowPoints.map((pt: any) => fabric.util.transformPoint(pt, M_delta));
+
+        const isScaledOrRotated = (arrowObj.scaleX && Math.abs(arrowObj.scaleX - 1) > 1e-3) ||
+                                 (arrowObj.scaleY && Math.abs(arrowObj.scaleY - 1) > 1e-3) ||
+                                 (arrowObj.angle && Math.abs(arrowObj.angle % 360) > 1e-3);
+
+        if (!isScaledOrRotated) {
+          // Just translated in normal mode: update arrowPoints and initialMatrix directly without recreating
+          (arrowObj as any).arrowPoints = newPts;
+          (arrowObj as any).initialMatrix = M1;
+        } else {
+          // Scaled or rotated: reconstruct to keep fixed pristine arrowhead
+          const newArrow = createArrowFromPoints(newPts, (arrowObj as any).arrowColor, (arrowObj as any).arrowStrokeWidth, true);
+          if (newArrow) {
+            (newArrow as any).isLocked = (arrowObj as any).isLocked;
+            (newArrow as any).arrowId = (arrowObj as any).arrowId || Math.random().toString(36).substring(2, 9);
+            if ((arrowObj as any).isLocked) {
+              newArrow.set({
+                lockMovementX: true,
+                lockMovementY: true,
+                lockRotation: true,
+                lockScalingX: true,
+                lockScalingY: true,
+                hasControls: false
+              });
+            }
+            const allObjs = canvas.getObjects();
+            const idx = allObjs.indexOf(arrowObj);
+            if (idx !== -1) {
+              canvas.remove(arrowObj);
+              canvas.insertAt(idx, newArrow);
+              newArrow.setCoords();
+              if (canvas.getActiveObject() === arrowObj) {
                 canvas.setActiveObject(newArrow);
-                canvas.requestRenderAll();
-                updateSelectionState();
               }
+              canvas.requestRenderAll();
+              updateSelectionState();
             }
           }
-        } catch (err) {
-          console.warn('Failed to bake arrow scaling:', err);
         }
+      } catch (err) {
+        console.warn('Failed to sync arrow transform:', err);
+      }
+    };
+
+    if (obj) {
+      if (obj.type === 'activeselection' || obj.type === 'activeSelection') {
+        const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
+        targets.forEach((child: any) => {
+          if ((child as any).isArrow) syncArrowTransform(child);
+        });
+      } else if ((obj as any).isArrow) {
+        syncArrowTransform(obj);
       }
     }
 
@@ -2359,12 +2427,12 @@ const initFabric = () => {
     const minDim = (target.isStickyNote || target.stickyColorConfig) ? 80 : 20;
     const baseW = target.width || minDim;
     const baseH = target.height || minDim;
-    const minSide = Math.min(baseW, baseH);
+    const majorDim = Math.max(baseW, baseH);
     const curScale = Math.min(Math.abs(target.scaleX || 1), Math.abs(target.scaleY || 1));
 
-    if (minSide > minDim) {
-      // Normal object: allow scaling down until size reaches minDim
-      target.minScaleLimit = Math.max(0.01, minDim / minSide);
+    if (majorDim > minDim) {
+      // Normal object: allow scaling down until major dimension reaches minDim
+      target.minScaleLimit = Math.max(0.01, minDim / majorDim);
     } else {
       // Micro object or dot (already <= minDim): never force minScaleLimit above current scale!
       target.minScaleLimit = Math.min(curScale, 0.05);
@@ -2829,7 +2897,7 @@ const copySelection = async () => {
   if (!canvas) return;
   const activeObj = canvas.getActiveObject();
   if (activeObj) {
-    clipboard = await activeObj.clone();
+    clipboard = await activeObj.clone(CUSTOM_PROPS);
     displayToast('Copied (Ctrl+C)');
   }
 };
@@ -2843,8 +2911,38 @@ const cutSelection = async () => {
 const pasteSelection = async (targetPoint?: { x: number; y: number }) => {
   if (!canvas || !clipboard) return;
 
-  const clonedObj = await clipboard.clone();
+  const clonedObj = await clipboard.clone(CUSTOM_PROPS);
   canvas.discardActiveObject();
+
+  const preparePastedObject = (obj: any) => {
+    obj.set({
+      selectable: true,
+      evented: true,
+      perPixelTargetFind: true,
+      objectCaching: false
+    });
+
+    if (obj.isStickyNote || (obj.type === 'textbox' && (obj.stickyColorConfig || obj.backgroundColor))) {
+      obj.isStickyNote = true;
+      obj.minHeight = obj.minHeight || 180;
+      obj.textAlign = 'center';
+      obj.splitByGrapheme = true;
+      obj.lockUniScaling = true;
+      obj.hasRotatingPoint = false;
+      applyStickyNoteMethods(obj);
+      obj.initDimensions?.();
+      obj.setCoords();
+    }
+
+    if (obj.isArrow) {
+      obj.set({
+        lockUniScaling: false,
+        strokeUniform: true
+      });
+      obj.initialMatrix = obj.calcTransformMatrix();
+      obj.setCoords();
+    }
+  };
 
   if (targetPoint) {
     clonedObj.set({
@@ -2867,12 +2965,12 @@ const pasteSelection = async (targetPoint?: { x: number; y: number }) => {
   if (clonedObj.type === 'activeSelection' || clonedObj.type === 'activeselection') {
     clonedObj.canvas = canvas;
     clonedObj.forEachObject((obj: any) => {
-      obj.set({ selectable: true, evented: true, perPixelTargetFind: true });
+      preparePastedObject(obj);
       canvas?.add(obj);
     });
     clonedObj.setCoords();
   } else {
-    clonedObj.set({ selectable: true, evented: true, perPixelTargetFind: true });
+    preparePastedObject(clonedObj);
     canvas.add(clonedObj);
   }
 
@@ -2963,7 +3061,7 @@ const changeStickyNoteColor = (note: any, colorCfg: StickyColorConfig) => {
 
 const duplicateStickyNote = async (note: any) => {
   if (!canvas || !note) return;
-  const cloned = await note.clone();
+  const cloned = await note.clone(CUSTOM_PROPS);
   cloned.set({
     left: (note.left || 0) + 24,
     top: (note.top || 0) + 24,
@@ -2978,6 +3076,7 @@ const duplicateStickyNote = async (note: any) => {
   (cloned as any).minHeight = (note as any).minHeight || 180;
   applyStickyNoteMethods(cloned);
   cloned.initDimensions();
+  cloned.setCoords();
   canvas.add(cloned);
   canvas.setActiveObject(cloned);
   canvas.requestRenderAll();
@@ -3254,13 +3353,20 @@ const deleteSelected = () => {
   const activeObj = canvas.getActiveObject() as any;
   if (!activeObj) return;
 
+  // 1. If the selected object is locked, reject deletion immediately
+  if (activeObj.isLocked) {
+    displayToast('Locked object cannot be deleted (Unlock with Ctrl+L first)');
+    return;
+  }
+
+  // 2. ActiveSelection (multiple objects selected together)
   if (activeObj.type === 'activeselection') {
     const targets = activeObj.getObjects();
     const locked = targets.filter((obj: any) => obj.isLocked === true);
     const deletable = targets.filter((obj: any) => obj.isLocked !== true);
 
     if (locked.length > 0) {
-      displayToast('Locked objects cannot be deleted (Unlock with Ctrl+Shift+L first)');
+      displayToast('Locked objects cannot be deleted (Unlock with Ctrl+L first)');
     }
     if (deletable.length) {
       canvas.discardActiveObject();
@@ -3282,42 +3388,12 @@ const deleteSelected = () => {
     return;
   }
 
-  if (activeObj.type === 'group' && !activeObj.isStickyNote) {
+  // 3. User Group (fabric.Group, but NOT a sticky note, and NOT an arrow!)
+  if (activeObj.type === 'group' && !activeObj.isStickyNote && !(activeObj as any).isArrow) {
     const targets = activeObj.getObjects ? activeObj.getObjects() : activeObj._objects || [];
-    const locked = targets.filter((obj: any) => obj.isLocked === true);
-    const deletable = targets.filter((obj: any) => obj.isLocked !== true);
-
-    if (locked.length > 0) {
-      displayToast('Locked objects inside group preserved');
-      canvas.remove(activeObj);
-      canvas.discardActiveObject();
-      locked.forEach((child: any) => {
-        const matrix = activeObj.calcTransformMatrix();
-        const pt = fabric.util.transformPoint({ x: child.left, y: child.top } as fabric.Point, matrix);
-        child.left = pt.x;
-        child.top = pt.y;
-        child.set({
-          selectable: true,
-          evented: true,
-          hasControls: false,
-          lockMovementX: true,
-          lockMovementY: true,
-          lockRotation: true,
-          lockScalingX: true,
-          lockScalingY: true,
-          isLocked: true
-        });
-        child.setCoords();
-        canvas?.add(child);
-      });
-      canvas.requestRenderAll();
-      saveHistoryState();
-      syncToFirebase();
-      updateSelectionState();
-      return;
-    }
-    if (activeObj.isLocked) {
-      displayToast('Locked group cannot be deleted (Unlock with Ctrl+Shift+L first)');
+    const hasLocked = targets.some((obj: any) => obj.isLocked === true);
+    if (activeObj.isLocked || hasLocked) {
+      displayToast('Locked group or object inside cannot be deleted (Unlock with Ctrl+L first)');
       return;
     }
     canvas.remove(activeObj);
@@ -3329,11 +3405,7 @@ const deleteSelected = () => {
     return;
   }
 
-  if (activeObj.isLocked) {
-    displayToast('Locked object cannot be deleted (Unlock with Ctrl+Shift+L first)');
-    return;
-  }
-
+  // 4. Single objects (arrow, sticky note, path, shape, etc.)
   canvas.remove(activeObj);
   canvas.discardActiveObject();
   canvas.requestRenderAll();

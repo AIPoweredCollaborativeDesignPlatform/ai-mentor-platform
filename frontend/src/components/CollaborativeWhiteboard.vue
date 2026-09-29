@@ -4,17 +4,17 @@ import { useRoomStore } from '../stores/room';
 import { useAuthStore } from '../stores/auth';
 import * as fabric from 'fabric';
 
-// Globally disable objectCaching so scaling and zooming always render 100% crisp vector!
-(fabric as any).Object.prototype.objectCaching = false;
-if ((fabric as any).Path) (fabric as any).Path.prototype.objectCaching = false;
-if ((fabric as any).IText) (fabric as any).IText.prototype.objectCaching = false;
-if ((fabric as any).Textbox) (fabric as any).Textbox.prototype.objectCaching = false;
-if ((fabric as any).Line) (fabric as any).Line.prototype.objectCaching = false;
-if ((fabric as any).Group) (fabric as any).Group.prototype.objectCaching = false;
-if ((fabric as any).Polygon) (fabric as any).Polygon.prototype.objectCaching = false;
-if ((fabric as any).Rect) (fabric as any).Rect.prototype.objectCaching = false;
-if ((fabric as any).Circle) (fabric as any).Circle.prototype.objectCaching = false;
-if ((fabric as any).Triangle) (fabric as any).Triangle.prototype.objectCaching = false;
+// Globally disable objectCaching in Fabric 7 so scaling and zooming always render 100% crisp vector!
+if ((fabric as any).BaseFabricObject?.ownDefaults) {
+  (fabric as any).BaseFabricObject.ownDefaults.objectCaching = false;
+  (fabric as any).BaseFabricObject.ownDefaults.minScaleLimit = 0.02;
+}
+if ((fabric as any).FabricObject?.prototype) {
+  (fabric as any).FabricObject.prototype.objectCaching = false;
+}
+if ((fabric as any).Object?.prototype) {
+  (fabric as any).Object.prototype.objectCaching = false;
+}
 import {
   X, Pencil, Image as ImageIcon, Undo2, Redo2, Trash2, Maximize, Minimize, Check, Loader2, Sparkles, Send, Radio, Settings2, MousePointer2, Type, Square, Circle, Triangle, Minus, ArrowUpRight, Group, Ungroup, BringToFront, SendToBack, MoveUp, MoveDown, Copy, Scissors, ClipboardPaste, AlertTriangle, AlertCircle, RefreshCw, ChevronDown, ChevronUp, StickyNote, MoreHorizontal, Lock, Unlock, HelpCircle, Waypoints
 } from 'lucide-vue-next';
@@ -83,6 +83,23 @@ let canvas: fabric.Canvas | null = null;
 const WORKSPACE_WIDTH = 3200;
 const WORKSPACE_HEIGHT = 2000;
 
+// Clamps viewport pan to prevent dragging workspace infinitely into the void
+const clampViewportPan = () => {
+  if (!canvas || !wrapperRef.value) return;
+  const vpt = canvas.viewportTransform;
+  if (!vpt) return;
+  const zoom = canvas.getZoom();
+  const w = wrapperRef.value.clientWidth;
+  const h = wrapperRef.value.clientHeight;
+  const margin = Math.max(160, Math.min(w, h) * 0.45);
+  const minX = w - WORKSPACE_WIDTH * zoom - margin;
+  const maxX = margin;
+  const minY = h - WORKSPACE_HEIGHT * zoom - margin;
+  const maxY = margin;
+  vpt[4] = Math.min(maxX, Math.max(minX, vpt[4]));
+  vpt[5] = Math.min(maxY, Math.max(minY, vpt[5]));
+};
+
 const activeColor = ref('#0f172a'); // Dark slate for drawing on light background
 const strokeWidth = ref(4);
 const isDrawingMode = ref(true);
@@ -127,6 +144,7 @@ const editingArrowPoints = ref<Array<{ x: number; y: number }>>([]);
 const isDraggingNode = ref(false);
 const viewportVersion = ref(0);
 let liveArrowPreview: any = null;
+let arrowPreviewRafId: number | null = null;
 
 const isLineOrArrow = (obj: any): boolean => {
   return !!(obj && (obj as any).isArrow);
@@ -537,7 +555,7 @@ const straightenEditingArrow = () => {
     canvas.requestRenderAll();
     saveHistoryState();
     syncToFirebase();
-    displayToast('Straightened ✨');
+    displayToast('Straightened');
   }
 };
 
@@ -620,7 +638,7 @@ const straightenSelectedArrow = (arrow: any) => {
       saveHistoryState();
       syncToFirebase();
       updateSelectionState();
-      displayToast('Straightened ✨');
+      displayToast('Straightened');
     }
   }
 };
@@ -977,13 +995,11 @@ const createArrowFromPoints = (
     });
   } else {
     let sampled: Array<{ x: number; y: number }>;
+    const simplifiedPts = isExactNodes ? pts : rdp(pts, 2.5);
     if (isExactNodes) {
       // In node edit mode or preserved transform, keep exact knot points
       sampled = pts.map(p => ({ x: p.x, y: p.y }));
     } else {
-      // Curved arrow: simplify micro-wiggles first with RDP (epsilon = 2.5px)
-      const simplifiedPts = rdp(pts, 2.5);
-
       // Compute total arc length of simplified path
       const cumDist: number[] = [0];
       for (let i = 1; i < simplifiedPts.length; i++) {
@@ -992,9 +1008,9 @@ const createArrowFromPoints = (
       }
       const totalArcLen = cumDist[cumDist.length - 1];
 
-      // Drop a node every fixed distance step (~26px) with no artificial ceiling
-      const step = 26;
-      const nodeCount = Math.max(3, Math.round(totalArcLen / step) + 1);
+      // Drop an anchor node approximately every ~150px as requested by user
+      const step = 150;
+      const nodeCount = Math.max(2, Math.round(totalArcLen / step) + 1);
       sampled = [];
 
       for (let k = 0; k < nodeCount; k++) {
@@ -1025,8 +1041,19 @@ const createArrowFromPoints = (
     }
     finalPts = sampled.map(p => ({ x: p.x, y: p.y }));
 
-    // Direct terminal tangent from preceding sampled point
-    const pBack = sampled[Math.max(0, sampled.length - 2)];
+    // Direct terminal tangent looking back ~28px to eliminate tip micro-jitter
+    let pBack = sampled[Math.max(0, sampled.length - 2)];
+    if (simplifiedPts.length >= 2) {
+      let backDist = 0;
+      for (let i = simplifiedPts.length - 1; i > 0; i--) {
+        const d = Math.hypot(simplifiedPts[i].x - simplifiedPts[i - 1].x, simplifiedPts[i].y - simplifiedPts[i - 1].y);
+        backDist += d;
+        if (backDist >= 28) {
+          pBack = simplifiedPts[i - 1];
+          break;
+        }
+      }
+    }
     tangentAngle = Math.atan2(pn.y - pBack.y, pn.x - pBack.x);
 
     // Shorten end of shaft by cutting the last segment so rounded cap does not poke out past tip
@@ -1164,7 +1191,7 @@ const createSmoothedShape = (pts: Array<{ x: number; y: number }>) => {
 
     // Only classify as ellipse/circle if deviation from smooth oval is genuinely low (< 0.085)
     if (radialMeanDev < 0.085) {
-      displayToast('Snapped to Circle / Ellipse ✨');
+      displayToast('Snapped to Circle / Ellipse');
       return new fabric.Ellipse({
         left: cx,
         top: cy,
@@ -1191,7 +1218,7 @@ const createSmoothedShape = (pts: Array<{ x: number; y: number }>) => {
 
     // Triangle
     if (numCorners === 3) {
-      displayToast('Snapped to Triangle ✨');
+      displayToast('Snapped to Triangle');
       return new fabric.Triangle({
         left: minX,
         top: minY,
@@ -1209,7 +1236,7 @@ const createSmoothedShape = (pts: Array<{ x: number; y: number }>) => {
 
     // Rectangle
     if (numCorners === 4) {
-      displayToast('Snapped to Rectangle ✨');
+      displayToast('Snapped to Rectangle');
       return new fabric.Rect({
         left: minX,
         top: minY,
@@ -1227,7 +1254,7 @@ const createSmoothedShape = (pts: Array<{ x: number; y: number }>) => {
 
     // Fallback if somewhat round
     if (radialMeanDev < 0.15) {
-      displayToast('Snapped to Circle / Ellipse ✨');
+      displayToast('Snapped to Circle / Ellipse');
       return new fabric.Ellipse({
         left: cx,
         top: cy,
@@ -1254,7 +1281,7 @@ const createSmoothedShape = (pts: Array<{ x: number; y: number }>) => {
   }
 
   if (maxDev < Math.max(15, lineLen * 0.08)) {
-    displayToast('Snapped to straight line ✨');
+    displayToast('Snapped to straight line');
     return new fabric.Line([p0.x, p0.y, pn.x, pn.y], {
       stroke: activeColor.value,
       strokeWidth: strokeWidth.value,
@@ -1265,7 +1292,7 @@ const createSmoothedShape = (pts: Array<{ x: number; y: number }>) => {
   }
 
   // 4. Open stroke: Catmull-Rom cubic Bezier spline
-  displayToast('Smoothed curve ✨');
+  displayToast('Smoothed curve');
 
   const sampled: Array<{ x: number; y: number }> = [pts[0]];
   let accumDist = 0;
@@ -1429,23 +1456,6 @@ const initFabric = () => {
     });
   };
 
-  // Clamps viewport pan to prevent dragging workspace infinitely into the void
-  const clampViewportPan = () => {
-    if (!canvas || !wrapperRef.value) return;
-    const vpt = canvas.viewportTransform;
-    if (!vpt) return;
-    const zoom = canvas.getZoom();
-    const w = wrapperRef.value.clientWidth;
-    const h = wrapperRef.value.clientHeight;
-    const margin = Math.max(160, Math.min(w, h) * 0.45);
-    const minX = w - WORKSPACE_WIDTH * zoom - margin;
-    const maxX = margin;
-    const minY = h - WORKSPACE_HEIGHT * zoom - margin;
-    const maxY = margin;
-    vpt[4] = Math.min(maxX, Math.max(minX, vpt[4]));
-    vpt[5] = Math.min(maxY, Math.max(minY, vpt[5]));
-  };
-
   // Render workspace background with dark uneditable area outside boundary
   canvas.on('before:render', () => {
     if (!canvas) return;
@@ -1571,6 +1581,18 @@ const initFabric = () => {
   canvas.on('selection:created', updateSelectionState);
   canvas.on('selection:updated', updateSelectionState);
   canvas.on('selection:cleared', updateSelectionState);
+
+  // Ensure all objects added to canvas unconditionally disable bitmap caching for true vector rendering
+  canvas.on('object:added', (e: any) => {
+    if (e.target) {
+      e.target.objectCaching = false;
+      if (typeof e.target.getObjects === 'function') {
+        e.target.getObjects().forEach((o: any) => {
+          o.objectCaching = false;
+        });
+      }
+    }
+  });
 
   // Sync and history on changes
   canvas.on('path:created', (e: any) => {
@@ -2066,10 +2088,10 @@ const initFabric = () => {
       const scenePoint = canvas.getScenePoint(e);
       const lastPt = pencilStrokePoints[pencilStrokePoints.length - 1];
       const dist = lastPt ? Math.hypot(scenePoint.x - lastPt.x, scenePoint.y - lastPt.y) : 0;
-      if (!lastPt || dist >= 6) {
+      if (!lastPt || dist >= 8) {
         pencilStrokePoints.push(scenePoint);
 
-        if (dist > 5 && lastPencilMovePos) {
+        if (dist > 6 && lastPencilMovePos) {
           lastPencilMovePos = { x: scenePoint.x, y: scenePoint.y };
           if (pencilHoldTimer) clearTimeout(pencilHoldTimer);
           pencilHoldTimer = setTimeout(() => {
@@ -2077,17 +2099,21 @@ const initFabric = () => {
           }, 650);
         }
 
-        if (pencilStrokePoints.length >= 2) {
-          const preview = createArrowFromPoints(pencilStrokePoints, activeColor.value, strokeWidth.value);
-          if (preview) {
-            if (liveArrowPreview && canvas.contains(liveArrowPreview)) {
-              canvas.remove(liveArrowPreview);
+        if (pencilStrokePoints.length >= 2 && !arrowPreviewRafId) {
+          arrowPreviewRafId = requestAnimationFrame(() => {
+            arrowPreviewRafId = null;
+            if (!canvas || currentTool.value !== 'arrow' || !isMouseDown) return;
+            const preview = createArrowFromPoints(pencilStrokePoints, activeColor.value, strokeWidth.value);
+            if (preview) {
+              if (liveArrowPreview && canvas.contains(liveArrowPreview)) {
+                canvas.remove(liveArrowPreview);
+              }
+              preview.set({ selectable: false, evented: false });
+              liveArrowPreview = preview;
+              canvas.add(preview);
+              canvas.requestRenderAll();
             }
-            preview.set({ selectable: false, evented: false });
-            liveArrowPreview = preview;
-            canvas.add(preview);
-            canvas.requestRenderAll();
-          }
+          });
         }
       }
       return;
@@ -2164,6 +2190,10 @@ const initFabric = () => {
 
     // Arrow brush: finish live preview, quickshape resizing, or create final arrow
     if (currentTool.value === 'arrow') {
+      if (arrowPreviewRafId) {
+        cancelAnimationFrame(arrowPreviewRafId);
+        arrowPreviewRafId = null;
+      }
       if (liveArrowPreview && canvas.contains(liveArrowPreview)) {
         canvas.remove(liveArrowPreview);
         liveArrowPreview = null;
@@ -2321,12 +2351,21 @@ const initFabric = () => {
     }
   });
 
-  // Record initial positions before transform to preserve locked child objects
+  // Record initial positions and set native minScaleLimit before transform to preserve anchor and prevent drifting
   canvas.on('before:transform', (opt: any) => {
     const target = opt.transform?.target;
     if (!target) return;
     target._dragStartLeft = target.left;
     target._dragStartTop = target.top;
+
+    // Native minScaleLimit allows Fabric to enforce minimum size relative to the fixed anchor point,
+    // eliminating drift and smoothly allowing reverse scaling when the mouse moves back outwards.
+    const minDim = (target.isStickyNote || target.stickyColorConfig) ? 80 : 20;
+    const baseW = target.width || minDim;
+    const baseH = target.height || minDim;
+    const minSide = Math.min(baseW, baseH);
+    target.minScaleLimit = Math.max(0.01, minDim / (minSide > 0 ? minSide : minDim));
+
     if (target.type === 'activeselection' || (target.type === 'group' && !target.isStickyNote)) {
       const children = target.getObjects ? target.getObjects() : target._objects || [];
       children.forEach((c: any) => {
@@ -2398,29 +2437,7 @@ const initFabric = () => {
     updateStickyToolbar();
     updateArrowToolbar();
   });
-  canvas.on('object:scaling', (e: any) => {
-    const obj = e?.target;
-    if (obj) {
-      if (obj.isStickyNote || obj.stickyColorConfig) {
-        const minNoteSize = 80;
-        const curW = (obj.width || 180) * Math.abs(obj.scaleX || 1);
-        if (curW < minNoteSize && obj.width) {
-          const clamped = minNoteSize / obj.width;
-          obj.scaleX = clamped;
-          obj.scaleY = clamped;
-        }
-      } else {
-        const minDim = 20;
-        const curW = Math.abs((obj.width || 0) * (obj.scaleX || 1));
-        const curH = Math.abs((obj.height || 0) * (obj.scaleY || 1));
-        if (curW < minDim && obj.width) {
-          obj.scaleX = (obj.scaleX < 0 ? -1 : 1) * (minDim / obj.width);
-        }
-        if (curH < minDim && obj.height) {
-          obj.scaleY = (obj.scaleY < 0 ? -1 : 1) * (minDim / obj.height);
-        }
-      }
-    }
+  canvas.on('object:scaling', () => {
     updateStickyToolbar();
     updateArrowToolbar();
   });
@@ -2544,11 +2561,12 @@ const changeStickyHeight = (eventData: any, transform: any, x: number, y: number
 };
 
 const setupStickyControls = (note: any) => {
+  const defaultControls = fabric.controlsUtils?.createObjectDefaultControls?.() || {};
   note.controls = {
-    tl: (fabric as any).Object.prototype.controls.tl,
-    tr: (fabric as any).Object.prototype.controls.tr,
-    bl: (fabric as any).Object.prototype.controls.bl,
-    br: (fabric as any).Object.prototype.controls.br
+    tl: defaultControls.tl,
+    tr: defaultControls.tr,
+    bl: defaultControls.bl,
+    br: defaultControls.br
   };
   note.setControlsVisibility({
     tl: true,
@@ -3550,7 +3568,7 @@ const handleStopBroadcast = async () => {
   emit('save-state', json, dataUrl, currentAssetId.value);
   hasUnsavedChanges.value = false;
   await roomStore.endWhiteboardSession();
-  displayToast('Broadcast stopped — Switched to Local Sketchpad ✨');
+  displayToast('Broadcast stopped — Switched to Local Sketchpad');
 };
 
 const handleCloseRequest = () => {
@@ -3864,12 +3882,93 @@ const handleContextMenuCapture = (e: MouseEvent) => {
   }
 };
 
+// Centralized wheel event interceptor across the entire whiteboard hierarchy
+const handleWhiteboardWheel = (e: WheelEvent) => {
+  if (!canvas) return;
+  const target = e.target as HTMLElement | null;
+  if (!rootRef.value || (!rootRef.value.contains(target) && rootRef.value !== target)) {
+    return;
+  }
+
+  const isDirectCanvas = !!target?.closest('.canvas-container');
+
+  // Always prevent browser window zoom on Ctrl/Cmd + wheel anywhere inside whiteboard
+  if (e.ctrlKey || e.metaKey) {
+    e.preventDefault();
+  }
+
+  // If directly over Fabric canvas, let Fabric's native mouse:wheel listener handle it
+  if (isDirectCanvas) {
+    return;
+  }
+
+  // Allow standard vertical scrolling inside scrollable dropdowns/textareas unless zooming with Ctrl
+  const scrollable = target?.closest('.overflow-y-auto, textarea, input');
+  if (scrollable && !e.ctrlKey && !e.metaKey) {
+    return;
+  }
+
+  e.preventDefault();
+  e.stopPropagation();
+
+  // Forward wheel action to Fabric canvas
+  const rect = canvas.upperCanvasEl?.getBoundingClientRect();
+  let pointX = rect ? e.clientX - rect.left : canvas.getWidth() / 2;
+  let pointY = rect ? e.clientY - rect.top : canvas.getHeight() / 2;
+  pointX = Math.max(0, Math.min(canvas.getWidth(), pointX));
+  pointY = Math.max(0, Math.min(canvas.getHeight(), pointY));
+
+  if (e.ctrlKey || e.metaKey) {
+    let zoom = canvas.getZoom();
+    zoom *= 0.999 ** e.deltaY;
+    if (zoom > 5) zoom = 5;
+    if (zoom < 0.08) zoom = 0.08;
+    canvas.zoomToPoint({ x: pointX, y: pointY } as fabric.Point, zoom);
+    clampViewportPan();
+    const activeObj = canvas.getActiveObject();
+    if (activeObj) activeObj.setCoords();
+    updateStickyToolbar();
+    updateArrowToolbar();
+    viewportVersion.value++;
+  } else if (e.altKey) {
+    const vpt = canvas.viewportTransform;
+    if (vpt) {
+      vpt[4] -= e.deltaY;
+      clampViewportPan();
+      canvas.setViewportTransform(vpt);
+      const activeObj = canvas.getActiveObject();
+      if (activeObj) activeObj.setCoords();
+      updateStickyToolbar();
+      updateArrowToolbar();
+      viewportVersion.value++;
+      canvas.requestRenderAll();
+    }
+  } else {
+    const vpt = canvas.viewportTransform;
+    if (vpt) {
+      vpt[5] -= e.deltaY;
+      clampViewportPan();
+      canvas.setViewportTransform(vpt);
+      const activeObj = canvas.getActiveObject();
+      if (activeObj) activeObj.setCoords();
+      updateStickyToolbar();
+      updateArrowToolbar();
+      viewportVersion.value++;
+      canvas.requestRenderAll();
+    }
+  }
+};
+
 onMounted(() => {
   window.addEventListener('keydown', handleKeydown, { capture: true });
   window.addEventListener('click', handleWindowClick);
   window.addEventListener('paste', handleGlobalPaste);
   window.addEventListener('beforeunload', handleBeforeUnload);
   window.addEventListener('contextmenu', handleContextMenuCapture, { capture: true });
+  window.addEventListener('wheel', handleWhiteboardWheel, { passive: false });
+  if (rootRef.value) {
+    rootRef.value.addEventListener('wheel', handleWhiteboardWheel, { passive: false });
+  }
   if (wrapperRef.value) {
     wrapperRef.value.addEventListener('contextmenu', handleContextMenuCapture, { capture: true });
   }
@@ -3884,6 +3983,10 @@ onUnmounted(() => {
   window.removeEventListener('paste', handleGlobalPaste);
   window.removeEventListener('beforeunload', handleBeforeUnload);
   window.removeEventListener('contextmenu', handleContextMenuCapture, { capture: true });
+  window.removeEventListener('wheel', handleWhiteboardWheel);
+  if (rootRef.value) {
+    rootRef.value.removeEventListener('wheel', handleWhiteboardWheel);
+  }
   if (wrapperRef.value) {
     wrapperRef.value.removeEventListener('contextmenu', handleContextMenuCapture, { capture: true });
   }
@@ -4051,7 +4154,7 @@ onUnmounted(() => {
           :class="isObjectLocked ? 'text-amber-400 hover:text-amber-300' : 'text-slate-300 hover:text-white'"
           :title="isObjectLocked ? 'Unlock Note (Ctrl+L)' : 'Lock Note (Ctrl+L)'"
         >
-          <component :is="isObjectLocked ? Unlock : Lock" class="w-3.5 h-3.5" />
+          <component :is="isObjectLocked ? Lock : Unlock" class="w-3.5 h-3.5" />
         </button>
         <button
           @mousedown.prevent
@@ -4164,7 +4267,7 @@ onUnmounted(() => {
           :class="isObjectLocked ? 'text-amber-400 hover:text-amber-300' : 'text-slate-300 hover:text-white'"
           :title="isObjectLocked ? 'Unlock (Ctrl+L)' : 'Lock (Ctrl+L)'"
         >
-          <component :is="isObjectLocked ? Unlock : Lock" class="w-3.5 h-3.5" />
+          <component :is="isObjectLocked ? Lock : Unlock" class="w-3.5 h-3.5" />
         </button>
         <button
           @mousedown.prevent
@@ -4456,7 +4559,7 @@ onUnmounted(() => {
           class="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
         >
           <span class="flex items-center gap-2">
-            <component :is="isObjectLocked ? Unlock : Lock" class="w-3.5 h-3.5" :class="isObjectLocked ? 'text-amber-400' : 'text-slate-400'" />
+            <component :is="isObjectLocked ? Lock : Unlock" class="w-3.5 h-3.5" :class="isObjectLocked ? 'text-amber-400' : 'text-slate-400'" />
             {{ isObjectLocked ? 'Unlock Object' : 'Lock Object' }}
           </span>
           <span class="text-[10px] text-slate-400 font-mono">Ctrl+L</span>

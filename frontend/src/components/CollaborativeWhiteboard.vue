@@ -52,8 +52,11 @@ const rootRef = ref<HTMLDivElement | null>(null);
 
 const whiteboardContainerWidth = ref(800);
 const isColorPickerOpen = ref(false);
-const isCompactToolbar = computed(() => whiteboardContainerWidth.value < 780);
-const isNarrowToolbar = computed(() => whiteboardContainerWidth.value < 540);
+const isSendTextVisible = computed(() => whiteboardContainerWidth.value >= 960);
+const isFullColorsVisible = computed(() => whiteboardContainerWidth.value >= 880);
+const isCompactToolbar = computed(() => whiteboardContainerWidth.value < 880);
+const isStackedToolbar = computed(() => whiteboardContainerWidth.value < 680);
+const isNarrowToolbar = computed(() => whiteboardContainerWidth.value < 520);
 
 let canvas: fabric.Canvas | null = null;
 
@@ -195,11 +198,12 @@ const updateSelectionState = () => {
       active instanceof fabric.Group
     ) && !active.isStickyNote
   );
-  if (active && (active.type?.toLowerCase() === 'activeselection' || active._objects)) {
-    const targets = active.getObjects ? active.getObjects() : active._objects;
+  if (active && (active.type?.toLowerCase() === 'activeselection' || active instanceof fabric.ActiveSelection)) {
+    const targets = active.getObjects ? active.getObjects() : active._objects || [];
+    const anyLocked = targets.some((o: any) => o.isLocked === true);
     const allLocked = targets.length > 0 && targets.every((o: any) => o.isLocked === true);
-    isObjectLocked.value = allLocked;
-    if (allLocked) {
+    isObjectLocked.value = anyLocked || allLocked;
+    if (anyLocked || allLocked) {
       active.set({
         lockMovementX: true,
         lockMovementY: true,
@@ -211,9 +215,10 @@ const updateSelectionState = () => {
     }
   } else if (active && (active.type?.toLowerCase() === 'group' || active instanceof fabric.Group) && !active.isStickyNote) {
     const targets = active.getObjects ? active.getObjects() : active._objects || [];
+    const anyLocked = targets.some((o: any) => o.isLocked === true);
     const allLocked = targets.length > 0 && targets.every((o: any) => o.isLocked === true);
-    isObjectLocked.value = !!active.isLocked || allLocked;
-    if (active.isLocked || allLocked) {
+    isObjectLocked.value = !!active.isLocked || anyLocked || allLocked;
+    if (active.isLocked || anyLocked || allLocked) {
       active.set({
         lockMovementX: true,
         lockMovementY: true,
@@ -497,7 +502,6 @@ const createArrowFromPoints = (pts: Array<{ x: number; y: number }>) => {
   });
   (arrow as any).isArrow = true;
   (arrow as any).arrowP0 = { x: p0.x, y: p0.y };
-  displayToast('Arrow created ✨');
   return arrow;
 };
 
@@ -789,6 +793,11 @@ const initFabric = () => {
     };
 
     return candidates.filter((obj: any) => {
+      if (obj.isLocked) return false;
+      if (obj.type === 'group' && !obj.isStickyNote) {
+        const children = obj.getObjects ? obj.getObjects() : obj._objects || [];
+        if (children.some((c: any) => c.isLocked)) return false;
+      }
       const tl = new fabric.Point(rect.left, rect.top);
       const br = tl.add(new fabric.Point(rect.width, rect.height));
       if (obj.isContainedWithinRect && obj.isContainedWithinRect(tl, br)) {
@@ -1029,17 +1038,20 @@ const initFabric = () => {
     if (e.button !== 0) return; // left click only
 
     const found = canvas.findTarget(e);
-    let hitTarget = (found as any)?.target || found || null;
+    const hitTarget = opt.target || (found as any)?.target || null;
+    const isRealHit = !!(hitTarget && hitTarget instanceof fabric.FabricObject && hitTarget !== (canvas as any).clipPath);
     const activeObj = canvas.getActiveObject();
 
-    if (!hitTarget && activeObj) {
+    let isControlHit = false;
+    if (activeObj) {
       const vpPoint = canvas.getViewportPoint(e);
       if ((activeObj as any).findControl?.(vpPoint)) {
-        hitTarget = activeObj;
+        isControlHit = true;
       }
     }
 
-    if (hitTarget && hitTarget !== (canvas as any).clipPath) {
+    if (isControlHit || isRealHit) {
+      const targetObj = isRealHit ? hitTarget : activeObj;
       if (isDrawingMode.value || currentTool.value === 'sticky' || currentTool.value === 'arrow' || ['rect', 'circle', 'triangle', 'line'].includes(currentTool.value)) {
         toggleMode(false);
         currentTool.value = 'select';
@@ -1056,7 +1068,9 @@ const initFabric = () => {
           pencilHoldTimer = null;
         }
 
-        canvas.setActiveObject(hitTarget);
+        if (targetObj) {
+          canvas.setActiveObject(targetObj);
+        }
         canvas.requestRenderAll();
         updateSelectionState();
       }
@@ -1118,9 +1132,8 @@ const initFabric = () => {
 
     // Pencil / Arrow drawing mode: smart switch if object was clicked, else start tracking for QuickShape hold
     if (isDrawingMode.value) {
-      const found = canvas.findTarget(e);
-      const hitTarget = (found as any)?.target || found || null;
-      if (hitTarget && hitTarget !== (canvas as any).clipPath) {
+      const hitTarget = opt.target || (canvas.findTarget(e) as any)?.target || null;
+      if (hitTarget && hitTarget instanceof fabric.FabricObject && hitTarget !== (canvas as any).clipPath) {
         toggleMode(false);
         currentTool.value = 'select';
         canvas.setActiveObject(hitTarget);
@@ -1143,9 +1156,8 @@ const initFabric = () => {
 
     // Sticky Note tool: smart switch if clicked on existing object, else spawn sticky note on empty space
     if (currentTool.value === 'sticky') {
-      const found = canvas.findTarget(e);
-      const hitTarget = (found as any)?.target || found || null;
-      if (hitTarget && hitTarget !== (canvas as any).clipPath) {
+      const hitTarget = opt.target || (canvas.findTarget(e) as any)?.target || null;
+      if (hitTarget && hitTarget instanceof fabric.FabricObject && hitTarget !== (canvas as any).clipPath) {
         toggleMode(false);
         currentTool.value = 'select';
         canvas.setActiveObject(hitTarget);
@@ -1194,14 +1206,14 @@ const initFabric = () => {
     // Shapes
     if (['rect', 'circle', 'triangle', 'line'].includes(currentTool.value)) {
       const activeObj = canvas.getActiveObject();
-      const found = opt.target || canvas.findTarget(e);
-      const hitTarget = (found as any)?.target || found || null;
+      const hitTarget = opt.target || (canvas.findTarget(e) as any)?.target || null;
+      const isRealHit = !!(hitTarget && hitTarget instanceof fabric.FabricObject && hitTarget !== (canvas as any).clipPath);
       const vpPoint = canvas.getViewportPoint(e);
       const isControlHit = activeObj && ((activeObj as any).findControl?.(vpPoint));
 
-      if (isControlHit || (hitTarget && hitTarget !== (canvas as any).clipPath)) {
+      if (isControlHit || isRealHit) {
         currentTool.value = 'select';
-        if (hitTarget && hitTarget !== activeObj) {
+        if (isRealHit && hitTarget !== activeObj) {
           canvas.setActiveObject(hitTarget as fabric.FabricObject);
           canvas.requestRenderAll();
           updateSelectionState();
@@ -1454,20 +1466,15 @@ const initFabric = () => {
     const obj = e.target;
     if (!obj) return;
 
-    // 1. If group or activeSelection contains locked children, keep locked children pinned to initial scene coordinates
+    // 1. If group or activeSelection contains locked children, keep it strictly stationary
     if (obj.type === 'activeselection' || (obj.type === 'group' && !obj.isStickyNote)) {
       const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
-      const lockedChildren = targets.filter((o: any) => o.isLocked);
-      if (lockedChildren.length > 0 && obj._dragStartLeft !== undefined && obj._dragStartTop !== undefined) {
-        const deltaX = obj.left - obj._dragStartLeft;
-        const deltaY = obj.top - obj._dragStartTop;
-        lockedChildren.forEach((child: any) => {
-          if (child._dragStartLeft !== undefined && child._dragStartTop !== undefined) {
-            child.left = child._dragStartLeft - deltaX;
-            child.top = child._dragStartTop - deltaY;
-            child.setCoords();
-          }
-        });
+      const hasLocked = targets.some((o: any) => o.isLocked);
+      if (hasLocked) {
+        if (obj._dragStartLeft !== undefined) obj.left = obj._dragStartLeft;
+        if (obj._dragStartTop !== undefined) obj.top = obj._dragStartTop;
+        obj.setCoords();
+        return;
       }
     }
 
@@ -2528,8 +2535,8 @@ const handleKeydown = (e: KeyboardEvent) => {
     return;
   }
 
-  // 4. Ctrl+L / Ctrl+Shift+L / Alt+L: Lock / Unlock selected object (exit text editing first if active)
-  const isLockKey = (e.key === 'l' || e.key === 'L') && ((e.ctrlKey || e.metaKey) || e.altKey);
+  // 4. Ctrl+L: Lock / Unlock selected object (exit text editing first if active)
+  const isLockKey = (e.ctrlKey || e.metaKey) && (e.key === 'l' || e.key === 'L') && !e.shiftKey && !e.altKey;
   if (isLockKey) {
     e.preventDefault();
     e.stopPropagation();
@@ -2772,14 +2779,19 @@ onUnmounted(() => {
 <template>
   <div ref="rootRef" class="h-full w-full flex flex-col relative bg-slate-900 overflow-hidden" @contextmenu.prevent>
     <!-- Header -->
-    <div class="absolute top-4 left-4 z-10 flex items-center gap-2">
-      <div v-if="roomStore.currentRoom?.whiteboardActive" class="px-3 py-1.5 rounded-full bg-indigo-600/90 backdrop-blur shadow-sm border border-indigo-400 flex items-center gap-2 text-xs font-semibold text-white animate-pulse">
+    <div
+      class="absolute top-4 left-4 z-10 flex items-center gap-2 transition-opacity duration-200"
+      :class="{ 'opacity-30': isHoveringSend }"
+    >
+      <div v-if="roomStore.currentRoom?.whiteboardActive" class="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-indigo-600/90 shadow-sm border border-indigo-400 flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-white animate-pulse">
         <Radio class="w-3.5 h-3.5" />
-        {{ roomStore.currentRoom?.whiteboardHostName }} is Broadcasting
+        <span v-if="whiteboardContainerWidth >= 640">{{ roomStore.currentRoom?.whiteboardHostName }} is Broadcasting</span>
+        <span v-else>Live</span>
       </div>
-      <div v-else class="px-3 py-1.5 rounded-full bg-white/90 backdrop-blur shadow-sm border border-slate-200 flex items-center gap-2 text-xs font-semibold text-slate-700">
+      <div v-else class="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-white/90 shadow-sm border border-slate-200 flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-slate-700">
         <Sparkles class="w-3.5 h-3.5 text-sky-500" />
-        Local Sketchpad
+        <span v-if="whiteboardContainerWidth >= 640">Local Sketchpad</span>
+        <span v-else-if="whiteboardContainerWidth >= 480">Local</span>
       </div>
     </div>
 
@@ -2801,18 +2813,23 @@ onUnmounted(() => {
       </button>
     </div>
     
-    <div class="absolute top-4 right-4 z-10 flex items-center gap-2 transition-all duration-300" :class="{ 'opacity-50 pointer-events-none backdrop-blur-md': isHoveringSend }">
-      <button v-if="roomStore.currentRoom?.whiteboardActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid" @click="handleStopBroadcast()" class="px-3 py-1.5 rounded-xl bg-rose-500/90 hover:bg-rose-600 text-white shadow-sm transition text-xs font-semibold flex items-center gap-1 cursor-pointer">
-        <X class="w-3.5 h-3.5" /> Stop Broadcast
+    <div
+      class="absolute top-4 right-4 z-10 flex items-center gap-1 sm:gap-2 transition-opacity duration-200"
+      :class="{ 'opacity-30': isHoveringSend }"
+    >
+      <button v-if="roomStore.currentRoom?.whiteboardActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid" @click="handleStopBroadcast()" class="px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl bg-rose-500/90 hover:bg-rose-600 text-white shadow-sm transition text-xs font-semibold flex items-center gap-1 cursor-pointer">
+        <X class="w-3.5 h-3.5" />
+        <span v-if="whiteboardContainerWidth >= 640">Stop Broadcast</span>
       </button>
-      <button v-if="!roomStore.currentRoom?.whiteboardActive" @click="handleBroadcast" class="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm transition text-xs font-semibold flex items-center gap-1 cursor-pointer">
-        <Radio class="w-3.5 h-3.5" /> Broadcast
+      <button v-if="!roomStore.currentRoom?.whiteboardActive" @click="handleBroadcast" class="px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm transition text-xs font-semibold flex items-center gap-1 cursor-pointer">
+        <Radio class="w-3.5 h-3.5" />
+        <span v-if="whiteboardContainerWidth >= 640">Broadcast</span>
       </button>
-      <button @click="showShortcutsModal = true" class="p-1.5 rounded-xl bg-white/90 hover:bg-white text-slate-600 hover:text-indigo-600 shadow-sm transition cursor-pointer" title="Shortcuts Cheatsheet (?)">
-        <HelpCircle class="w-4 h-4" />
+      <button @click="showShortcutsModal = true" class="p-1 sm:p-1.5 rounded-xl bg-white/90 hover:bg-white text-slate-600 hover:text-indigo-600 shadow-sm transition cursor-pointer" title="Shortcuts Cheatsheet (?)">
+        <HelpCircle class="w-3.5 sm:w-4 h-3.5 sm:h-4" />
       </button>
-      <button @click="handleCloseRequest" class="p-1.5 rounded-xl bg-white/90 hover:bg-white text-slate-500 hover:text-slate-700 shadow-sm transition cursor-pointer" title="Close Panel">
-        <X class="w-4 h-4" />
+      <button @click="handleCloseRequest" class="p-1 sm:p-1.5 rounded-xl bg-white/90 hover:bg-white text-slate-500 hover:text-slate-700 shadow-sm transition cursor-pointer" title="Close Panel">
+        <X class="w-3.5 sm:w-4 h-3.5 sm:h-4" />
       </button>
     </div>
 
@@ -2843,12 +2860,12 @@ onUnmounted(() => {
       <!-- Send Viewport Capture Framing Guide / Viewfinder -->
       <div
         v-if="isHoveringSend"
-        class="absolute inset-4 sm:inset-8 border-2 border-dashed border-sky-400 pointer-events-none rounded-2xl z-20 flex flex-col justify-between p-3 animate-in fade-in duration-200 shadow-[0_0_0_9999px_rgba(15,23,42,0.45)]"
+        class="absolute inset-4 sm:inset-8 border-2 border-dashed border-sky-400 pointer-events-none rounded-2xl z-20 flex flex-col justify-between p-3 animate-in fade-in duration-200"
       >
-        <div class="flex justify-between items-center text-[11px] font-mono font-medium text-sky-400 bg-sky-950/90 px-2.5 py-1 rounded-lg w-max border border-sky-500/40 backdrop-blur-md">
+        <div class="flex justify-between items-center text-[11px] font-mono font-medium text-sky-400 bg-sky-950/90 px-2.5 py-1 rounded-lg w-max border border-sky-500/40">
           <span>📷 Viewport Snapshot Area</span>
         </div>
-        <div class="text-right text-[10px] font-mono text-sky-300/90 bg-slate-900/90 px-2 py-0.5 rounded self-end border border-slate-700 backdrop-blur-md">
+        <div class="text-right text-[10px] font-mono text-sky-300/90 bg-slate-900/90 px-2 py-0.5 rounded self-end border border-slate-700">
           Full visible screen will be captured to chat
         </div>
       </div>
@@ -2976,20 +2993,20 @@ onUnmounted(() => {
 
 
     <div
-      class="absolute bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 transition-all duration-300 w-max max-w-[96%]"
-      :class="isNarrowToolbar ? 'flex-col items-center' : 'flex-row'"
+      class="absolute bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 sm:gap-2 transition-all duration-300 w-max max-w-[96%]"
+      :class="isStackedToolbar ? 'flex-col items-center' : 'flex-row'"
     >
       <!-- AI Input -->
       <div
-        class="flex flex-col gap-2 transition-all duration-300"
+        class="flex flex-col gap-1.5 transition-opacity duration-200"
         :class="[
-          { 'opacity-50 pointer-events-none backdrop-blur-md': isHoveringSend },
-          isNarrowToolbar ? 'w-[200px]' : isCompactToolbar ? 'w-[140px]' : 'w-[190px] sm:w-[240px]'
+          { 'opacity-30': isHoveringSend },
+          isStackedToolbar ? 'w-[220px] max-w-[92vw]' : 'w-[150px] sm:w-[200px]'
         ]"
       >
-        <div v-if="isGeneratingSvg" class="h-10 sm:h-11 px-3 bg-slate-900/95 text-sky-400 text-xs font-medium rounded-2xl flex items-center justify-between gap-2 backdrop-blur border border-slate-700 shadow-xl">
+        <div v-if="isGeneratingSvg" class="h-9 sm:h-10 px-3 bg-slate-900/95 text-sky-400 text-xs font-medium rounded-2xl flex items-center justify-between gap-2 border border-slate-700 shadow-xl">
           <span class="flex items-center gap-1.5 min-w-0 truncate">
-            <Loader2 class="w-4 h-4 animate-spin text-sky-400 shrink-0" />
+            <Loader2 class="w-3.5 h-3.5 animate-spin text-sky-400 shrink-0" />
             <span class="truncate">Generating...</span>
           </span>
           <button
@@ -2999,130 +3016,142 @@ onUnmounted(() => {
             Stop
           </button>
         </div>
-        <form v-else @submit.prevent="generateAIObject" class="flex items-center h-10 sm:h-11 bg-white/95 backdrop-blur-md rounded-2xl shadow-xl border border-slate-200 p-1">
-          <input v-model="aiPrompt" type="text" :placeholder="isCompactToolbar ? 'AI Vector...' : 'Generate icon, chart...'" class="flex-1 bg-transparent px-2.5 py-1 text-xs focus:outline-none text-slate-700 placeholder-slate-400 min-w-0" />
-          <button type="submit" :disabled="!aiPrompt.trim()" class="p-1.5 rounded-xl bg-indigo-100 text-indigo-600 hover:bg-indigo-200 transition disabled:opacity-50 disabled:cursor-not-allowed shrink-0 cursor-pointer">
+        <form v-else @submit.prevent="generateAIObject" class="flex items-center h-9 sm:h-10 bg-white/95 rounded-2xl shadow-xl border border-slate-200 p-1">
+          <input v-model="aiPrompt" type="text" :placeholder="isStackedToolbar ? 'AI Vector icon, chart...' : 'AI Vector...'" class="flex-1 bg-transparent px-2 py-1 text-xs focus:outline-none text-slate-700 placeholder-slate-400 min-w-0" />
+          <button type="submit" :disabled="!aiPrompt.trim()" class="p-1 sm:p-1.5 rounded-xl bg-indigo-100 text-indigo-600 hover:bg-indigo-200 transition disabled:opacity-50 disabled:cursor-not-allowed shrink-0 cursor-pointer">
             <Sparkles class="w-3.5 h-3.5" />
           </button>
         </form>
       </div>
 
-      <!-- Main Tools -->
+      <!-- Main Tools Bar -->
       <div
-        class="h-10 sm:h-11 bg-white/95 backdrop-blur-md rounded-2xl shadow-xl border border-slate-200 p-1 sm:p-1.5 flex items-center gap-1 sm:gap-1.5 transition-all duration-300"
-        :class="{ 'opacity-50 pointer-events-none': isHoveringSend }"
+        class="h-9 sm:h-10 bg-white/95 rounded-2xl shadow-xl border border-slate-200 flex items-center transition-all duration-300"
+        :class="isNarrowToolbar ? 'p-1 gap-0.5' : 'p-1 sm:p-1.5 gap-0.5 sm:gap-1'"
       >
-        <button @click="toggleMode(false)" class="p-1.5 rounded-xl transition cursor-pointer" :class="currentTool === 'select' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'" title="Select / Move">
-          <MousePointer2 class="w-4 h-4" />
-        </button>
-        
-        <div class="relative">
-          <button @click="toggleMode(true); isBrushMenuOpen = !isBrushMenuOpen" class="p-1.5 rounded-xl transition flex items-center gap-1 cursor-pointer" :class="currentTool !== 'select' && currentTool !== 'text' && currentTool !== 'sticky' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'" title="Draw & Shapes">
-            <Pencil class="w-4 h-4" />
+        <!-- Tool items that dim when hovering send -->
+        <div
+          class="flex items-center transition-opacity duration-200"
+          :class="[
+            { 'opacity-30': isHoveringSend },
+            isNarrowToolbar ? 'gap-0.5' : 'gap-0.5 sm:gap-1'
+          ]"
+        >
+          <button @click="toggleMode(false)" class="rounded-xl transition cursor-pointer" :class="[currentTool === 'select' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500', isNarrowToolbar ? 'p-1' : 'p-1.5']" title="Select / Move">
+            <MousePointer2 class="w-3.5 h-3.5 sm:w-4 sm:h-4" />
           </button>
           
-          <div v-if="isBrushMenuOpen && isDrawingMode" class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-white rounded-xl shadow-xl border border-slate-200 p-3 flex flex-col gap-3 min-w-[140px] z-30">
-            <div class="flex items-center justify-between gap-1">
-              <button v-for="size in strokeSizes" :key="size.value" @click="strokeWidth = size.value; isBrushMenuOpen = false" class="px-2 py-1 rounded-lg text-[10px] font-bold transition flex-1 cursor-pointer" :class="strokeWidth === size.value ? 'bg-indigo-100 text-indigo-700' : 'text-slate-400 hover:text-slate-600 bg-slate-50'">
-                {{ size.label }}
-              </button>
-            </div>
-            <div class="h-px bg-slate-100"></div>
-            <div class="flex items-center gap-1 justify-between">
-              <button @click="addShape('rect')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Rectangle"><Square class="w-4 h-4" /></button>
-              <button @click="addShape('circle')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Circle / Ellipse"><Circle class="w-4 h-4" /></button>
-              <button @click="addShape('triangle')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Triangle"><Triangle class="w-4 h-4" /></button>
-              <button @click="addShape('line')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Line"><Minus class="w-4 h-4" /></button>
-              <button @click="addShape('arrow')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" :class="{ 'bg-indigo-100 text-indigo-600': currentTool === 'arrow' }" title="Arrow Brush (箭頭畫筆)"><ArrowUpRight class="w-4 h-4" /></button>
+          <div class="relative">
+            <button @click="toggleMode(true); isBrushMenuOpen = !isBrushMenuOpen" class="rounded-xl transition flex items-center gap-1 cursor-pointer" :class="[currentTool !== 'select' && currentTool !== 'text' && currentTool !== 'sticky' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500', isNarrowToolbar ? 'p-1' : 'p-1.5']" title="Draw & Shapes">
+              <Pencil class="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+            </button>
+            
+            <div v-if="isBrushMenuOpen && isDrawingMode" class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-white rounded-xl shadow-xl border border-slate-200 p-3 flex flex-col gap-3 min-w-[140px] z-30">
+              <div class="flex items-center justify-between gap-1">
+                <button v-for="size in strokeSizes" :key="size.value" @click="strokeWidth = size.value; isBrushMenuOpen = false" class="px-2 py-1 rounded-lg text-[10px] font-bold transition flex-1 cursor-pointer" :class="strokeWidth === size.value ? 'bg-indigo-100 text-indigo-700' : 'text-slate-400 hover:text-slate-600 bg-slate-50'">
+                  {{ size.label }}
+                </button>
+              </div>
+              <div class="h-px bg-slate-100"></div>
+              <div class="flex items-center gap-1 justify-between">
+                <button @click="addShape('rect')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Rectangle"><Square class="w-4 h-4" /></button>
+                <button @click="addShape('circle')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Circle / Ellipse"><Circle class="w-4 h-4" /></button>
+                <button @click="addShape('triangle')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Triangle"><Triangle class="w-4 h-4" /></button>
+                <button @click="addShape('line')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Line"><Minus class="w-4 h-4" /></button>
+                <button @click="addShape('arrow')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" :class="{ 'bg-indigo-100 text-indigo-600': currentTool === 'arrow' }" title="Arrow Brush (箭頭畫筆)"><ArrowUpRight class="w-4 h-4" /></button>
+              </div>
             </div>
           </div>
-        </div>
-        
-        <button @click="addText" class="p-1.5 rounded-xl transition cursor-pointer" :class="currentTool === 'text' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'" title="Add Text">
-          <Type class="w-4 h-4" />
-        </button>
-
-        <!-- Sticky Note Tool -->
-        <div class="relative">
-          <button
-            @click="addSticky(); isStickyMenuOpen = !isStickyMenuOpen"
-            class="p-1.5 rounded-xl transition flex items-center gap-1 cursor-pointer"
-            :class="currentTool === 'sticky' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'"
-            title="Sticky Note (便條紙)"
-          >
-            <StickyNote class="w-4 h-4" />
+          
+          <button @click="addText" class="rounded-xl transition cursor-pointer" :class="[currentTool === 'text' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500', isNarrowToolbar ? 'p-1' : 'p-1.5']" title="Add Text">
+            <Type class="w-3.5 h-3.5 sm:w-4 sm:h-4" />
           </button>
-          <div
-            v-if="isStickyMenuOpen"
-            class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-white rounded-xl shadow-xl border border-slate-200 p-2 flex items-center gap-1.5 z-30 min-w-max"
-          >
-            <button
-              v-for="color in stickyColors"
-              :key="color.name"
-              @click="addSticky(color); isStickyMenuOpen = false"
-              class="w-5 h-5 rounded-full border-2 transition transform hover:scale-110 cursor-pointer"
-              :class="selectedStickyColor.name === color.name ? 'border-indigo-500 scale-110 shadow-sm' : 'border-black/10 hover:border-black/30'"
-              :style="{ backgroundColor: color.bg }"
-              :title="color.name"
-            ></button>
-          </div>
-        </div>
-        
-        <div class="w-px h-5 bg-slate-200 mx-0.5"></div>
-        
-        <!-- Adaptive Color Swatches: Full when wide, collapsed single button when compact -->
-        <template v-if="!isCompactToolbar">
-          <div class="flex items-center gap-1">
-            <button v-for="color in colors" :key="color" @click="applyColorToSelected(color)" class="w-4 h-4 sm:w-5 sm:h-5 rounded-full border-2 transition transform hover:scale-110 cursor-pointer" :class="activeColor === color ? 'border-indigo-400 scale-110 shadow-sm' : 'border-transparent opacity-80 hover:opacity-100'" :style="{ backgroundColor: color }"></button>
-          </div>
-        </template>
-        <template v-else>
+
+          <!-- Sticky Note Tool -->
           <div class="relative">
             <button
-              @click="isColorPickerOpen = !isColorPickerOpen"
-              class="p-1 rounded-xl hover:bg-slate-100 flex items-center gap-1 transition cursor-pointer"
-              title="Change Color"
+              @click="addSticky(); isStickyMenuOpen = !isStickyMenuOpen"
+              class="rounded-xl transition flex items-center gap-1 cursor-pointer"
+              :class="[currentTool === 'sticky' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500', isNarrowToolbar ? 'p-1' : 'p-1.5']"
+              title="Sticky Note (便條紙)"
             >
-              <span class="w-4 h-4 rounded-full border border-black/20 shadow-xs" :style="{ backgroundColor: activeColor }"></span>
-              <ChevronUp v-if="isColorPickerOpen" class="w-3 h-3 text-slate-400" />
-              <ChevronDown v-else class="w-3 h-3 text-slate-400" />
+              <StickyNote class="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </button>
             <div
-              v-if="isColorPickerOpen"
-              class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-white rounded-xl shadow-xl border border-slate-200 p-2 flex items-center gap-1.5 z-30 min-w-max animate-in fade-in zoom-in-95"
+              v-if="isStickyMenuOpen"
+              class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-white rounded-xl shadow-xl border border-slate-200 p-2 flex items-center gap-1.5 z-30 min-w-max"
             >
               <button
-                v-for="color in colors"
-                :key="color"
-                @click="applyColorToSelected(color); isColorPickerOpen = false"
+                v-for="color in stickyColors"
+                :key="color.name"
+                @click="addSticky(color); isStickyMenuOpen = false"
                 class="w-5 h-5 rounded-full border-2 transition transform hover:scale-110 cursor-pointer"
-                :class="activeColor === color ? 'border-indigo-400 scale-110 shadow-sm' : 'border-transparent opacity-80 hover:opacity-100'"
-                :style="{ backgroundColor: color }"
+                :class="selectedStickyColor.name === color.name ? 'border-indigo-500 scale-110 shadow-sm' : 'border-black/10 hover:border-black/30'"
+                :style="{ backgroundColor: color.bg }"
+                :title="color.name"
               ></button>
             </div>
           </div>
-        </template>
-        
-        <div class="w-px h-5 bg-slate-200 mx-0.5"></div>
-        
-        <div class="flex items-center gap-0.5">
-          <input ref="fileInputRef" type="file" accept="image/*" class="hidden" @change="handleImageUpload" />
-          <button @click="fileInputRef?.click()" class="p-1.5 rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" title="Add Image"><ImageIcon class="w-4 h-4" /></button>
-          <button @click="undo" class="p-1.5 rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" title="Undo (Ctrl+Z)" :disabled="historyStack.length <= 1" :class="{'opacity-50 cursor-not-allowed': historyStack.length <= 1}"><Undo2 class="w-4 h-4" /></button>
-          <button @click="deleteSelected" class="p-1.5 rounded-xl hover:bg-rose-100 text-rose-500 transition cursor-pointer" title="Delete Selected (Del)"><Trash2 class="w-4 h-4" /></button>
+          
+          <div class="w-px h-4 bg-slate-200 mx-0.5"></div>
+          
+          <!-- Colors: Full swatches when wide, single picker when compact -->
+          <template v-if="isFullColorsVisible">
+            <div class="flex items-center gap-1">
+              <button v-for="color in colors" :key="color" @click="applyColorToSelected(color)" class="w-4 h-4 sm:w-5 sm:h-5 rounded-full border-2 transition transform hover:scale-110 cursor-pointer" :class="activeColor === color ? 'border-indigo-400 scale-110 shadow-sm' : 'border-transparent opacity-80 hover:opacity-100'" :style="{ backgroundColor: color }"></button>
+            </div>
+          </template>
+          <template v-else>
+            <div class="relative">
+              <button
+                @click="isColorPickerOpen = !isColorPickerOpen"
+                class="rounded-xl hover:bg-slate-100 flex items-center gap-0.5 transition cursor-pointer"
+                :class="isNarrowToolbar ? 'p-0.5' : 'p-1'"
+                title="Change Color"
+              >
+                <span class="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full border border-black/20 shadow-xs" :style="{ backgroundColor: activeColor }"></span>
+                <ChevronUp v-if="isColorPickerOpen" class="w-3 h-3 text-slate-400" />
+                <ChevronDown v-else class="w-3 h-3 text-slate-400" />
+              </button>
+              <div
+                v-if="isColorPickerOpen"
+                class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-white rounded-xl shadow-xl border border-slate-200 p-2 flex items-center gap-1.5 z-30 min-w-max animate-in fade-in zoom-in-95"
+              >
+                <button
+                  v-for="color in colors"
+                  :key="color"
+                  @click="applyColorToSelected(color); isColorPickerOpen = false"
+                  class="w-5 h-5 rounded-full border-2 transition transform hover:scale-110 cursor-pointer"
+                  :class="activeColor === color ? 'border-indigo-400 scale-110 shadow-sm' : 'border-transparent opacity-80 hover:opacity-100'"
+                  :style="{ backgroundColor: color }"
+                ></button>
+              </div>
+            </div>
+          </template>
+          
+          <div class="w-px h-4 bg-slate-200 mx-0.5"></div>
+          
+          <div class="flex items-center" :class="isNarrowToolbar ? 'gap-0.5' : 'gap-0.5 sm:gap-1'">
+            <input ref="fileInputRef" type="file" accept="image/*" class="hidden" @change="handleImageUpload" />
+            <button @click="fileInputRef?.click()" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="isNarrowToolbar ? 'p-1' : 'p-1.5'" title="Add Image"><ImageIcon class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
+            <button @click="undo" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="[{'opacity-50 cursor-not-allowed': historyStack.length <= 1}, isNarrowToolbar ? 'p-1' : 'p-1.5']" title="Undo (Ctrl+Z)" :disabled="historyStack.length <= 1"><Undo2 class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
+            <button @click="deleteSelected" class="rounded-xl hover:bg-rose-100 text-rose-500 transition cursor-pointer" :class="isNarrowToolbar ? 'p-1' : 'p-1.5'" title="Delete Selected (Del)"><Trash2 class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
+          </div>
         </div>
         
-        <div class="w-px h-5 bg-slate-200 mx-0.5"></div>
+        <div class="w-px h-4 bg-slate-200 mx-0.5"></div>
         
+        <!-- Send Viewport Button: always fully interactive and bright -->
         <button
           @click="handleSendToChat"
           @mouseenter="isHoveringSend = true"
           @mouseleave="isHoveringSend = false"
-          class="p-1.5 px-2.5 rounded-xl bg-sky-500 hover:bg-sky-600 text-white transition flex items-center gap-1.5 text-xs font-medium cursor-pointer shadow-xs shrink-0"
+          class="rounded-xl bg-sky-500 hover:bg-sky-600 active:bg-sky-700 text-white transition flex items-center gap-1.5 text-xs font-medium cursor-pointer shadow-xs shrink-0 select-none z-10"
+          :class="isSendTextVisible ? 'px-2.5 py-1 sm:py-1.5' : isNarrowToolbar ? 'p-1' : 'p-1.5 px-2'"
           title="Send visible viewport area to chat"
         >
           <Send class="w-3.5 h-3.5" />
-          <span v-if="!isCompactToolbar">Send Viewport</span>
+          <span v-if="isSendTextVisible">Send Viewport</span>
         </button>
       </div>
     </div>
@@ -3158,7 +3187,7 @@ onUnmounted(() => {
             <component :is="isObjectLocked ? Unlock : Lock" class="w-3.5 h-3.5" :class="isObjectLocked ? 'text-amber-400' : 'text-slate-400'" />
             {{ isObjectLocked ? 'Unlock Object' : 'Lock Object' }}
           </span>
-          <span class="text-[10px] text-slate-400 font-mono">Ctrl+Shift+L</span>
+          <span class="text-[10px] text-slate-400 font-mono">Ctrl+L</span>
         </button>
       </template>
 
@@ -3272,16 +3301,11 @@ onUnmounted(() => {
           </div>
           <!-- Lock / Unlock -->
           <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <div class="flex flex-col">
-              <span class="text-slate-300 font-medium">Lock / Unlock</span>
-              <span class="text-[10px] text-slate-500 font-normal">Also Ctrl+L / Alt+L</span>
-            </div>
+            <span class="text-slate-300 font-medium">Lock / Unlock</span>
             <div class="flex items-center gap-1">
-              <kbd class="px-1.5 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Ctrl</kbd>
+              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Ctrl</kbd>
               <span class="text-slate-500 text-[10px]">+</span>
-              <kbd class="px-1.5 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Shift</kbd>
-              <span class="text-slate-500 text-[10px]">+</span>
-              <kbd class="px-1.5 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">L</kbd>
+              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">L</kbd>
             </div>
           </div>
           <!-- Group Objects -->

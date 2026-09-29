@@ -35,6 +35,8 @@ const CUSTOM_PROPS = [
   'arrowColor',
   'arrowStrokeWidth',
   'isStraightArrow',
+  'isStraightLine',
+  'arrowId',
   'initialMatrix',
   'lockMovementX',
   'lockMovementY',
@@ -111,6 +113,11 @@ const editingArrow = ref<any>(null);
 const editingNodeIndex = ref<number | null>(null);
 const editingArrowPoints = ref<Array<{ x: number; y: number }>>([]);
 const viewportVersion = ref(0);
+let liveArrowPreview: any = null;
+
+const isLineOrArrow = (obj: any): boolean => {
+  return !!(obj && ((obj as any).isArrow || (obj as any).isStraightLine || obj.type === 'line'));
+};
 
 const isBrushMenuOpen = ref(false);
 const currentTool = ref('draw'); // 'select', 'draw', 'text', 'sticky', 'rect', 'circle', 'triangle', 'line'
@@ -195,7 +202,7 @@ const updateArrowToolbar = () => {
     return;
   }
   const active = canvas.getActiveObject() as any;
-  if (active && active.isArrow && !isArrowNodeEditing.value) {
+  if (active && isLineOrArrow(active) && !isArrowNodeEditing.value) {
     activeArrow.value = active;
     active.setCoords();
     const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
@@ -250,15 +257,28 @@ const nodeScreenPolyline = computed(() => {
 });
 
 const enterArrowNodeEditing = (arrow: any) => {
-  if (!arrow || !arrow.isArrow || !arrow.arrowPoints) return;
+  if (!arrow || !isLineOrArrow(arrow)) return;
   isArrowNodeEditing.value = true;
   editingArrow.value = arrow;
-  editingArrowPoints.value = arrow.arrowPoints.map((p: any) => ({ x: p.x, y: p.y }));
+
+  if (Array.isArray(arrow.arrowPoints) && arrow.arrowPoints.length > 0) {
+    editingArrowPoints.value = arrow.arrowPoints.map((p: any) => ({ x: p.x, y: p.y }));
+  } else if (arrow.type === 'line') {
+    const pts = [
+      { x: arrow.x1 ?? 0, y: arrow.y1 ?? 0 },
+      { x: arrow.x2 ?? 0, y: arrow.y2 ?? 0 }
+    ];
+    arrow.arrowPoints = pts;
+    arrow.isStraightLine = true;
+    editingArrowPoints.value = pts.map(p => ({ ...p }));
+  } else {
+    return;
+  }
 
   arrow.set({
     hasControls: false,
-    selectable: false,
-    evented: false
+    selectable: true,
+    evented: true
   });
   canvas?.discardActiveObject();
   canvas?.requestRenderAll();
@@ -292,6 +312,82 @@ const onNodePointerDown = (index: number, e: PointerEvent) => {
   e.stopPropagation();
   editingNodeIndex.value = index;
 
+  let animFrameId: number | null = null;
+  let latestScenePt: { x: number; y: number } | null = null;
+
+  const updateGeometry = () => {
+    if (!latestScenePt || !canvas || !editingArrow.value) return;
+    editingArrowPoints.value[index] = { ...latestScenePt };
+    const pts = editingArrowPoints.value;
+
+    let updatedObj: any;
+    if (editingArrow.value.isArrow) {
+      const color = (editingArrow.value as any).arrowColor || activeColor.value;
+      const width = (editingArrow.value as any).arrowStrokeWidth || strokeWidth.value;
+      updatedObj = createArrowFromPoints(pts, color, width, true);
+    } else if (editingArrow.value.type === 'line' || (editingArrow.value as any).isStraightLine) {
+      const color = (editingArrow.value as any).stroke || activeColor.value;
+      const width = (editingArrow.value as any).strokeWidth || strokeWidth.value;
+      if (pts.length === 2) {
+        updatedObj = new fabric.Line([pts[0].x, pts[0].y, pts[1].x, pts[1].y], {
+          stroke: color,
+          strokeWidth: width,
+          strokeLineCap: 'round',
+          strokeUniform: true,
+          perPixelTargetFind: true
+        });
+        (updatedObj as any).isStraightLine = true;
+        (updatedObj as any).arrowPoints = pts.map(p => ({ x: p.x, y: p.y }));
+      } else {
+        let pathD = `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`;
+        const m = pts.length - 1;
+        for (let i = 0; i < m; i++) {
+          const pPrev = pts[Math.max(0, i - 1)];
+          const pCur = pts[i];
+          const pNext = pts[i + 1];
+          const pAfter = pts[Math.min(m, i + 2)];
+          const cp1x = pCur.x + (pNext.x - pPrev.x) / 6;
+          const cp1y = pCur.y + (pNext.y - pPrev.y) / 6;
+          const cp2x = pNext.x - (pAfter.x - pCur.x) / 6;
+          const cp2y = pNext.y - (pAfter.y - pCur.y) / 6;
+          pathD += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${pNext.x.toFixed(1)} ${pNext.y.toFixed(1)}`;
+        }
+        updatedObj = new fabric.Path(pathD, {
+          stroke: color,
+          strokeWidth: width,
+          fill: 'transparent',
+          strokeLineCap: 'round',
+          strokeLineJoin: 'round',
+          strokeUniform: true,
+          perPixelTargetFind: true
+        });
+        (updatedObj as any).isStraightLine = false;
+        (updatedObj as any).arrowPoints = pts.map(p => ({ x: p.x, y: p.y }));
+      }
+    }
+
+    if (updatedObj && canvas) {
+      updatedObj.set({
+        hasControls: false,
+        selectable: true,
+        evented: true
+      });
+      (updatedObj as any).isLocked = (editingArrow.value as any).isLocked;
+      (updatedObj as any).arrowId = (editingArrow.value as any).arrowId || Math.random().toString(36).substring(2, 9);
+
+      const allObjs = canvas.getObjects();
+      const curIdx = allObjs.indexOf(editingArrow.value);
+      if (curIdx !== -1) {
+        canvas.remove(editingArrow.value);
+        canvas.insertAt(curIdx, updatedObj);
+      } else {
+        canvas.add(updatedObj);
+      }
+      editingArrow.value = updatedObj;
+      canvas.requestRenderAll();
+    }
+  };
+
   const onPointerMove = (ev: PointerEvent) => {
     if (!canvas || !wrapperRef.value || !editingArrow.value) return;
     const rect = wrapperRef.value.getBoundingClientRect();
@@ -302,40 +398,37 @@ const onNodePointerDown = (index: number, e: PointerEvent) => {
     const sceneX = (clientX - rect.left - vpt[4]) / vpt[0];
     const sceneY = (clientY - rect.top - vpt[5]) / vpt[3];
 
-    editingArrowPoints.value[index] = { x: sceneX, y: sceneY };
-
-    // Live update the arrow geometry
-    const pts = editingArrowPoints.value;
-    const color = (editingArrow.value as any).arrowColor || activeColor.value;
-    const width = (editingArrow.value as any).arrowStrokeWidth || strokeWidth.value;
-    const updatedArrow = createArrowFromPoints(pts, color, width, true);
-    if (updatedArrow && canvas) {
-      updatedArrow.set({
-        hasControls: false,
-        selectable: false,
-        evented: false
+    latestScenePt = { x: sceneX, y: sceneY };
+    if (!animFrameId) {
+      animFrameId = requestAnimationFrame(() => {
+        animFrameId = null;
+        updateGeometry();
       });
-      (updatedArrow as any).isLocked = (editingArrow.value as any).isLocked;
-      const allObjs = canvas.getObjects();
-      const curIdx = allObjs.indexOf(editingArrow.value);
-      if (curIdx !== -1) {
-        canvas.remove(editingArrow.value);
-        canvas.insertAt(curIdx, updatedArrow);
-      } else {
-        canvas.add(updatedArrow);
-      }
-      editingArrow.value = updatedArrow;
-      canvas.requestRenderAll();
     }
   };
 
   const onPointerUp = () => {
     window.removeEventListener('pointermove', onPointerMove);
     window.removeEventListener('pointerup', onPointerUp);
+    if (animFrameId) {
+      cancelAnimationFrame(animFrameId);
+      animFrameId = null;
+    }
+    updateGeometry();
     editingNodeIndex.value = null;
-    if (editingArrow.value) {
+
+    if (editingArrow.value && canvas) {
+      const currentId = (editingArrow.value as any).arrowId;
+      if (currentId) {
+        const objs = canvas.getObjects();
+        objs.forEach((o: any) => {
+          if (o !== editingArrow.value && (o as any).arrowId === currentId) {
+            canvas?.remove(o);
+          }
+        });
+      }
       editingArrow.value.setCoords();
-      canvas?.requestRenderAll();
+      canvas.requestRenderAll();
       saveHistoryState();
       syncToFirebase();
     }
@@ -375,36 +468,59 @@ const straightenEditingArrow = () => {
   }));
 
   editingArrowPoints.value = straightened;
-  const color = (editingArrow.value as any).arrowColor || activeColor.value;
-  const width = (editingArrow.value as any).arrowStrokeWidth || strokeWidth.value;
-  const updatedArrow = createArrowFromPoints(straightened, color, width, true);
-  if (updatedArrow && canvas) {
-    updatedArrow.set({
-      hasControls: false,
-      selectable: false,
-      evented: false
+  let updatedObj: any;
+  if (editingArrow.value.isArrow) {
+    const color = (editingArrow.value as any).arrowColor || activeColor.value;
+    const width = (editingArrow.value as any).arrowStrokeWidth || strokeWidth.value;
+    updatedObj = createArrowFromPoints(straightened, color, width, true);
+  } else {
+    const color = (editingArrow.value as any).stroke || activeColor.value;
+    const width = (editingArrow.value as any).strokeWidth || strokeWidth.value;
+    updatedObj = new fabric.Line([p0.x, p0.y, pn.x, pn.y], {
+      stroke: color,
+      strokeWidth: width,
+      strokeLineCap: 'round',
+      strokeUniform: true,
+      perPixelTargetFind: true
     });
-    (updatedArrow as any).isLocked = (editingArrow.value as any).isLocked;
+    (updatedObj as any).isStraightLine = true;
+    (updatedObj as any).arrowPoints = straightened;
+  }
+
+  if (updatedObj && canvas) {
+    updatedObj.set({
+      hasControls: false,
+      selectable: true,
+      evented: true
+    });
+    (updatedObj as any).isLocked = (editingArrow.value as any).isLocked;
+    (updatedObj as any).arrowId = (editingArrow.value as any).arrowId || Math.random().toString(36).substring(2, 9);
     const allObjs = canvas.getObjects();
     const curIdx = allObjs.indexOf(editingArrow.value);
     if (curIdx !== -1) {
       canvas.remove(editingArrow.value);
-      canvas.insertAt(curIdx, updatedArrow);
+      canvas.insertAt(curIdx, updatedObj);
     } else {
-      canvas.add(updatedArrow);
+      canvas.add(updatedObj);
     }
-    editingArrow.value = updatedArrow;
+    editingArrow.value = updatedObj;
     canvas.requestRenderAll();
     saveHistoryState();
     syncToFirebase();
-    displayToast('Line nodes organized to straight line ✨');
+    displayToast('Straightened ✨');
   }
 };
 
 const straightenSelectedArrow = (arrow: any) => {
-  if (!canvas || !arrow || !arrow.isArrow || !arrow.arrowPoints) return;
-  const pts = arrow.arrowPoints;
-  if (pts.length < 2) return;
+  if (!canvas || !arrow || (!arrow.isArrow && !arrow.isStraightLine && arrow.type !== 'line')) return;
+  let pts = arrow.arrowPoints;
+  if (!pts || pts.length < 2) {
+    if (arrow.type === 'line') {
+      pts = [{ x: arrow.x1 ?? 0, y: arrow.y1 ?? 0 }, { x: arrow.x2 ?? 0, y: arrow.y2 ?? 0 }];
+    } else {
+      return;
+    }
+  }
   const p0 = pts[0];
   const pn = pts[pts.length - 1];
   const dx = pn.x - p0.x;
@@ -431,13 +547,30 @@ const straightenSelectedArrow = (arrow: any) => {
     y: p0.y + t * dy
   }));
 
-  const color = (arrow as any).arrowColor || activeColor.value;
-  const width = (arrow as any).arrowStrokeWidth || strokeWidth.value;
-  const updatedArrow = createArrowFromPoints(straightened, color, width, true);
-  if (updatedArrow && canvas) {
-    (updatedArrow as any).isLocked = arrow.isLocked;
+  let updatedObj: any;
+  if (arrow.isArrow) {
+    const color = (arrow as any).arrowColor || activeColor.value;
+    const width = (arrow as any).arrowStrokeWidth || strokeWidth.value;
+    updatedObj = createArrowFromPoints(straightened, color, width, true);
+  } else {
+    const color = (arrow as any).stroke || activeColor.value;
+    const width = (arrow as any).strokeWidth || strokeWidth.value;
+    updatedObj = new fabric.Line([p0.x, p0.y, pn.x, pn.y], {
+      stroke: color,
+      strokeWidth: width,
+      strokeLineCap: 'round',
+      strokeUniform: true,
+      perPixelTargetFind: true
+    });
+    (updatedObj as any).isStraightLine = true;
+    (updatedObj as any).arrowPoints = straightened;
+  }
+
+  if (updatedObj && canvas) {
+    (updatedObj as any).isLocked = arrow.isLocked;
+    (updatedObj as any).arrowId = arrow.arrowId || Math.random().toString(36).substring(2, 9);
     if (arrow.isLocked) {
-      updatedArrow.set({
+      updatedObj.set({
         lockMovementX: true,
         lockMovementY: true,
         lockRotation: true,
@@ -450,28 +583,49 @@ const straightenSelectedArrow = (arrow: any) => {
     const curIdx = allObjs.indexOf(arrow);
     if (curIdx !== -1) {
       canvas.remove(arrow);
-      canvas.insertAt(curIdx, updatedArrow);
-      updatedArrow.setCoords();
-      canvas.setActiveObject(updatedArrow);
+      canvas.insertAt(curIdx, updatedObj);
+      updatedObj.setCoords();
+      canvas.setActiveObject(updatedObj);
       canvas.requestRenderAll();
       saveHistoryState();
       syncToFirebase();
       updateSelectionState();
-      displayToast('Arrow straightened ✨');
+      displayToast('Straightened ✨');
     }
   }
 };
 
 const duplicateArrow = (arrow: any) => {
-  if (!canvas || !arrow || !arrow.arrowPoints) return;
+  if (!canvas || !arrow) return;
   const offset = 24;
-  const newPts = arrow.arrowPoints.map((p: any) => ({ x: p.x + offset, y: p.y + offset }));
-  const color = (arrow as any).arrowColor || activeColor.value;
-  const width = (arrow as any).arrowStrokeWidth || strokeWidth.value;
-  const newArrow = createArrowFromPoints(newPts, color, width, true);
-  if (newArrow) {
-    canvas.add(newArrow);
-    canvas.setActiveObject(newArrow);
+  let pts = arrow.arrowPoints;
+  if (!pts && arrow.type === 'line') {
+    pts = [{ x: arrow.x1 ?? 0, y: arrow.y1 ?? 0 }, { x: arrow.x2 ?? 0, y: arrow.y2 ?? 0 }];
+  }
+  if (!pts) return;
+  const newPts = pts.map((p: any) => ({ x: p.x + offset, y: p.y + offset }));
+  let newObj: any;
+  if (arrow.isArrow) {
+    const color = (arrow as any).arrowColor || activeColor.value;
+    const width = (arrow as any).arrowStrokeWidth || strokeWidth.value;
+    newObj = createArrowFromPoints(newPts, color, width, true);
+  } else {
+    const color = (arrow as any).stroke || activeColor.value;
+    const width = (arrow as any).strokeWidth || strokeWidth.value;
+    newObj = new fabric.Line([newPts[0].x, newPts[0].y, newPts[newPts.length - 1].x, newPts[newPts.length - 1].y], {
+      stroke: color,
+      strokeWidth: width,
+      strokeLineCap: 'round',
+      strokeUniform: true,
+      perPixelTargetFind: true
+    });
+    (newObj as any).isStraightLine = true;
+    (newObj as any).arrowPoints = newPts;
+  }
+  if (newObj) {
+    (newObj as any).arrowId = Math.random().toString(36).substring(2, 9);
+    canvas.add(newObj);
+    canvas.setActiveObject(newObj);
     canvas.requestRenderAll();
     saveHistoryState();
     syncToFirebase();
@@ -745,25 +899,38 @@ const createArrowFromPoints = (
     // For straight line: tangent is purely the chord angle (start to end)
     tangentAngle = Math.atan2(pn.y - p0.y, pn.x - p0.x);
 
-    // Flatten / organize existing nodes onto the straight line segment instead of deleting them
-    const dx = pn.x - p0.x;
-    const dy = pn.y - p0.y;
-    const lenSq = dx * dx + dy * dy;
-    if (lenSq > 1e-4 && pts.length > 2) {
-      const tArr: number[] = [];
-      for (let i = 0; i < pts.length; i++) {
-        if (i === 0) tArr.push(0);
-        else if (i === pts.length - 1) tArr.push(1);
-        else {
-          const t = ((pts[i].x - p0.x) * dx + (pts[i].y - p0.y) * dy) / lenSq;
-          tArr.push(Math.max(0.001, Math.min(0.999, t)));
+    if (isExactNodes) {
+      // In node edit mode: project existing nodes onto the straight line segment
+      const dx = pn.x - p0.x;
+      const dy = pn.y - p0.y;
+      const lenSq = dx * dx + dy * dy;
+      if (lenSq > 1e-4 && pts.length > 2) {
+        const tArr: number[] = [];
+        for (let i = 0; i < pts.length; i++) {
+          if (i === 0) tArr.push(0);
+          else if (i === pts.length - 1) tArr.push(1);
+          else {
+            const t = ((pts[i].x - p0.x) * dx + (pts[i].y - p0.y) * dy) / lenSq;
+            tArr.push(Math.max(0.001, Math.min(0.999, t)));
+          }
         }
+        const intermediate = tArr.slice(1, -1).sort((a, b) => a - b);
+        const sortedT = [0, ...intermediate, 1];
+        finalPts = sortedT.map(t => ({ x: p0.x + t * dx, y: p0.y + t * dy }));
+      } else {
+        finalPts = [{ x: p0.x, y: p0.y }, { x: pn.x, y: pn.y }];
       }
-      const intermediate = tArr.slice(1, -1).sort((a, b) => a - b);
-      const sortedT = [0, ...intermediate, 1];
-      finalPts = sortedT.map(t => ({ x: p0.x + t * dx, y: p0.y + t * dy }));
     } else {
-      finalPts = [{ x: p0.x, y: p0.y }, { x: pn.x, y: pn.y }];
+      // Newly created straight arrow: strictly 2 or 3 evenly spaced nodes to avoid dozens of points
+      if (lineLen < 160) {
+        finalPts = [{ x: p0.x, y: p0.y }, { x: pn.x, y: pn.y }];
+      } else {
+        finalPts = [
+          { x: p0.x, y: p0.y },
+          { x: (p0.x + pn.x) / 2, y: (p0.y + pn.y) / 2 },
+          { x: pn.x, y: pn.y }
+        ];
+      }
     }
 
     // Terminate shaft slightly inside the arrowhead body so rounded stroke cap does not poke out past the tip
@@ -787,21 +954,42 @@ const createArrowFromPoints = (
       // Curved arrow: simplify micro-wiggles first with RDP (epsilon = 2.5px)
       const simplifiedPts = rdp(pts, 2.5);
 
-      // Sample points with longer distance step to prevent tiny local jaggies and sawtooth oscillation
-      sampled = [simplifiedPts[0]];
-      let accumDist = 0;
-      // Longer sampling step: at least 32px or lineLen / 8 to ensure smooth, organic anchor node distribution
-      const targetStep = Math.max(32, lineLen / 8);
+      // Compute total arc length of simplified path
+      const cumDist: number[] = [0];
       for (let i = 1; i < simplifiedPts.length; i++) {
         const d = Math.hypot(simplifiedPts[i].x - simplifiedPts[i - 1].x, simplifiedPts[i].y - simplifiedPts[i - 1].y);
-        accumDist += d;
-        if (accumDist >= targetStep) {
-          sampled.push(simplifiedPts[i]);
-          accumDist = 0;
-        }
+        cumDist.push(cumDist[i - 1] + d);
       }
-      if (sampled[sampled.length - 1] !== pn) {
-        sampled.push(pn);
+      const totalArcLen = cumDist[cumDist.length - 1];
+
+      // Limit node count strictly to between 3 and 5 nodes, perfectly equidistant along the curve
+      const nodeCount = Math.min(5, Math.max(3, Math.round(totalArcLen / 80)));
+      sampled = [];
+
+      for (let k = 0; k < nodeCount; k++) {
+        if (k === 0) {
+          sampled.push({ x: simplifiedPts[0].x, y: simplifiedPts[0].y });
+        } else if (k === nodeCount - 1) {
+          sampled.push({ x: pn.x, y: pn.y });
+        } else {
+          const targetDist = (k / (nodeCount - 1)) * totalArcLen;
+          let segIdx = 1;
+          while (segIdx < cumDist.length && cumDist[segIdx] < targetDist) {
+            segIdx++;
+          }
+          if (segIdx < cumDist.length) {
+            const segLen = cumDist[segIdx] - cumDist[segIdx - 1];
+            const ratio = segLen > 1e-4 ? (targetDist - cumDist[segIdx - 1]) / segLen : 0;
+            const pA = simplifiedPts[segIdx - 1];
+            const pB = simplifiedPts[segIdx];
+            sampled.push({
+              x: pA.x + ratio * (pB.x - pA.x),
+              y: pA.y + ratio * (pB.y - pA.y)
+            });
+          } else {
+            sampled.push({ x: pn.x, y: pn.y });
+          }
+        }
       }
     }
     finalPts = sampled.map(p => ({ x: p.x, y: p.y }));
@@ -901,6 +1089,7 @@ const createArrowFromPoints = (
   (arrow as any).isStraightArrow = isStraight;
   (arrow as any).arrowP0 = { x: p0.x, y: p0.y };
   (arrow as any).arrowPn = { x: pn.x, y: pn.y };
+  (arrow as any).arrowId = Math.random().toString(36).substring(2, 9);
   (arrow as any).initialMatrix = arrow.calcTransformMatrix();
   return arrow;
 };
@@ -1035,13 +1224,19 @@ const createSmoothedShape = (pts: Array<{ x: number; y: number }>) => {
 
   if (maxDev < Math.max(15, lineLen * 0.08)) {
     displayToast('Snapped to straight line ✨');
-    return new fabric.Line([p0.x, p0.y, pn.x, pn.y], {
+    const straightLine = new fabric.Line([p0.x, p0.y, pn.x, pn.y], {
       stroke: activeColor.value,
       strokeWidth: strokeWidth.value,
       strokeLineCap: 'round',
       strokeUniform: true,
       perPixelTargetFind: true
     });
+    (straightLine as any).isStraightLine = true;
+    (straightLine as any).arrowPoints = lineLen < 160 ?
+      [{ x: p0.x, y: p0.y }, { x: pn.x, y: pn.y }] :
+      [{ x: p0.x, y: p0.y }, { x: (p0.x + pn.x) / 2, y: (p0.y + pn.y) / 2 }, { x: pn.x, y: pn.y }];
+    (straightLine as any).arrowId = Math.random().toString(36).substring(2, 9);
+    return straightLine;
   }
 
   // 4. Open stroke: Catmull-Rom cubic Bezier spline
@@ -1063,13 +1258,17 @@ const createSmoothedShape = (pts: Array<{ x: number; y: number }>) => {
   }
 
   if (sampled.length < 3) {
-    return new fabric.Line([p0.x, p0.y, pn.x, pn.y], {
+    const straightLine = new fabric.Line([p0.x, p0.y, pn.x, pn.y], {
       stroke: activeColor.value,
       strokeWidth: strokeWidth.value,
       strokeLineCap: 'round',
       strokeUniform: true,
       perPixelTargetFind: true
     });
+    (straightLine as any).isStraightLine = true;
+    (straightLine as any).arrowPoints = [{ x: p0.x, y: p0.y }, { x: pn.x, y: pn.y }];
+    (straightLine as any).arrowId = Math.random().toString(36).substring(2, 9);
+    return straightLine;
   }
 
   let pathD = `M ${sampled[0].x.toFixed(1)} ${sampled[0].y.toFixed(1)}`;
@@ -1100,14 +1299,19 @@ const createSmoothedShape = (pts: Array<{ x: number; y: number }>) => {
 };
 
 const onPencilHoldDetected = () => {
-  if (!canvas || !isDrawingMode.value || pencilStrokePoints.length < 5) return;
+  if (!canvas || (!isDrawingMode.value && currentTool.value !== 'arrow') || pencilStrokePoints.length < 5) return;
   isPencilHolding = true;
   hasFlattenedShapeInCurrentStroke = true;
+
+  if (liveArrowPreview && canvas.contains(liveArrowPreview)) {
+    canvas.remove(liveArrowPreview);
+    liveArrowPreview = null;
+  }
 
   const shape = createSmoothedShape(pencilStrokePoints);
   if (!shape) return;
 
-  // Clear in-progress brush line and disable drawing mode during quick shape hold-resizing to prevent ghost strokes
+  // Clear in-progress brush line and disable drawing mode during quick shape hold to prevent ghost strokes
   canvas.isDrawingMode = false;
   canvas.clearContext(canvas.contextTop);
   if (canvas.freeDrawingBrush) {
@@ -1121,6 +1325,15 @@ const onPencilHoldDetected = () => {
   canvas.setActiveObject(shape);
   canvas.requestRenderAll();
   updateSelectionState();
+
+  // ONLY straight lines or straight arrows enter hold-to-resize with p0 pinned!
+  // Irregular smoothed curves, circles, ellipses, rectangles, and triangles MUST NOT enter hold-to-resize!
+  const isStraightLineOrArrow = shape.type === 'line' || (shape as any).isStraightArrow || (shape as any).isStraightLine;
+  if (!isStraightLineOrArrow) {
+    isQuickShapeResizing = false;
+    quickShapeActiveObj = null;
+    return;
+  }
 
   // Enter continuous resize mode while left button continues to be held
   isQuickShapeResizing = true;
@@ -1388,17 +1601,17 @@ const initFabric = () => {
     // Reconstruct arrow with fixed pristine arrowhead size, preserved points, and vector crispness
     if (obj && (obj as any).isArrow && (obj as any).arrowPoints) {
       if ((obj.scaleX && obj.scaleX !== 1) || (obj.scaleY && obj.scaleY !== 1)) {
-        setTimeout(() => {
-          try {
-            if (!canvas) return;
+        try {
+          if (canvas) {
             const M0 = (obj as any).initialMatrix || obj.calcTransformMatrix();
             const M1 = obj.calcTransformMatrix();
             const invM0 = fabric.util.invertTransform(M0);
             const M_delta = fabric.util.multiplyTransformMatrices(M1, invM0);
             const newPts = (obj as any).arrowPoints.map((pt: any) => fabric.util.transformPoint(pt, M_delta));
             const newArrow = createArrowFromPoints(newPts, (obj as any).arrowColor, (obj as any).arrowStrokeWidth, true);
-            if (newArrow && canvas) {
+            if (newArrow) {
               (newArrow as any).isLocked = (obj as any).isLocked;
+              (newArrow as any).arrowId = (obj as any).arrowId || Math.random().toString(36).substring(2, 9);
               if ((obj as any).isLocked) {
                 newArrow.set({
                   lockMovementX: true,
@@ -1417,15 +1630,13 @@ const initFabric = () => {
                 newArrow.setCoords();
                 canvas.setActiveObject(newArrow);
                 canvas.requestRenderAll();
-                saveHistoryState();
-                syncToFirebase();
                 updateSelectionState();
               }
             }
-          } catch (err) {
-            console.warn('Failed to bake arrow scaling:', err);
           }
-        }, 0);
+        } catch (err) {
+          console.warn('Failed to bake arrow scaling:', err);
+        }
       }
     }
 
@@ -1611,7 +1822,35 @@ const initFabric = () => {
 
     const scenePoint = canvas.getScenePoint(e);
 
-    // Pencil / Arrow drawing mode: smart switch if object was clicked, else start tracking for QuickShape hold
+    // Arrow drawing mode: smart switch if clicked, else start live vector arrow tracking
+    if (currentTool.value === 'arrow') {
+      const hitTarget = opt.target || (canvas.findTarget(e) as any)?.target || null;
+      if (hitTarget && hitTarget instanceof fabric.FabricObject && hitTarget !== (canvas as any).clipPath) {
+        currentTool.value = 'select';
+        canvas.setActiveObject(hitTarget);
+        canvas.requestRenderAll();
+        updateSelectionState();
+        return;
+      }
+
+      pencilStrokePoints = [scenePoint];
+      lastPencilMovePos = { x: scenePoint.x, y: scenePoint.y };
+      isPencilHolding = false;
+      isQuickShapeResizing = false;
+      quickShapeActiveObj = null;
+      pendingQuickShape = null;
+      if (liveArrowPreview && canvas.contains(liveArrowPreview)) {
+        canvas.remove(liveArrowPreview);
+      }
+      liveArrowPreview = null;
+      if (pencilHoldTimer) clearTimeout(pencilHoldTimer);
+      pencilHoldTimer = setTimeout(() => {
+        onPencilHoldDetected();
+      }, 650);
+      return;
+    }
+
+    // Pencil drawing mode: smart switch if object was clicked, else start tracking for QuickShape hold
     if (isDrawingMode.value) {
       const hitTarget = opt.target || (canvas.findTarget(e) as any)?.target || null;
       if (hitTarget && hitTarget instanceof fabric.FabricObject && hitTarget !== (canvas as any).clipPath) {
@@ -1630,11 +1869,9 @@ const initFabric = () => {
       quickShapeActiveObj = null;
       pendingQuickShape = null;
       if (pencilHoldTimer) clearTimeout(pencilHoldTimer);
-      if (currentTool.value !== 'arrow') {
-        pencilHoldTimer = setTimeout(() => {
-          onPencilHoldDetected();
-        }, 650);
-      }
+      pencilHoldTimer = setTimeout(() => {
+        onPencilHoldDetected();
+      }, 650);
     }
 
     // Sticky Note tool: smart switch if clicked on existing object, else spawn sticky note on empty space
@@ -1752,7 +1989,7 @@ const initFabric = () => {
       return;
     }
 
-    // QuickShape continuous resize mode: width/height follow mouse movement while holding
+    // QuickShape continuous resize mode: width/height follow mouse movement while holding (strictly straight lines/arrows)
     if (isQuickShapeResizing && quickShapeActiveObj) {
       const curScene = canvas.getScenePoint(e);
       if (quickShapeActiveObj.isArrow) {
@@ -1767,44 +2004,51 @@ const initFabric = () => {
           canvas.add(quickShapeActiveObj);
           canvas.setActiveObject(quickShapeActiveObj);
         }
-      } else if (quickShapeActiveObj.type === 'line') {
+      } else if (quickShapeActiveObj.type === 'line' || (quickShapeActiveObj as any).isStraightLine) {
         quickShapeActiveObj.set({ x1: quickShapeAnchor.x, y1: quickShapeAnchor.y, x2: curScene.x, y2: curScene.y });
+        (quickShapeActiveObj as any).arrowPoints = [
+          { x: quickShapeAnchor.x, y: quickShapeAnchor.y },
+          { x: curScene.x, y: curScene.y }
+        ];
         quickShapeActiveObj.setCoords();
-      } else {
-        const p0 = quickShapeAnchor;
-        const curSpanX = curScene.x - p0.x;
-        const curSpanY = curScene.y - p0.y;
-
-        const rawScaleX = Math.abs(curSpanX) / (quickShapeInitialSpanX || 15);
-        const rawScaleY = Math.abs(curSpanY) / (quickShapeInitialSpanY || 15);
-
-        const targetScaleX = Math.max(0.05, (quickShapeBaseScaleX || 1) * rawScaleX);
-        const targetScaleY = Math.max(0.05, (quickShapeBaseScaleY || 1) * rawScaleY);
-
-        const flipX = (Math.sign(curSpanX) !== quickShapeInitialSignX && Math.sign(curSpanX) !== 0);
-        const flipY = (Math.sign(curSpanY) !== quickShapeInitialSignY && Math.sign(curSpanY) !== 0);
-
-        quickShapeActiveObj.set({
-          scaleX: targetScaleX,
-          scaleY: targetScaleY,
-          flipX: flipX,
-          flipY: flipY
-        });
-        quickShapeActiveObj.setCoords();
-
-        if (quickShapeP0Scene && quickShapeP0Local) {
-          const curM = quickShapeActiveObj.calcTransformMatrix();
-          const curGlobalP0 = fabric.util.transformPoint(quickShapeP0Local, curM);
-          quickShapeActiveObj.left += (quickShapeP0Scene.x - curGlobalP0.x);
-          quickShapeActiveObj.top += (quickShapeP0Scene.y - curGlobalP0.y);
-          quickShapeActiveObj.setCoords();
-        }
       }
       canvas.requestRenderAll();
       return;
     }
 
-    // Normal pencil drawing: track points for hold-to-straighten (ONLY for 'draw', NOT for 'arrow')
+    // Arrow live sampled drawing: real-time vector arrow preview while dragging
+    if (currentTool.value === 'arrow' && isMouseDown) {
+      const scenePoint = canvas.getScenePoint(e);
+      const lastPt = pencilStrokePoints[pencilStrokePoints.length - 1];
+      const dist = lastPt ? Math.hypot(scenePoint.x - lastPt.x, scenePoint.y - lastPt.y) : 0;
+      if (!lastPt || dist >= 6) {
+        pencilStrokePoints.push(scenePoint);
+
+        if (dist > 5 && lastPencilMovePos) {
+          lastPencilMovePos = { x: scenePoint.x, y: scenePoint.y };
+          if (pencilHoldTimer) clearTimeout(pencilHoldTimer);
+          pencilHoldTimer = setTimeout(() => {
+            onPencilHoldDetected();
+          }, 650);
+        }
+
+        if (pencilStrokePoints.length >= 2) {
+          const preview = createArrowFromPoints(pencilStrokePoints, activeColor.value, strokeWidth.value);
+          if (preview) {
+            if (liveArrowPreview && canvas.contains(liveArrowPreview)) {
+              canvas.remove(liveArrowPreview);
+            }
+            preview.set({ selectable: false, evented: false });
+            liveArrowPreview = preview;
+            canvas.add(preview);
+            canvas.requestRenderAll();
+          }
+        }
+      }
+      return;
+    }
+
+    // Normal pencil drawing: track points for hold-to-straighten
     if (isDrawingMode.value && currentTool.value !== 'arrow' && lastPencilMovePos) {
       const scenePoint = canvas.getScenePoint(e);
       pencilStrokePoints.push(scenePoint);
@@ -1815,12 +2059,6 @@ const initFabric = () => {
         pencilHoldTimer = setTimeout(() => {
           onPencilHoldDetected();
         }, 650);
-      }
-    } else if (isDrawingMode.value && currentTool.value === 'arrow') {
-      const scenePoint = canvas.getScenePoint(e);
-      const lastPt = pencilStrokePoints[pencilStrokePoints.length - 1];
-      if (!lastPt || Math.hypot(scenePoint.x - lastPt.x, scenePoint.y - lastPt.y) >= 8) {
-        pencilStrokePoints.push(scenePoint);
       }
     }
 
@@ -1879,10 +2117,66 @@ const initFabric = () => {
       pendingRemoteState = null;
     }
 
-    // Finish QuickShape continuous resize mode
+    // Arrow brush: finish live preview, quickshape resizing, or create final arrow
+    if (currentTool.value === 'arrow') {
+      if (liveArrowPreview && canvas.contains(liveArrowPreview)) {
+        canvas.remove(liveArrowPreview);
+        liveArrowPreview = null;
+      }
+
+      if (isQuickShapeResizing && quickShapeActiveObj) {
+        isQuickShapeResizing = false;
+        isPencilHolding = false;
+        hasFlattenedShapeInCurrentStroke = false;
+        quickShapeActiveObj.setCoords();
+        canvas.setActiveObject(quickShapeActiveObj);
+        canvas.requestRenderAll();
+        saveHistoryState();
+        syncToFirebase();
+        updateSelectionState();
+        quickShapeActiveObj = null;
+        pencilStrokePoints = [];
+        return;
+      }
+
+      if (hasFlattenedShapeInCurrentStroke) {
+        hasFlattenedShapeInCurrentStroke = false;
+        isPencilHolding = false;
+        const activeObj = canvas.getActiveObject();
+        if (activeObj) activeObj.setCoords();
+        canvas.requestRenderAll();
+        saveHistoryState();
+        syncToFirebase();
+        updateSelectionState();
+        pencilStrokePoints = [];
+        return;
+      }
+
+      if (pencilStrokePoints.length >= 2) {
+        const finalArrow = createArrowFromPoints(pencilStrokePoints, activeColor.value, strokeWidth.value);
+        if (finalArrow) {
+          finalArrow.set({
+            selectable: true,
+            evented: true,
+            perPixelTargetFind: true
+          });
+          canvas.add(finalArrow);
+          finalArrow.setCoords();
+          canvas.requestRenderAll();
+          saveHistoryState();
+          syncToFirebase();
+          updateSelectionState();
+        }
+      }
+      pencilStrokePoints = [];
+      return;
+    }
+
+    // Finish QuickShape continuous resize mode (for straight lines)
     if (isQuickShapeResizing && quickShapeActiveObj) {
       isQuickShapeResizing = false;
       isPencilHolding = false;
+      hasFlattenedShapeInCurrentStroke = false;
       (canvas as any)._isCurrentlyDrawing = false;
       if (canvas.freeDrawingBrush) {
         (canvas.freeDrawingBrush as any)._points = [];
@@ -1906,29 +2200,33 @@ const initFabric = () => {
       updateSelectionState();
       quickShapeActiveObj = null;
       pencilStrokePoints = [];
-      if (currentTool.value === 'draw' || currentTool.value === 'arrow') {
+      if (currentTool.value === 'draw') {
         canvas.isDrawingMode = true;
       }
       return;
     }
 
-    // Arrow brush: on release without holding, automatically smooth and generate arrow
-    if (currentTool.value === 'arrow' && pencilStrokePoints.length >= 2) {
-      const arrow = createArrowFromPoints(pencilStrokePoints, activeColor.value, strokeWidth.value);
-      if (arrow) {
-        canvas.clearContext(canvas.contextTop);
-        if ((canvas.freeDrawingBrush as any)?._points) {
-          (canvas.freeDrawingBrush as any)._points = [];
-        }
-        canvas.add(arrow);
-        arrow.setCoords();
-        // Do NOT call setActiveObject(arrow) when arrow tool is active to allow continuous drawing!
-        canvas.requestRenderAll();
-        saveHistoryState();
-        syncToFirebase();
-        updateSelectionState();
+    // Finish flattened non-straight shapes (ellipses, rects, smoothed curves)
+    if (hasFlattenedShapeInCurrentStroke && !isQuickShapeResizing) {
+      hasFlattenedShapeInCurrentStroke = false;
+      isPencilHolding = false;
+      (canvas as any)._isCurrentlyDrawing = false;
+      if (canvas.freeDrawingBrush) {
+        (canvas.freeDrawingBrush as any)._points = [];
+        (canvas.freeDrawingBrush as any).oldEnd = void 0;
       }
+      canvas.clearContext(canvas.contextTop);
+      const activeObj = canvas.getActiveObject();
+      if (activeObj) activeObj.setCoords();
+      canvas.requestRenderAll();
+      saveHistoryState();
+      syncToFirebase();
+      updateSelectionState();
       pencilStrokePoints = [];
+      if (currentTool.value === 'draw') {
+        canvas.isDrawingMode = true;
+      }
+      return;
     }
 
     if (drawingObject) {
@@ -1947,6 +2245,14 @@ const initFabric = () => {
         canvas.remove(drawingObject);
         canvas.requestRenderAll();
       } else {
+        if (currentTool.value === 'line' && drawingStartPoint) {
+          (drawingObject as any).isStraightLine = true;
+          (drawingObject as any).arrowPoints = [
+            { x: drawingStartPoint.x, y: drawingStartPoint.y },
+            { x: (drawingObject as any).x2, y: (drawingObject as any).y2 }
+          ];
+          (drawingObject as any).arrowId = Math.random().toString(36).substring(2, 9);
+        }
         drawingObject.set({ selectable: true, evented: true, perPixelTargetFind: true });
         drawingObject.setCoords();
         canvas.setActiveObject(drawingObject);
@@ -1969,7 +2275,7 @@ const initFabric = () => {
       target.enterEditing();
       return;
     }
-    if (target.isArrow || (target as any).isArrow) {
+    if (isLineOrArrow(target)) {
       enterArrowNodeEditing(target);
       return;
     }
@@ -2285,6 +2591,16 @@ const rehydrateCanvasObjects = () => {
       children.forEach((c: any) => c.set({ objectCaching: false, strokeUniform: true }));
     }
 
+    if ((o as any).isArrow || (o as any).isStraightLine || o.type === 'line' || o.type === 'path') {
+      if (!o.isLocked) {
+        o.set({
+          selectable: true,
+          evented: true,
+          hasControls: true
+        });
+      }
+    }
+
     if (o.isLocked) {
       o.set({
         lockMovementX: true,
@@ -2296,6 +2612,33 @@ const rehydrateCanvasObjects = () => {
       });
     }
   });
+};
+
+const syncNodeEditingStateAfterReload = () => {
+  if (!isArrowNodeEditing.value || !canvas) return;
+  const currentEditingId = (editingArrow.value as any)?.arrowId;
+  const allTargets = canvas.getObjects().filter((o: any) => isLineOrArrow(o) && ((o as any).arrowPoints || o.type === 'line'));
+  const match = (currentEditingId ? allTargets.find((o: any) => (o as any).arrowId === currentEditingId) : null) || allTargets[0];
+  if (match) {
+    editingArrow.value = match;
+    if ((match as any).arrowPoints) {
+      editingArrowPoints.value = (match as any).arrowPoints.map((p: any) => ({ x: p.x, y: p.y }));
+    } else if (match.type === 'line') {
+      const lineObj = match as any;
+      editingArrowPoints.value = [
+        { x: lineObj.x1 ?? 0, y: lineObj.y1 ?? 0 },
+        { x: lineObj.x2 ?? 0, y: lineObj.y2 ?? 0 }
+      ];
+    }
+    match.set({
+      hasControls: false,
+      selectable: true,
+      evented: true
+    });
+    viewportVersion.value++;
+  } else {
+    exitArrowNodeEditing();
+  }
 };
 
 const getSerializedCanvasJson = (): string => {
@@ -2328,6 +2671,7 @@ const loadFromFirebase = async (json: string) => {
   isInternalChange = true;
   await canvas.loadFromJSON(json);
   rehydrateCanvasObjects();
+  syncNodeEditingStateAfterReload();
   canvas.requestRenderAll();
 
   if (historyStack.value.length === 0) {
@@ -3009,6 +3353,7 @@ const undo = async () => {
   const previousState = historyStack.value[historyStack.value.length - 1];
   await canvas.loadFromJSON(previousState);
   rehydrateCanvasObjects();
+  syncNodeEditingStateAfterReload();
   canvas.requestRenderAll();
   syncToFirebase();
   updateSelectionState();
@@ -3030,6 +3375,7 @@ const redo = async () => {
   historyStack.value.push(nextState);
   await canvas.loadFromJSON(nextState);
   rehydrateCanvasObjects();
+  syncNodeEditingStateAfterReload();
   canvas.requestRenderAll();
   syncToFirebase();
   updateSelectionState();
@@ -3087,18 +3433,10 @@ const toggleMode = (drawing: boolean) => {
 
 const addShape = (type: any) => {
   currentTool.value = type;
-  if (type === 'arrow') {
-    isDrawingMode.value = true;
-    if (canvas) {
-      canvas.isDrawingMode = true;
-      canvas.selection = false;
-    }
-  } else {
-    isDrawingMode.value = false;
-    if (canvas) {
-      canvas.isDrawingMode = false;
-      canvas.selection = false;
-    }
+  isDrawingMode.value = false;
+  if (canvas) {
+    canvas.isDrawingMode = false;
+    canvas.selection = false;
   }
   canvas?.discardActiveObject();
   canvas?.requestRenderAll();
@@ -3546,30 +3884,22 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <!-- Arrow Node Editing Mode Top Floating Banner -->
+    <!-- Arrow & Line Node Editing Mode Top Floating Banner -->
     <div
       v-if="isArrowNodeEditing"
-      class="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 px-4 py-2 bg-slate-900/95 border border-indigo-500/80 rounded-2xl shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95"
+      class="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-1.5 sm:py-2 bg-slate-900/95 border border-indigo-500/80 rounded-2xl shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 whitespace-nowrap select-none shrink-0"
     >
-      <div class="flex items-center gap-2 text-indigo-300 font-semibold text-xs">
-        <Waypoints class="w-4 h-4 text-indigo-400" />
-        <span>節點編輯模式</span>
-        <span class="text-slate-400 font-normal hidden sm:inline">(拖曳節點雕塑曲線，按 ESC 完成)</span>
+      <div class="flex items-center gap-2 text-indigo-300 font-semibold text-xs whitespace-nowrap shrink-0">
+        <Waypoints class="w-4 h-4 text-indigo-400 shrink-0" />
+        <span class="whitespace-nowrap font-medium">Node Edit Mode</span>
+        <span class="text-slate-400 font-normal hidden sm:inline whitespace-nowrap">(Drag nodes to sculpt curve, ESC to exit)</span>
       </div>
-      <div class="flex items-center gap-1.5">
-        <button
-          @click="straightenEditingArrow"
-          class="px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-indigo-200 font-semibold text-xs transition cursor-pointer flex items-center gap-1"
-          title="將現存節點對齊整理成直線（不刪除節點）"
-        >
-          <Sparkles class="w-3.5 h-3.5 text-indigo-400" />
-          <span>平整化整理</span>
-        </button>
+      <div class="flex items-center gap-1.5 shrink-0">
         <button
           @click="exitArrowNodeEditing"
-          class="px-2.5 py-1 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition cursor-pointer"
+          class="px-3 py-1 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition cursor-pointer whitespace-nowrap shrink-0 shadow-sm"
         >
-          完成
+          Done
         </button>
       </div>
     </div>
@@ -3713,7 +4043,7 @@ onUnmounted(() => {
             left: `${getNodeScreenPos(pt).x}px`,
             top: `${getNodeScreenPos(pt).y}px`
           }"
-          :title="idx === 0 ? '起點 (Tail)' : idx === editingArrowPoints.length - 1 ? '箭頭端 (Tip)' : `節點 ${idx}`"
+          :title="idx === 0 ? 'Start Node' : idx === editingArrowPoints.length - 1 ? 'End Node' : `Node ${idx}`"
         >
           <div
             class="w-4 h-4 rounded-full border-2 shadow-lg flex items-center justify-center transition-all group-hover:scale-125"
@@ -3731,10 +4061,10 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- Floating Quick-Action Bar below Selected Arrow -->
+      <!-- Floating Quick-Action Bar below Selected Line / Arrow -->
       <div
         v-if="arrowToolbarPosition.visible && activeArrow && !isArrowNodeEditing"
-        class="absolute z-30 flex items-center gap-1.5 p-1.5 bg-slate-900/95 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl transition-all animate-in fade-in zoom-in-95 pointer-events-auto"
+        class="absolute z-30 flex items-center gap-1.5 p-1.5 bg-slate-900/95 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl transition-all animate-in fade-in zoom-in-95 pointer-events-auto whitespace-nowrap select-none"
         :class="{ 'opacity-15': isHoveringSend }"
         @mousedown.prevent
         :style="{
@@ -3746,27 +4076,27 @@ onUnmounted(() => {
         <button
           @mousedown.prevent
           @click="enterArrowNodeEditing(activeArrow)"
-          class="px-2 py-1 bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-300 hover:text-white rounded-lg transition cursor-pointer flex items-center gap-1.5 text-xs font-medium"
-          title="編輯線條節點（亦可雙擊箭頭直接進入）"
+          class="px-2 py-1 bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-300 hover:text-white rounded-lg transition cursor-pointer flex items-center gap-1.5 text-xs font-medium whitespace-nowrap"
+          title="Edit vector line nodes (or double-click to edit)"
         >
           <Waypoints class="w-3.5 h-3.5 text-indigo-400" />
-          <span>節點編輯</span>
+          <span>Edit Nodes</span>
         </button>
         <button
           @mousedown.prevent
           @click="straightenSelectedArrow(activeArrow)"
-          class="px-2 py-1 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition cursor-pointer flex items-center gap-1.5 text-xs font-medium"
-          title="將箭頭現存節點整理平整為直線"
+          class="px-2 py-1 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition cursor-pointer flex items-center gap-1.5 text-xs font-medium whitespace-nowrap"
+          title="Straighten existing nodes into a line"
         >
           <Sparkles class="w-3.5 h-3.5 text-amber-400" />
-          <span>平整化</span>
+          <span>Straighten</span>
         </button>
         <div class="w-px h-4 bg-slate-700"></div>
         <button
           @mousedown.prevent
           @click="duplicateArrow(activeArrow)"
           class="p-1 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition cursor-pointer"
-          title="複製箭頭"
+          title="Duplicate (Ctrl+D)"
         >
           <Copy class="w-3.5 h-3.5" />
         </button>
@@ -3775,7 +4105,7 @@ onUnmounted(() => {
           @click="toggleLockSelected"
           class="p-1 hover:bg-slate-800 rounded-lg transition cursor-pointer"
           :class="isObjectLocked ? 'text-amber-400 hover:text-amber-300' : 'text-slate-300 hover:text-white'"
-          :title="isObjectLocked ? '解鎖箭頭 (Ctrl+L)' : '鎖定箭頭 (Ctrl+L)'"
+          :title="isObjectLocked ? 'Unlock (Ctrl+L)' : 'Lock (Ctrl+L)'"
         >
           <component :is="isObjectLocked ? Unlock : Lock" class="w-3.5 h-3.5" />
         </button>
@@ -3783,7 +4113,7 @@ onUnmounted(() => {
           @mousedown.prevent
           @click="deleteSelected"
           class="p-1 hover:bg-rose-950/60 text-rose-400 hover:text-rose-300 rounded-lg transition cursor-pointer"
-          title="刪除箭頭 (Del)"
+          title="Delete (Del)"
         >
           <Trash2 class="w-3.5 h-3.5" />
         </button>

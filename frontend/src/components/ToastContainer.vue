@@ -11,16 +11,18 @@ const roomStore = useRoomStore();
       <div
         v-for="toast in roomStore.toasts"
         :key="toast.id"
-        class="pointer-events-auto w-full rounded-xl shadow-2xl p-4 border backdrop-blur-md flex flex-col gap-3 transition-all duration-300 transform"
+        class="pointer-events-auto w-full rounded-xl shadow-2xl p-4 border flex flex-col gap-3 transition-all duration-300 transform"
         :class="{
-          'bg-slate-900/90 border-slate-700': toast.type === 'info',
-          'bg-emerald-950/90 border-emerald-800 text-emerald-100': toast.type === 'success',
-          'bg-rose-950/90 border-rose-800 text-rose-100': toast.type === 'error'
+          'bg-slate-900 border-slate-700 text-slate-100': toast.type === 'info' || !toast.type,
+          'bg-emerald-950 border-emerald-800 text-emerald-100': toast.type === 'success',
+          'bg-rose-950 border-rose-800 text-rose-100': toast.type === 'error',
+          'bg-slate-900 border-amber-500/80 text-amber-200': toast.type === 'warning'
         }"
       >
         <div class="flex items-start gap-3">
-          <Info v-if="toast.type === 'info'" class="w-5 h-5 text-sky-400 shrink-0" />
+          <Info v-if="toast.type === 'info' || !toast.type" class="w-5 h-5 text-sky-400 shrink-0" />
           <CheckCircle v-else-if="toast.type === 'success'" class="w-5 h-5 text-emerald-400 shrink-0" />
+          <AlertCircle v-else-if="toast.type === 'warning'" class="w-5 h-5 text-amber-400 shrink-0" />
           <AlertCircle v-else class="w-5 h-5 text-rose-400 shrink-0" />
           
           <div class="flex-1 flex flex-col">

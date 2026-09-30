@@ -67,7 +67,8 @@ const CUSTOM_PROPS = [
   'isClosedLoop',
   'padding',
   'authorUid',
-  'id'
+  'id',
+  'fontSize'
 ];
 
 const hasUnsavedChanges = ref(false);
@@ -2381,17 +2382,7 @@ const initFabric = () => {
     const textObj = e.target as any;
     if (!textObj) return;
 
-    // Keep sticky notes even if empty! A sticky note is a persistent note pad object on canvas
-    if (textObj.isStickyNote || textObj.stickyColorConfig) {
-      if (!isInternalChange) {
-        saveHistoryState();
-        syncToFirebase();
-        updateSelectionState();
-        triggerDebouncedAutoSave();
-      }
-      return;
-    }
-
+    // Remove any empty text or empty sticky note if no content was entered
     if (!textObj.text?.trim() || textObj.text === 'Type here...' || textObj.text === 'Type note here...') {
       canvas.remove(textObj);
       canvas.requestRenderAll();
@@ -2507,6 +2498,14 @@ const initFabric = () => {
     }
   });
 
+  // Ctrl+Click & Ctrl+Marquee Group Sub-object Isolation State
+  let isCtrlInteracting = false;
+  let ctrlMouseDownPoint: { x: number; y: number } | null = null;
+  let ctrlHitGroup: fabric.Group | null = null;
+  let ctrlHitChild: any = null;
+  let isCtrlMarqueeDragging = false;
+  let ctrlMarqueeRect: fabric.Rect | null = null;
+
   // Unified Mouse Down
   canvas.on('mouse:down', (opt) => {
     if (!canvas) return;
@@ -2560,29 +2559,53 @@ const initFabric = () => {
 
     const scenePoint = canvas.getScenePoint(e);
 
-    // Ctrl+Click on group sub-object: directly enter group isolation mode and select that child
-    if ((e.ctrlKey || e.metaKey) && !isIsolationMode.value) {
+    // Ctrl+Click / Ctrl+Marquee on group sub-object: directly enter group isolation mode
+    if ((e.ctrlKey || e.metaKey) && !isIsolationMode.value && currentTool.value === 'select') {
       const hitTarget = opt.target || (canvas.findTarget(e) as any)?.target || null;
+      let group: fabric.Group | null = null;
+      let hitChild: any = null;
+
       if (hitTarget && (hitTarget.type === 'group' || hitTarget instanceof fabric.Group) && !hitTarget.isStickyNote && !(hitTarget as any).isArrow) {
-        const group = hitTarget as fabric.Group;
+        group = hitTarget as fabric.Group;
         const children = group.getObjects ? group.getObjects() : (group as any)._objects || [];
-        let hitChild: any = null;
+        const invGroup = fabric.util.invertTransform(group.calcTransformMatrix());
+        const localPoint = fabric.util.transformPoint(scenePoint, invGroup);
+
         for (let i = children.length - 1; i >= 0; i--) {
           const child = children[i];
-          if (child.containsPoint && child.containsPoint(scenePoint)) {
+          const { tl, tr, br, bl } = child.calcACoords();
+          if (fabric.Intersection.isPointInPolygon(localPoint, [tl, tr, br, bl])) {
             hitChild = child;
             break;
           }
         }
-        if (!hitChild && children.length > 0) {
-          hitChild = (opt as any).subTargets?.[0] || children[children.length - 1];
+
+        // Bounding box tolerance check if polygon hit-test misses thin or boundary strokes
+        if (!hitChild) {
+          for (let i = children.length - 1; i >= 0; i--) {
+            const child = children[i];
+            const { tl, br } = child.calcACoords();
+            const minX = Math.min(tl.x, br.x) - 6;
+            const maxX = Math.max(tl.x, br.x) + 6;
+            const minY = Math.min(tl.y, br.y) - 6;
+            const maxY = Math.max(tl.y, br.y) + 6;
+            if (localPoint.x >= minX && localPoint.x <= maxX && localPoint.y >= minY && localPoint.y <= maxY) {
+              hitChild = child;
+              break;
+            }
+          }
         }
-        if (hitChild) {
-          e.preventDefault();
-          e.stopPropagation();
-          enterGroupIsolation(group, hitChild);
-          return;
-        }
+      }
+
+      isCtrlInteracting = true;
+      ctrlMouseDownPoint = { x: scenePoint.x, y: scenePoint.y };
+      ctrlHitGroup = group;
+      ctrlHitChild = hitChild;
+      isCtrlMarqueeDragging = false;
+
+      // Prevent Fabric from dragging the whole group during potential marquee drag
+      if (group) {
+        (canvas as any)._currentTransform = null;
       }
     }
 
@@ -2684,7 +2707,7 @@ const initFabric = () => {
         left: scenePoint.x,
         top: scenePoint.y,
         originX: 'left',
-        originY: 'bottom',
+        originY: 'top',
         fontFamily: 'Inter, sans-serif',
         fontSize: 24,
         fill: activeColor.value,
@@ -2747,6 +2770,60 @@ const initFabric = () => {
     if (!canvas) return;
     broadcastMyCursor(opt);
     const e = opt.e as MouseEvent;
+
+    // Alt modifier mid-drag dynamic center scaling
+    const curTransform = (canvas as any)._currentTransform;
+    if (curTransform && curTransform.target) {
+      if (e.altKey) {
+        if (!curTransform._origOriginX) {
+          curTransform._origOriginX = curTransform.originX;
+          curTransform._origOriginY = curTransform.originY;
+        }
+        curTransform.originX = 'center';
+        curTransform.originY = 'center';
+        curTransform.target.centeredScaling = true;
+      } else if (curTransform._origOriginX) {
+        curTransform.originX = curTransform._origOriginX;
+        curTransform.originY = curTransform._origOriginY;
+        curTransform._origOriginX = null;
+        curTransform._origOriginY = null;
+        curTransform.target.centeredScaling = false;
+      }
+    }
+
+    // Ctrl+Marquee Dragging
+    if (isCtrlInteracting && ctrlMouseDownPoint) {
+      const curScene = canvas.getScenePoint(e);
+      const dist = Math.hypot(curScene.x - ctrlMouseDownPoint.x, curScene.y - ctrlMouseDownPoint.y);
+      if (dist > 5) {
+        isCtrlMarqueeDragging = true;
+        const left = Math.min(ctrlMouseDownPoint.x, curScene.x);
+        const top = Math.min(ctrlMouseDownPoint.y, curScene.y);
+        const width = Math.abs(curScene.x - ctrlMouseDownPoint.x);
+        const height = Math.abs(curScene.y - ctrlMouseDownPoint.y);
+
+        if (!ctrlMarqueeRect) {
+          ctrlMarqueeRect = new fabric.Rect({
+            left,
+            top,
+            width,
+            height,
+            fill: 'rgba(14, 165, 233, 0.15)',
+            stroke: '#0ea5e9',
+            strokeWidth: 1,
+            strokeDashArray: [4, 4],
+            selectable: false,
+            evented: false,
+            excludeFromExport: true
+          } as any);
+          canvas.add(ctrlMarqueeRect);
+        } else {
+          ctrlMarqueeRect.set({ left, top, width, height });
+        }
+        canvas.requestRenderAll();
+        return;
+      }
+    }
 
     if (isDragging) {
       const vpt = canvas.viewportTransform;
@@ -2974,6 +3051,86 @@ const initFabric = () => {
     if (!canvas) return;
     const e = opt.e as MouseEvent;
     isMouseDown = false;
+
+    if (ctrlMarqueeRect) {
+      canvas.remove(ctrlMarqueeRect);
+      ctrlMarqueeRect = null;
+    }
+
+    if (isCtrlInteracting) {
+      const startPt = ctrlMouseDownPoint;
+      const wasMarquee = isCtrlMarqueeDragging && startPt;
+      const targetGroup = ctrlHitGroup;
+      const singleChild = ctrlHitChild;
+
+      isCtrlInteracting = false;
+      ctrlMouseDownPoint = null;
+      ctrlHitGroup = null;
+      ctrlHitChild = null;
+      isCtrlMarqueeDragging = false;
+
+      if (wasMarquee && startPt) {
+        const endPt = canvas.getScenePoint(opt.e);
+        const boxLeft = Math.min(startPt.x, endPt.x);
+        const boxTop = Math.min(startPt.y, endPt.y);
+        const boxRight = Math.max(startPt.x, endPt.x);
+        const boxBottom = Math.max(startPt.y, endPt.y);
+
+        let groupToIsolate = targetGroup;
+        if (!groupToIsolate) {
+          const groups = canvas.getObjects().filter((o: any) => 
+            (o.type === 'group' || o instanceof fabric.Group) && !o.isStickyNote && !(o as any).isArrow
+          ) as fabric.Group[];
+          for (let i = groups.length - 1; i >= 0; i--) {
+            const g = groups[i];
+            const gCoords = g.getCoords();
+            const gMinX = Math.min(...gCoords.map(p => p.x));
+            const gMaxX = Math.max(...gCoords.map(p => p.x));
+            const gMinY = Math.min(...gCoords.map(p => p.y));
+            const gMaxY = Math.max(...gCoords.map(p => p.y));
+            if (boxRight >= gMinX && boxLeft <= gMaxX && boxBottom >= gMinY && boxTop <= gMaxY) {
+              groupToIsolate = g;
+              break;
+            }
+          }
+        }
+
+        if (groupToIsolate) {
+          const children = groupToIsolate.getObjects ? groupToIsolate.getObjects() : (groupToIsolate as any)._objects || [];
+          const gMatrix = groupToIsolate.calcTransformMatrix();
+          const matchedChildren: any[] = [];
+
+          children.forEach((child: any) => {
+            const { tl, tr, br, bl } = child.calcACoords();
+            const sceneCorners = [tl, tr, br, bl].map(pt => fabric.util.transformPoint(pt, gMatrix));
+            const childMinX = Math.min(...sceneCorners.map(p => p.x));
+            const childMaxX = Math.max(...sceneCorners.map(p => p.x));
+            const childMinY = Math.min(...sceneCorners.map(p => p.y));
+            const childMaxY = Math.max(...sceneCorners.map(p => p.y));
+
+            const centerX = (childMinX + childMaxX) / 2;
+            const centerY = (childMinY + childMaxY) / 2;
+
+            const isCenterInside = centerX >= boxLeft && centerX <= boxRight && centerY >= boxTop && centerY <= boxBottom;
+            const isIntersecting = boxRight >= childMinX && boxLeft <= childMaxX && boxBottom >= childMinY && boxTop <= childMaxY;
+
+            if (isCenterInside || isIntersecting) {
+              matchedChildren.push(child);
+            }
+          });
+
+          if (matchedChildren.length > 0) {
+            enterGroupIsolation(groupToIsolate, matchedChildren);
+            return;
+          }
+        }
+      } else {
+        if (targetGroup && singleChild) {
+          enterGroupIsolation(targetGroup, singleChild);
+          return;
+        }
+      }
+    }
 
     if (hasObjectTransformed) {
       hasObjectTransformed = false;
@@ -3529,7 +3686,8 @@ const applyStickyNoteMethods = (note: any) => {
 // Rehydrate custom attributes, methods, and constraints after deserializing from JSON
 const rehydrateCanvasObjects = () => {
   if (!canvas) return;
-  canvas.getObjects().forEach((o: any) => {
+
+  const processObject = (o: any) => {
     o.set({ perPixelTargetFind: true });
 
     if (!o.id) {
@@ -3564,7 +3722,7 @@ const rehydrateCanvasObjects = () => {
       o.hasRotatingPoint = false;
       o.objectCaching = false;
       applyStickyNoteMethods(o);
-      o.initDimensions();
+      o.initDimensions?.();
     }
 
     if ((o as any).isArrow) {
@@ -3614,7 +3772,15 @@ const rehydrateCanvasObjects = () => {
         hasControls: false
       });
     }
-  });
+
+    // Recursively process group children (so nested sticky notes inside groups receive methods and dimensions)
+    if (o.type === 'group' || o instanceof fabric.Group) {
+      const groupChildren = o.getObjects ? o.getObjects() : (o._objects || []);
+      groupChildren.forEach((child: any) => processObject(child));
+    }
+  };
+
+  canvas.getObjects().forEach(processObject);
 };
 
 const syncNodeEditingStateAfterReload = () => {
@@ -3643,6 +3809,8 @@ const getSerializedCanvasJson = (): string => {
 
 const saveHistoryState = () => {
   if (!canvas || isInternalChange) return;
+  // If in isolation mode, do not record intermediate unbundled states in the global history stack!
+  if (isIsolationMode.value) return;
   const json = getSerializedCanvasJson();
   historyStack.value.push(json);
   if (historyStack.value.length > 50) {
@@ -3733,9 +3901,34 @@ const loadFromFirebase = async (json: string) => {
               localObj.minHeight = objJson.minHeight;
               localObj.initDimensions?.();
             }
+            if (objJson.fontSize !== undefined && localObj.fontSize !== objJson.fontSize) {
+              localObj.set({ fontSize: objJson.fontSize });
+              localObj.initDimensions?.();
+            }
           }
 
           if (localObj.isArrow && objJson.arrowPoints) {
+            const oldPts = JSON.stringify(localObj.arrowPoints || []);
+            const newPts = JSON.stringify(objJson.arrowPoints || []);
+            if (oldPts !== newPts) {
+              const color = objJson.arrowColor || (localObj as any).arrowColor || activeColor.value;
+              const width = objJson.arrowStrokeWidth || (localObj as any).arrowStrokeWidth || strokeWidth.value;
+              const newArrow = createArrowFromPoints(objJson.arrowPoints, color, width, true);
+              if (newArrow) {
+                (newArrow as any).id = localObj.id;
+                (newArrow as any).arrowId = localObj.arrowId;
+                (newArrow as any).authorUid = localObj.authorUid;
+                (newArrow as any).isLocked = objJson.isLocked ?? localObj.isLocked;
+                (newArrow as any).initialMatrix = objJson.initialMatrix;
+                const idx = canvas.getObjects().indexOf(localObj);
+                if (idx !== -1) {
+                  canvas.remove(localObj);
+                  canvas.insertAt(idx, newArrow);
+                  newArrow.setCoords();
+                  continue;
+                }
+              }
+            }
             localObj.arrowPoints = objJson.arrowPoints;
             if (objJson.initialMatrix) localObj.initialMatrix = objJson.initialMatrix;
           }
@@ -3751,6 +3944,7 @@ const loadFromFirebase = async (json: string) => {
             fill: objJson.fill,
             stroke: objJson.stroke,
             strokeWidth: objJson.strokeWidth,
+            fontSize: objJson.fontSize !== undefined ? objJson.fontSize : localObj.fontSize,
             opacity: objJson.opacity ?? 1,
             isLocked: objJson.isLocked
           });
@@ -4157,7 +4351,15 @@ const enterGroupIsolation = (group: fabric.Group, targetChild?: any) => {
     canvas?.add(item);
   });
 
-  if (targetChild && isolatedItems.includes(targetChild)) {
+  if (Array.isArray(targetChild) && targetChild.length > 0) {
+    const validTargets = targetChild.filter(c => isolatedItems.includes(c));
+    if (validTargets.length === 1) {
+      canvas.setActiveObject(validTargets[0]);
+    } else if (validTargets.length > 1) {
+      const activeSel = new fabric.ActiveSelection(validTargets, { canvas });
+      canvas.setActiveObject(activeSel);
+    }
+  } else if (targetChild && isolatedItems.includes(targetChild)) {
     canvas.setActiveObject(targetChild);
   }
   canvas.requestRenderAll();
@@ -4312,7 +4514,7 @@ const insertPastedText = (text: string, point?: { x: number; y: number }) => {
     left: targetPoint.x,
     top: targetPoint.y,
     originX: 'left',
-    originY: 'bottom',
+    originY: 'top',
     fontFamily: 'Inter, sans-serif',
     fontSize: 22,
     fill: activeColor.value,
@@ -5073,6 +5275,14 @@ const handleKeydown = (e: KeyboardEvent) => {
     e.preventDefault();
     if (canvas) {
       const transform = (canvas as any)._currentTransform;
+      if (transform) {
+        if (!transform._origOriginX) {
+          transform._origOriginX = transform.originX;
+          transform._origOriginY = transform.originY;
+        }
+        transform.originX = 'center';
+        transform.originY = 'center';
+      }
       const target = transform?.target || canvas.getActiveObject();
       if (target) {
         target.centeredScaling = true;
@@ -5213,6 +5423,39 @@ const handleKeydown = (e: KeyboardEvent) => {
     e.preventDefault();
     e.stopPropagation();
     handleQuickSave();
+  } else if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key) && activeObj) {
+    if ((activeObj as any).isLocked) return;
+    e.preventDefault();
+    let step = 1;
+    if (e.shiftKey) {
+      step = 10;
+    } else if (e.ctrlKey || e.metaKey || e.altKey) {
+      step = 20;
+    }
+
+    let dx = 0;
+    let dy = 0;
+    if (e.key === 'ArrowUp') dy = -step;
+    if (e.key === 'ArrowDown') dy = step;
+    if (e.key === 'ArrowLeft') dx = -step;
+    if (e.key === 'ArrowRight') dx = step;
+
+    activeObj.set({
+      left: (activeObj.left || 0) + dx,
+      top: (activeObj.top || 0) + dy
+    });
+    activeObj.setCoords();
+    if ((activeObj.type === 'activeselection' || activeObj.type === 'activeSelection') && activeObj.forEachObject) {
+      activeObj.forEachObject((c: any) => {
+        c.setCoords();
+      });
+    }
+    canvas?.requestRenderAll();
+    updateStickyToolbar();
+    updateArrowToolbar();
+    saveHistoryState();
+    syncToFirebase();
+    triggerDebouncedAutoSave();
   }
 };
 
@@ -5521,6 +5764,12 @@ const handleKeyup = (e: KeyboardEvent) => {
     e.preventDefault();
     if (canvas) {
       const transform = (canvas as any)._currentTransform;
+      if (transform && transform._origOriginX) {
+        transform.originX = transform._origOriginX;
+        transform.originY = transform._origOriginY;
+        transform._origOriginX = null;
+        transform._origOriginY = null;
+      }
       const target = transform?.target || canvas.getActiveObject();
       if (target) {
         target.centeredScaling = false;

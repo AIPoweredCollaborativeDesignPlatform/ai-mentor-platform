@@ -326,9 +326,11 @@ const albumItems = computed(() => {
   return activeAssetTab.value === 'public' ? publicAlbumItems.value : personalAlbumItems.value;
 });
 
+const pageEnteredAt = ref(Date.now());
+
 // Filtered messages for the main chat stream:
 // 1. Exclude all save messages & capsules from auto-saving
-// 2. Cap join notifications to at most the latest 3 to prevent chat overcrowding
+// 2. Only show live join notifications occurring while user is on the chat page; past join messages are omitted
 const visibleChatMessages = computed(() => {
   if (!roomStore.currentRoom?.messages) return [];
   const all = roomStore.currentRoom.messages;
@@ -336,14 +338,17 @@ const visibleChatMessages = computed(() => {
   const joinMsgIds: string[] = [];
   for (const m of all) {
     if (m.senderUid === 'system' && (m.content.includes('joined') || m.content.includes('join'))) {
-      joinMsgIds.push(m.id);
+      if (m.timestamp >= pageEnteredAt.value) {
+        joinMsgIds.push(m.id);
+      }
     }
   }
   const allowedJoinIds = new Set(joinMsgIds.slice(-3));
 
   return all.filter(m => {
-    // Cap join notices to latest 3
+    // Only show live join notices occurring in the current active session
     if (m.senderUid === 'system' && (m.content.includes('joined') || m.content.includes('join'))) {
+      if (m.timestamp < pageEnteredAt.value) return false;
       return allowedJoinIds.has(m.id);
     }
 
@@ -1344,9 +1349,18 @@ onUnmounted(() => {
               v-if="msg.type === 'file' && msg.fileData && (msg.fileData.type === 'image' || msg.fileData.type === 'video') && !msg.content"
               class="rounded-2xl overflow-hidden max-w-sm shadow-md hover:shadow-xl transition"
             >
+              <!-- Hidden Image Placeholder in Chat -->
+              <div
+                v-if="msg.fileData.type === 'image' && msg.metadata?.isHidden"
+                class="w-52 h-32 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col items-center justify-center p-3 text-center text-xs text-slate-400 select-none shadow"
+              >
+                <EyeOff class="w-5 h-5 text-slate-500 mb-1.5" />
+                <span class="font-medium text-slate-300">This image has been hidden from assets</span>
+              </div>
+
               <!-- Image Preview (Frameless) -->
               <div
-                v-if="msg.fileData.type === 'image'"
+                v-else-if="msg.fileData.type === 'image'"
                 class="cursor-pointer group rounded-2xl overflow-hidden"
                 @click="previewMediaUrl = msg.fileData.url"
                 title="Click to expand"
@@ -1373,16 +1387,17 @@ onUnmounted(() => {
                 msg.senderUid === authStore.uid ? 'bg-sky-600 text-white rounded-tr-xs' : '',
                 msg.senderUid !== authStore.uid && msg.senderUid !== 'ai_mentor' ? 'bg-slate-900 border border-slate-800 text-slate-200 rounded-tl-xs' : '',
                 msg.senderUid === 'ai_mentor' ? 'bg-slate-900 border border-sky-500/40 text-sky-100 rounded-tl-xs shadow-sky-950/30' : '',
+                msg.replyTo ? 'min-w-[180px] sm:min-w-[200px]' : '',
                 msg.type === 'ai_asset' ? 'w-full' : 'max-w-[88%] sm:max-w-[80%]'
               ]"
             >
               <!-- Quote reply preview if this message replies to someone -->
               <div
                 v-if="msg.replyTo"
-                class="mb-2 px-2.5 py-1 rounded-lg bg-black/35 border-l-2 border-sky-400 text-xs text-slate-300 select-none"
+                class="mb-2 px-2.5 py-1 rounded-lg bg-black/35 border-l-2 border-sky-400 text-xs text-slate-300 select-none min-w-0 max-w-full overflow-hidden"
               >
-                <div class="font-semibold text-[10px] text-sky-300">{{ msg.replyTo.senderName }}</div>
-                <div class="truncate text-[11px] opacity-80">{{ msg.replyTo.text }}</div>
+                <div class="font-semibold text-[10px] text-sky-300 truncate whitespace-nowrap overflow-hidden text-ellipsis">{{ msg.replyTo.senderName }}</div>
+                <div class="truncate text-[11px] opacity-80 whitespace-nowrap overflow-hidden text-ellipsis">{{ msg.replyTo.text }}</div>
               </div>
 
               <!-- Message Text (Collapsible if > 260 chars) -->

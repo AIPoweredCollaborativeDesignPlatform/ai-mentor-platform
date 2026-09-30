@@ -609,15 +609,6 @@ export const useRoomStore = defineStore('room', () => {
           status: 'approved',
           isOnline: true
         });
-        const participant = currentRoom.value.participants[uid];
-        await addDoc(collection(db, 'rooms', currentRoom.value.roomId, 'messages'), {
-          senderUid: 'system',
-          senderName: 'System',
-          senderAvatar: '👋',
-          type: 'text',
-          content: `${participant?.displayName || 'New member'} joined the meeting`,
-          timestamp: Date.now()
-        });
       } catch (err) {
         console.error('[Firestore] approve error:', err);
       }

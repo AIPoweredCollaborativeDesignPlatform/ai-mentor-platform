@@ -67,6 +67,7 @@ export interface MessageItem {
   metadata?: any;
   assetType?: 'parametric_3d' | 'mesh_3d' | 'image' | 'text' | 'vector' | 'fact_check' | 'moodboard' | 'summary' | 'contract';
   assetPayload?: any;
+  reactions?: Record<string, string[]>;
 }
 
 export interface RoomData {
@@ -124,6 +125,20 @@ export interface CursorData {
     color: string;
     width: number;
     tool: string;
+  } | null;
+  liveShape?: {
+    shapeType: 'rect' | 'circle' | 'triangle' | 'line';
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    color: string;
+    strokeWidth: number;
+    fill?: string;
+  } | null;
+  liveText?: {
+    targetId: string;
+    text: string;
   } | null;
 }
 

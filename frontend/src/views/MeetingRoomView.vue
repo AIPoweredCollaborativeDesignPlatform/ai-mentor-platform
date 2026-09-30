@@ -148,7 +148,8 @@ const handleShareWhiteboard = async (file: File) => {
 const handleSaveWhiteboardState = async (json: string, previewUrl: string, explicitAssetId?: string | null, isPrivateParam?: boolean) => {
   let assetId = explicitAssetId || activeWhiteboardAssetId.value;
   // If explicitly passed, use it; otherwise check if whiteboard is in shared mode or personal mode
-  const isPrivate = isPrivateParam !== undefined ? isPrivateParam : (!roomStore.currentRoom?.whiteboardActive || !isJoiningSharedBoard.value);
+  const isShared = !!roomStore.currentRoom?.whiteboardActive && (isJoiningSharedBoard.value || roomStore.currentRoom?.whiteboardHostUid === authStore.uid);
+  const isPrivate = isPrivateParam !== undefined ? isPrivateParam : !isShared;
 
   // Ownership verification: if editing another user's asset, fork into a new personal asset
   const existingMsg = assetId ? roomStore.currentRoom?.messages.find(m => m.id === assetId) : null;
@@ -193,7 +194,7 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string, expli
       senderName: authStore.displayName || 'Participant',
       senderAvatar: authStore.avatar || '🎨',
       type: 'whiteboard_state',
-      content: isPrivate ? 'Personal sketchpad saved to Album' : 'Whiteboard session saved',
+      content: isPrivate ? 'Whiteboard saved (Private Draft)' : 'Shared Whiteboard saved to Room Album',
       fileData: {
         type: 'image',
         url: previewUrl,
@@ -283,10 +284,6 @@ const visibleChatMessages = computed(() => {
   const allowedJoinIds = new Set(joinMsgIds.slice(-3));
 
   return all.filter(m => {
-    // Hide private whiteboard states from the public chat feed
-    if (m.type === 'whiteboard_state' && m.metadata?.isPrivate) {
-      return false;
-    }
     // Cap join notices to latest 3
     if (m.senderUid === 'system' && (m.content.includes('joined') || m.content.includes('join'))) {
       return allowedJoinIds.has(m.id);
@@ -607,6 +604,16 @@ const handleTextareaKeyDown = (e: KeyboardEvent) => {
     e.preventDefault();
     handleSend();
   }
+};
+
+const handleSendQuickThumbsUp = async () => {
+  if (isMeetingClosed.value) return;
+  const me = roomStore.currentRoom?.participants?.[authStore.uid];
+  if (me?.isMuted) return;
+  await roomStore.sendMessage('👍');
+  nextTick(() => {
+    scrollToBottom();
+  });
 };
 
 const handleRefineModel = async (msg: MessageItem, customPrompt?: string) => {
@@ -1245,12 +1252,30 @@ onUnmounted(() => {
 
           <!-- Message Body -->
           <div
-            class="flex flex-col min-w-0"
+            class="flex flex-col min-w-0 group/msg relative"
             :class="[
               msg.senderUid === authStore.uid ? 'items-end' : 'items-start',
               msg.type === 'ai_asset' ? 'w-full max-w-2xl sm:max-w-3xl' : 'max-w-2xl'
             ]"
           >
+            <!-- Messenger-Style Hover Reaction Picker -->
+            <div
+              v-if="!isMeetingClosed && msg.senderUid !== 'system'"
+              class="absolute -top-3.5 z-30 hidden group-hover/msg:flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-slate-900/95 border border-slate-700/90 shadow-xl backdrop-blur-sm select-none transition-all duration-150 animate-in fade-in zoom-in-90"
+              :class="msg.senderUid === authStore.uid ? 'right-0' : 'left-0'"
+            >
+              <button
+                v-for="emoji in ['👍', '❤️', '😂', '😮', '😢', '🎉']"
+                :key="emoji"
+                @click.stop="roomStore.toggleMessageReaction(msg.id, emoji)"
+                class="w-6 h-6 rounded-full hover:bg-slate-700/80 flex items-center justify-center text-xs sm:text-sm transition transform hover:scale-130 active:scale-95 cursor-pointer"
+                :class="{ 'bg-sky-500/25 scale-110': msg.reactions?.[emoji]?.includes(authStore.uid) }"
+                :title="`React ${emoji}`"
+              >
+                {{ emoji }}
+              </button>
+            </div>
+
             <!-- Sender info (Self: [11:25] [You], Others: [Name] [11:25]) -->
             <div class="flex items-center gap-1.5 mb-0.5 text-[11px] text-slate-400">
               <template v-if="msg.senderUid === authStore.uid">
@@ -1473,6 +1498,28 @@ onUnmounted(() => {
                   View Document
                 </button>
               </div>
+            </div>
+
+            <!-- Emoji Reaction Counter Pills Underneath Message Bubble -->
+            <div
+              v-if="msg.reactions && Object.values(msg.reactions).some(u => u && u.length > 0)"
+              class="flex flex-wrap items-center gap-1 mt-1 z-10 select-none"
+              :class="msg.senderUid === authStore.uid ? 'justify-end' : 'justify-start'"
+            >
+              <template v-for="(uids, emoji) in msg.reactions" :key="emoji">
+                <button
+                  v-if="uids && uids.length > 0"
+                  @click="roomStore.toggleMessageReaction(msg.id, String(emoji))"
+                  class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[11px] font-medium border transition cursor-pointer select-none"
+                  :class="uids.includes(authStore.uid)
+                    ? 'bg-sky-600/30 border-sky-400/80 text-sky-200 shadow-xs'
+                    : 'bg-slate-900/90 border-slate-700/80 text-slate-300 hover:bg-slate-800'"
+                  :title="`${uids.length} reaction${uids.length > 1 ? 's' : ''}`"
+                >
+                  <span class="text-xs">{{ emoji }}</span>
+                  <span class="text-[10px] font-bold opacity-90">{{ uids.length }}</span>
+                </button>
+              </template>
             </div>
 
             <!-- AI Mentor Failure / 503 Retry with Flash Button -->
@@ -1755,8 +1802,18 @@ onUnmounted(() => {
             rows="1"
           ></textarea>
 
-          <!-- Send Button with Cooldown Lock and Throttle -->
+          <!-- Quick Thumbs-Up (When empty) OR Send Button (When text/attachment present) -->
           <button
+            v-if="!inputMessage.trim() && !stagedAttachment"
+            @click="handleSendQuickThumbsUp"
+            :disabled="isMeetingClosed || roomStore.currentRoom?.participants[authStore.uid]?.isMuted"
+            class="px-3 py-2.5 bg-slate-800 hover:bg-slate-700 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed text-sky-400 rounded-xl font-semibold shadow transition flex items-center justify-center shrink-0 min-h-[44px] min-w-[44px] cursor-pointer text-lg select-none"
+            title="Send quick thumbs up (👍)"
+          >
+            👍
+          </button>
+          <button
+            v-else
             @click="handleSend"
             :disabled="isMeetingClosed || roomStore.currentRoom?.participants[authStore.uid]?.isMuted || (inputMessage.toLowerCase().includes('@mentor') && (roomStore.aiCooldownRemaining > 0 || roomStore.isAnalyzing))"
             class="px-3.5 py-2.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl font-semibold shadow transition flex items-center justify-center gap-1.5 shrink-0 min-h-[44px] min-w-[44px] cursor-pointer"
@@ -1868,13 +1925,6 @@ onUnmounted(() => {
               <div class="absolute top-1 left-1 bg-indigo-950/90 text-indigo-300 px-1.5 py-0.5 rounded text-[8px] font-bold border border-indigo-500/50 backdrop-blur-sm flex items-center gap-1 z-10 shadow">
                 <Palette class="w-2.5 h-2.5 text-indigo-400" />
                 <span>Whiteboard</span>
-              </div>
-              <!-- Creator Avatar Badge (Top Right) -->
-              <div
-                class="absolute top-1 right-1 bg-slate-900/95 text-white w-5 h-5 rounded-full border border-slate-700/80 backdrop-blur-sm flex items-center justify-center text-[10px] z-10 shadow select-none"
-                :title="`Creator: ${msg.metadata?.creatorName || msg.senderName || 'Member'}`"
-              >
-                <span>{{ msg.metadata?.creatorAvatar || msg.senderAvatar || '🎨' }}</span>
               </div>
               <!-- Creator Name Pill (Bottom) -->
               <div class="absolute bottom-1 left-1 right-1 bg-slate-950/85 px-1.5 py-0.5 rounded text-[8px] text-slate-300 font-medium truncate backdrop-blur-xs z-10 flex items-center gap-1">

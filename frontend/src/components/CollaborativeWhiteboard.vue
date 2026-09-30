@@ -16,7 +16,7 @@ if ((fabric as any).Object?.prototype) {
   (fabric as any).Object.prototype.objectCaching = false;
 }
 import {
-  X, Pencil, Image as ImageIcon, Undo2, Redo2, Trash2, Maximize, Minimize, Check, Loader2, Sparkles, Send, Radio, Settings2, MousePointer2, Type, Square, Circle, Triangle, Minus, ArrowUpRight, Group, Ungroup, BringToFront, SendToBack, MoveUp, MoveDown, Copy, Scissors, ClipboardPaste, AlertTriangle, AlertCircle, RefreshCw, ChevronDown, ChevronUp, StickyNote, MoreHorizontal, Lock, Unlock, HelpCircle, Waypoints, Globe, MicOff, Save, User, Users, Camera
+  X, Pencil, Image as ImageIcon, Undo2, Redo2, Trash2, Maximize, Minimize, Check, Loader2, Sparkles, Send, Radio, Settings2, MousePointer2, Type, Square, Circle, Triangle, Minus, ArrowUpRight, Group, Ungroup, BringToFront, SendToBack, MoveUp, MoveDown, Copy, Scissors, ClipboardPaste, AlertTriangle, AlertCircle, RefreshCw, ChevronDown, ChevronUp, StickyNote, MoreHorizontal, Lock, Unlock, HelpCircle, Waypoints, Globe, MicOff, Save, User, Users, Camera, CloudOff
 } from 'lucide-vue-next';
 import { db } from '../firebase/config';
 import { doc, collection, onSnapshot, setDoc, deleteDoc, type Unsubscribe } from 'firebase/firestore';
@@ -237,8 +237,14 @@ const viewfinderBounds = computed(() => {
 
   const w = r - l;
   const h = b - t;
-  if (w <= 20 || h <= 20) return null;
-  return { left: Math.round(l), top: Math.round(t), width: Math.round(w), height: Math.round(h) };
+  if (w <= 40 || h <= 40) return null;
+  const pad = 14;
+  return {
+    left: Math.round(l + pad),
+    top: Math.round(t + pad),
+    width: Math.round(w - pad * 2),
+    height: Math.round(h - pad * 2)
+  };
 });
 
 const updateStickyToolbar = () => {
@@ -936,127 +942,110 @@ const isObjectHitByRect = (canvasObj: fabric.Canvas, obj: any, rect: { left: num
   return false;
 };
 
+let isTakingSnapshot = false;
+
 // Snapshot helper: clips strictly to workspace bounds (eliminating dark borders) and supports high-res exports
 const getCanvasSnapshot = (quality = 0.7, highRes = false): string => {
   if (!canvas) return '';
-  // Deselect active object temporarily so nodes and handles are never in the exported picture
+  isTakingSnapshot = true;
   const activeObj = canvas.getActiveObject();
-  if (activeObj) {
-    canvas.discardActiveObject();
-    canvas.renderAll();
-  }
-
-  const screenW = canvas.getWidth();
-  const screenH = canvas.getHeight();
-  const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
-  const zoom = canvas.getZoom();
-
-  // Workspace bounds in screen coordinates
-  const wsScreenLeft = vpt[4];
-  const wsScreenTop = vpt[5];
-  const wsScreenRight = WORKSPACE_WIDTH * zoom + vpt[4];
-  const wsScreenBottom = WORKSPACE_HEIGHT * zoom + vpt[5];
-
-  // Intersection between visible viewport and actual workspace
-  const cropLeft = Math.max(0, wsScreenLeft);
-  const cropTop = Math.max(0, wsScreenTop);
-  const cropRight = Math.min(screenW, wsScreenRight);
-  const cropBottom = Math.min(screenH, wsScreenBottom);
-
-  const cropW = cropRight - cropLeft;
-  const cropH = cropBottom - cropTop;
-
-  // Fallback if user is panned completely away
-  const isOutOfView = cropW <= 10 || cropH <= 10;
-  const finalCropLeft = isOutOfView ? 0 : cropLeft;
-  const finalCropTop = isOutOfView ? 0 : cropTop;
-  const finalCropW = isOutOfView ? screenW : cropW;
-  const finalCropH = isOutOfView ? screenH : cropH;
-
-  // High-res output dimensions (min 1600px width for chat viewports)
-  let outW = finalCropW;
-  let outH = finalCropH;
-  if (highRes || quality >= 0.8) {
-    outW = Math.max(Math.round(finalCropW * 2), 1600);
-    outH = Math.round(outW * (finalCropH / finalCropW));
-  } else if (quality <= 0.4) {
-    outW = Math.min(Math.round(finalCropW), 400);
-    outH = Math.max(1, Math.round(outW * (finalCropH / finalCropW)));
-  }
-
-  const offscreen = document.createElement('canvas');
-  offscreen.width = outW;
-  offscreen.height = outH;
-  const ctx = offscreen.getContext('2d');
-  if (!ctx) {
+  try {
+    // Deselect active object temporarily so nodes and handles are never in the exported picture
     if (activeObj) {
-      canvas.setActiveObject(activeObj);
+      canvas.discardActiveObject();
       canvas.renderAll();
     }
-    return canvas.toDataURL({ format: 'jpeg', quality, multiplier: 1 });
-  }
 
-  // 1. Fill clean light background
-  ctx.fillStyle = '#f8fafc';
-  ctx.fillRect(0, 0, outW, outH);
+    const screenW = canvas.getWidth();
+    const screenH = canvas.getHeight();
+    const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
+    const zoom = canvas.getZoom();
 
-  // 2. Draw dot grid matching the canvas view within cropped area
-  const scaleOut = outW / finalCropW;
-  const baseSpacing = 28;
-  const screenSpacing = baseSpacing * zoom * scaleOut;
+    // Workspace bounds in screen coordinates
+    const wsScreenLeft = vpt[4];
+    const wsScreenTop = vpt[5];
+    const wsScreenRight = WORKSPACE_WIDTH * zoom + vpt[4];
+    const wsScreenBottom = WORKSPACE_HEIGHT * zoom + vpt[5];
 
-  if (screenSpacing >= 8) {
-    ctx.fillStyle = '#cbd5e1';
-    const dotRadius = Math.max(1.0, Math.min(2.5, 1.1 * Math.sqrt(zoom * scaleOut)));
-    const startX = (((vpt[4] - finalCropLeft) * scaleOut % screenSpacing) + screenSpacing) % screenSpacing;
-    const startY = (((vpt[5] - finalCropTop) * scaleOut % screenSpacing) + screenSpacing) % screenSpacing;
-    for (let x = startX; x < outW; x += screenSpacing) {
-      for (let y = startY; y < outH; y += screenSpacing) {
-        ctx.beginPath();
-        ctx.arc(x, y, dotRadius, 0, Math.PI * 2);
-        ctx.fill();
+    // Intersection between visible viewport and actual workspace
+    const cropLeft = Math.max(0, wsScreenLeft);
+    const cropTop = Math.max(0, wsScreenTop);
+    const cropRight = Math.min(screenW, wsScreenRight);
+    const cropBottom = Math.min(screenH, wsScreenBottom);
+
+    const cropW = cropRight - cropLeft;
+    const cropH = cropBottom - cropTop;
+
+    // Fallback if user is panned completely away
+    const isOutOfView = cropW <= 10 || cropH <= 10;
+    const finalCropLeft = isOutOfView ? 0 : cropLeft;
+    const finalCropTop = isOutOfView ? 0 : cropTop;
+    const finalCropW = isOutOfView ? screenW : cropW;
+    const finalCropH = isOutOfView ? screenH : cropH;
+
+    // High-res output dimensions (min 1600px width for chat viewports)
+    let outW = finalCropW;
+    let outH = finalCropH;
+    if (highRes || quality >= 0.8) {
+      outW = Math.max(Math.round(finalCropW * 2), 1600);
+      outH = Math.round(outW * (finalCropH / finalCropW));
+    } else if (quality <= 0.4) {
+      outW = Math.min(Math.round(finalCropW), 400);
+      outH = Math.max(1, Math.round(outW * (finalCropH / finalCropW)));
+    }
+
+    const offscreen = document.createElement('canvas');
+    offscreen.width = outW;
+    offscreen.height = outH;
+    const ctx = offscreen.getContext('2d');
+    if (!ctx) {
+      return canvas.toDataURL({ format: 'jpeg', quality, multiplier: 1 });
+    }
+
+    // 1. Fill clean light background (no dot grid per user requirement)
+    ctx.fillStyle = '#f8fafc';
+    ctx.fillRect(0, 0, outW, outH);
+
+    // 2. Draw fabric elements clipped strictly to workspace intersection at true high resolution
+    const scaleOut = outW / finalCropW;
+    let renderedVector = false;
+    if ((highRes || quality >= 0.8) && typeof (canvas as any).toCanvasElement === 'function') {
+      try {
+        const vectorEl = (canvas as any).toCanvasElement(scaleOut, {
+          left: finalCropLeft,
+          top: finalCropTop,
+          width: finalCropW,
+          height: finalCropH
+        });
+        if (vectorEl && vectorEl.width > 0 && vectorEl.height > 0) {
+          ctx.drawImage(vectorEl, 0, 0, outW, outH);
+          renderedVector = true;
+        }
+      } catch (err) {
+        console.warn('Vector snapshot fallback to lowerCanvas:', err);
       }
     }
-  }
 
-  // 3. Draw fabric elements clipped strictly to workspace intersection at true high resolution
-  let renderedVector = false;
-  if ((highRes || quality >= 0.8) && typeof (canvas as any).toCanvasElement === 'function') {
-    try {
-      const vectorEl = (canvas as any).toCanvasElement(scaleOut, {
-        left: finalCropLeft,
-        top: finalCropTop,
-        width: finalCropW,
-        height: finalCropH
-      });
-      if (vectorEl && vectorEl.width > 0 && vectorEl.height > 0) {
-        ctx.drawImage(vectorEl, 0, 0, outW, outH);
-        renderedVector = true;
+    if (!renderedVector) {
+      const lowerCanvas = canvas.lowerCanvasEl;
+      if (lowerCanvas) {
+        const dpr = lowerCanvas.width / screenW;
+        const sx = finalCropLeft * dpr;
+        const sy = finalCropTop * dpr;
+        const sw = finalCropW * dpr;
+        const sh = finalCropH * dpr;
+        ctx.drawImage(lowerCanvas, sx, sy, sw, sh, 0, 0, outW, outH);
       }
-    } catch (err) {
-      console.warn('Vector snapshot fallback to lowerCanvas:', err);
     }
-  }
 
-  if (!renderedVector) {
-    const lowerCanvas = canvas.lowerCanvasEl;
-    if (lowerCanvas) {
-      const dpr = lowerCanvas.width / screenW;
-      const sx = finalCropLeft * dpr;
-      const sy = finalCropTop * dpr;
-      const sw = finalCropW * dpr;
-      const sh = finalCropH * dpr;
-      ctx.drawImage(lowerCanvas, sx, sy, sw, sh, 0, 0, outW, outH);
+    return offscreen.toDataURL('image/jpeg', quality);
+  } finally {
+    isTakingSnapshot = false;
+    if (activeObj) {
+      canvas.setActiveObject(activeObj);
     }
+    canvas.requestRenderAll();
   }
-
-  // Restore selection
-  if (activeObj) {
-    canvas.setActiveObject(activeObj);
-    canvas.renderAll();
-  }
-
-  return offscreen.toDataURL('image/jpeg', quality);
 };
 
 let drawingObject: any = null;
@@ -1102,6 +1091,17 @@ interface SmoothCursor {
   targetY: number;
   liveStroke?: { points: { x: number; y: number }[]; color: string; width: number; tool: string } | null;
   strokeCompletedAt?: number;
+  liveShape?: {
+    shapeType: 'rect' | 'circle' | 'triangle' | 'line';
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    color: string;
+    strokeWidth: number;
+    fill?: string;
+  } | null;
+  shapeCompletedAt?: number;
 }
 
 const remoteCursors = ref<Record<string, CursorData>>({});
@@ -1110,6 +1110,7 @@ let unsubCursors: Unsubscribe | null = null;
 let lastCursorBroadcast = 0;
 let lastCursorPos = { x: -9999, y: -9999 };
 let cursorLerpRafId: number | null = null;
+
 const currentLiveDrag = ref<{
   targetId: string;
   left: number;
@@ -1118,6 +1119,41 @@ const currentLiveDrag = ref<{
   scaleY?: number;
   angle?: number;
 } | null>(null);
+
+const currentLiveShape = ref<{
+  shapeType: 'rect' | 'circle' | 'triangle' | 'line';
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  color: string;
+  strokeWidth: number;
+  fill?: string;
+} | null>(null);
+
+const currentLiveText = ref<{
+  targetId: string;
+  text: string;
+} | null>(null);
+
+const sampleStrokePoints = (points: Array<{ x: number; y: number }>, maxPoints = 150) => {
+  if (points.length <= maxPoints) return points.map(p => ({ x: Math.round(p.x), y: Math.round(p.y) }));
+  const step = (points.length - 1) / (maxPoints - 1);
+  const result: Array<{ x: number; y: number }> = [];
+  for (let i = 0; i < maxPoints - 1; i++) {
+    const pt = points[Math.round(i * step)];
+    result.push({ x: Math.round(pt.x), y: Math.round(pt.y) });
+  }
+  result.push({ x: Math.round(points[points.length - 1].x), y: Math.round(points[points.length - 1].y) });
+  return result;
+};
+
+const getTriangleScreenPoints = (s: { x: number; y: number; w: number; h: number }) => {
+  const p1 = getNodeScreenPos({ x: s.x + s.w / 2, y: s.y });
+  const p2 = getNodeScreenPos({ x: s.x + s.w, y: s.y + s.h });
+  const p3 = getNodeScreenPos({ x: s.x, y: s.y + s.h });
+  return `${p1.x.toFixed(1)},${p1.y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)} ${p3.x.toFixed(1)},${p3.y.toFixed(1)}`;
+};
 
 const updateLiveDrag = (opt: any) => {
   const target = opt?.target as any;
@@ -1192,7 +1228,7 @@ const broadcastMyCursor = (opt: any) => {
   const pointer = (canvas as any).getScenePoint ? (canvas as any).getScenePoint(opt.e || opt) : ((canvas as any).getPointer?.(opt.e || opt) || { x: 0, y: 0 });
   const dx = Math.abs(pointer.x - lastCursorPos.x);
   const dy = Math.abs(pointer.y - lastCursorPos.y);
-  if (dx < 2 && dy < 2 && !isMouseDown && !currentLiveDrag.value) return;
+  if (dx < 2 && dy < 2 && !isMouseDown && !currentLiveDrag.value && !currentLiveShape.value && !currentLiveText.value) return;
 
   lastCursorBroadcast = now;
   lastCursorPos = { x: pointer.x, y: pointer.y };
@@ -1203,7 +1239,7 @@ const broadcastMyCursor = (opt: any) => {
   let liveStrokePayload = null;
   if (isMouseDown && (currentTool.value === 'draw' || currentTool.value === 'arrow') && pencilStrokePoints.length >= 2) {
     liveStrokePayload = {
-      points: pencilStrokePoints.slice(-30).map(p => ({ x: Math.round(p.x), y: Math.round(p.y) })),
+      points: sampleStrokePoints(pencilStrokePoints, 150),
       color: activeColor.value,
       width: strokeWidth.value,
       tool: currentTool.value
@@ -1219,7 +1255,9 @@ const broadcastMyCursor = (opt: any) => {
     y: Math.round(pointer.y),
     updatedAt: now,
     liveStroke: liveStrokePayload,
-    liveDrag: currentLiveDrag.value
+    liveDrag: currentLiveDrag.value,
+    liveShape: currentLiveShape.value,
+    liveText: currentLiveText.value
   }).catch(() => {});
 };
 
@@ -1258,9 +1296,21 @@ const startCursorListener = () => {
             // Keep remote stroke temporarily so it doesn't flicker/vanish before Firestore state arrives
             if (!smoothedCursors.value[data.uid].strokeCompletedAt) {
               smoothedCursors.value[data.uid].strokeCompletedAt = Date.now();
-            } else if (Date.now() - (smoothedCursors.value[data.uid].strokeCompletedAt || 0) > 3500) {
+            } else if (Date.now() - (smoothedCursors.value[data.uid].strokeCompletedAt || 0) > 4000) {
               smoothedCursors.value[data.uid].liveStroke = null;
               smoothedCursors.value[data.uid].strokeCompletedAt = undefined;
+            }
+          }
+
+          if (data.liveShape) {
+            smoothedCursors.value[data.uid].liveShape = data.liveShape;
+            smoothedCursors.value[data.uid].shapeCompletedAt = undefined;
+          } else if (smoothedCursors.value[data.uid].liveShape) {
+            if (!smoothedCursors.value[data.uid].shapeCompletedAt) {
+              smoothedCursors.value[data.uid].shapeCompletedAt = Date.now();
+            } else if (Date.now() - (smoothedCursors.value[data.uid].shapeCompletedAt || 0) > 4000) {
+              smoothedCursors.value[data.uid].liveShape = null;
+              smoothedCursors.value[data.uid].shapeCompletedAt = undefined;
             }
           }
         } else {
@@ -1273,7 +1323,8 @@ const startCursorListener = () => {
             currentY: data.y,
             targetX: data.x,
             targetY: data.y,
-            liveStroke: data.liveStroke
+            liveStroke: data.liveStroke,
+            liveShape: data.liveShape
           };
         }
 
@@ -1291,6 +1342,22 @@ const startCursorListener = () => {
             });
             targetObj.setCoords();
             canvas.requestRenderAll();
+          }
+        }
+
+        // Apply liveText character-by-character from remote peer in real time
+        if (data.liveText && canvas) {
+          const live = data.liveText;
+          const targetObj = canvas.getObjects().find((o: any) => (o.id === live.targetId || o.arrowId === live.targetId)) as any;
+          if (targetObj && canvas.getActiveObject() !== targetObj) {
+            if (targetObj.text !== live.text) {
+              targetObj.set({ text: live.text });
+              if (targetObj.isStickyNote || targetObj.stickyColorConfig) {
+                targetObj.initDimensions?.();
+              }
+              targetObj.setCoords?.();
+              canvas.requestRenderAll();
+            }
           }
         }
       }
@@ -1898,7 +1965,7 @@ const initFabric = () => {
 
   // Render workspace background with dark uneditable area outside boundary
   canvas.on('before:render', () => {
-    if (!canvas) return;
+    if (isTakingSnapshot || !canvas) return;
     const ctx = canvas.getContext();
     if (!ctx) return;
     const width = canvas.getWidth();
@@ -1964,7 +2031,7 @@ const initFabric = () => {
 
   // After objects render, neatly mask any objects/strokes that extend into the outer uneditable zone
   canvas.on('after:render', () => {
-    if (!canvas) return;
+    if (isTakingSnapshot || !canvas) return;
     const ctx = canvas.getContext();
     if (!ctx) return;
     const width = canvas.getWidth();
@@ -2097,6 +2164,7 @@ const initFabric = () => {
       saveHistoryState();
       syncToFirebase();
       updateSelectionState();
+      triggerDebouncedAutoSave();
     }
   });
 
@@ -2248,7 +2316,13 @@ const initFabric = () => {
       }
       saveHistoryState();
       syncToFirebase();
+      triggerDebouncedAutoSave();
     }
+  });
+
+  canvas.on('object:removed', () => {
+    if (!canvas || isInternalChange) return;
+    triggerDebouncedAutoSave();
   });
 
   canvas.on('text:changed', (e: any) => {
@@ -2258,10 +2332,21 @@ const initFabric = () => {
       target.initDimensions?.();
       target.setCoords?.();
     }
+    const targetId = target?.id || target?.arrowId;
+    if (targetId && isCollabActive.value) {
+      currentLiveText.value = {
+        targetId,
+        text: target.text || ''
+      };
+      broadcastMyCursor({});
+      triggerDebouncedAutoSave(600);
+    }
   });
 
   canvas.on('text:editing:exited', (e: any) => {
     if (!canvas) return;
+    currentLiveText.value = null;
+    broadcastMyCursor({});
     const textObj = e.target as any;
     if (!textObj) return;
     if (!textObj.text?.trim() || textObj.text === 'Type here...' || textObj.text === 'Type note here...') {
@@ -2270,12 +2355,14 @@ const initFabric = () => {
       saveHistoryState();
       syncToFirebase();
       updateSelectionState();
+      triggerDebouncedAutoSave();
       return;
     }
     if (!isInternalChange) {
       saveHistoryState();
       syncToFirebase();
       updateSelectionState();
+      triggerDebouncedAutoSave();
     }
   });
 
@@ -2725,6 +2812,17 @@ const initFabric = () => {
       }
 
       drawingObject.set({ left: l, top: t, width: w, height: h });
+      if (isCollabActive.value) {
+        currentLiveShape.value = {
+          shapeType: currentTool.value as 'rect' | 'triangle',
+          x: Math.round(l),
+          y: Math.round(t),
+          w: Math.round(w),
+          h: Math.round(h),
+          color: activeColor.value,
+          strokeWidth: strokeWidth.value
+        };
+      }
     } else if (currentTool.value === 'circle') {
       let rx = Math.abs(dx) / 2;
       let ry = Math.abs(dy) / 2;
@@ -2754,6 +2852,17 @@ const initFabric = () => {
         rx,
         ry
       });
+      if (isCollabActive.value) {
+        currentLiveShape.value = {
+          shapeType: 'circle',
+          x: Math.round(cx),
+          y: Math.round(cy),
+          w: Math.round(rx),
+          h: Math.round(ry),
+          color: activeColor.value,
+          strokeWidth: strokeWidth.value
+        };
+      }
     } else if (currentTool.value === 'line') {
       let startX = drawingStartPoint.x;
       let startY = drawingStartPoint.y;
@@ -2776,6 +2885,17 @@ const initFabric = () => {
       }
 
       drawingObject.set({ x1: startX, y1: startY, x2: endX, y2: endY });
+      if (isCollabActive.value) {
+        currentLiveShape.value = {
+          shapeType: 'line',
+          x: Math.round(startX),
+          y: Math.round(startY),
+          w: Math.round(endX),
+          h: Math.round(endY),
+          color: activeColor.value,
+          strokeWidth: strokeWidth.value
+        };
+      }
     }
     canvas.requestRenderAll();
   });
@@ -2974,8 +3094,10 @@ const initFabric = () => {
         saveHistoryState();
         syncToFirebase();
         updateSelectionState();
+        triggerDebouncedAutoSave();
       }
 
+      currentLiveShape.value = null;
       drawingObject = null;
       drawingStartPoint = null;
     }
@@ -3530,12 +3652,12 @@ const loadFromFirebase = async (json: string) => {
   canvas.renderAll();
   viewportVersion.value++;
 
-  // Remote state has successfully synced into Fabric canvas, clear finished live strokes
+  // Remote state has successfully synced into Fabric canvas, clear finished live strokes and live shapes seamlessly
   for (const uid in smoothedCursors.value) {
-    if (smoothedCursors.value[uid].strokeCompletedAt) {
-      smoothedCursors.value[uid].liveStroke = null;
-      smoothedCursors.value[uid].strokeCompletedAt = undefined;
-    }
+    smoothedCursors.value[uid].liveStroke = null;
+    smoothedCursors.value[uid].strokeCompletedAt = undefined;
+    smoothedCursors.value[uid].liveShape = null;
+    smoothedCursors.value[uid].shapeCompletedAt = undefined;
   }
 
   if (historyStack.value.length === 0) {
@@ -3931,14 +4053,29 @@ const toggleLockSelected = () => {
 // Quick save action (Ctrl+S)
 const isRecentlySaved = ref(false);
 let saveFeedbackTimeout: any = null;
-const handleQuickSave = () => {
-  triggerAutoSaveAsAsset();
+const handleQuickSave = async () => {
+  if (autoSaveDebounceTimer) clearTimeout(autoSaveDebounceTimer);
+  saveStatus.value = 'saving';
   isRecentlySaved.value = true;
-  if (saveFeedbackTimeout) clearTimeout(saveFeedbackTimeout);
-  saveFeedbackTimeout = setTimeout(() => {
-    isRecentlySaved.value = false;
-  }, 2500);
-  displayToast('Whiteboard saved to Room Album');
+  try {
+    await triggerAutoSaveAsAsset();
+    if (!navigator.onLine) {
+      saveStatus.value = 'offline';
+    } else {
+      saveStatus.value = 'saved';
+    }
+    if (saveFeedbackTimeout) clearTimeout(saveFeedbackTimeout);
+    saveFeedbackTimeout = setTimeout(() => {
+      isRecentlySaved.value = false;
+      if (saveStatus.value === 'saved') {
+        saveStatus.value = 'idle';
+      }
+    }, 2500);
+    displayToast('Whiteboard saved to Room Album');
+  } catch (e) {
+    saveStatus.value = 'offline';
+    displayToast('Saved offline');
+  }
 };
 
 const addSticky = (color?: StickyColorConfig) => {
@@ -4853,14 +4990,46 @@ const handleWindowClick = () => {
   }
 };
 
-const triggerAutoSaveAsAsset = async () => {
+type SaveStatus = 'idle' | 'saving' | 'saved' | 'offline';
+const saveStatus = ref<SaveStatus>('idle');
+let autoSaveDebounceTimer: any = null;
+let saveStatusResetTimer: any = null;
+
+async function triggerAutoSaveAsAsset() {
   if (!canvas) return '';
   const json = getSerializedCanvasJson();
   const dataUrl = getCanvasSnapshot(0.7);
   emit('save-state', json, dataUrl, currentAssetId.value, !isCollabActive.value);
   hasUnsavedChanges.value = false;
   return json;
-};
+}
+
+function triggerDebouncedAutoSave(delay = 800) {
+  if (!canvas) return;
+  hasUnsavedChanges.value = true;
+  saveStatus.value = 'saving';
+  if (autoSaveDebounceTimer) clearTimeout(autoSaveDebounceTimer);
+  autoSaveDebounceTimer = setTimeout(async () => {
+    try {
+      if (!navigator.onLine) {
+        saveStatus.value = 'offline';
+        await triggerAutoSaveAsAsset();
+        return;
+      }
+      await triggerAutoSaveAsAsset();
+      saveStatus.value = 'saved';
+      if (saveStatusResetTimer) clearTimeout(saveStatusResetTimer);
+      saveStatusResetTimer = setTimeout(() => {
+        if (saveStatus.value === 'saved') {
+          saveStatus.value = 'idle';
+        }
+      }, 2500);
+    } catch (e) {
+      console.warn('Auto-save error:', e);
+      saveStatus.value = 'offline';
+    }
+  }, delay);
+}
 
 const handleBeforeUnload = (e: BeforeUnloadEvent) => {
   if (roomStore.currentRoom?.whiteboardActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid) {
@@ -5197,7 +5366,7 @@ onUnmounted(() => {
       <!-- Shared Canvas Badge -->
       <div
         v-if="isCollabActive"
-        class="h-8 px-2.5 rounded-full bg-emerald-600/90 shadow-sm border border-emerald-400 flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-white shrink-0"
+        class="h-8 px-2.5 rounded-xl bg-emerald-600/90 shadow-sm border border-emerald-400 flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-white shrink-0"
         title="Shared Canvas (Team Collaboration Active)"
       >
         <Users class="w-3.5 h-3.5 text-emerald-200 shrink-0" />
@@ -5208,7 +5377,7 @@ onUnmounted(() => {
       <!-- Personal Board Badge -->
       <div
         v-else
-        class="h-8 px-2.5 rounded-full bg-white/95 shadow-sm border border-slate-200 flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-slate-700 shrink-0"
+        class="h-8 px-2.5 rounded-xl bg-white/95 shadow-sm border border-slate-200 flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-slate-700 shrink-0"
         title="Personal Board (Private Draft)"
       >
         <User class="w-3.5 h-3.5 text-sky-500 shrink-0" />
@@ -5274,16 +5443,36 @@ onUnmounted(() => {
       class="absolute top-4 right-4 z-10 flex items-center gap-1 sm:gap-2 transition-opacity duration-200"
       :class="{ 'opacity-15': isHoveringSend }"
     >
-      <!-- Explicit Save Button (fixed border & padding to prevent ANY micro layout shift on save) -->
+      <!-- Explicit Save Button with Animated Auto-Save Status (Saving, Saved, Offline, Save Board) -->
       <button
         @click="handleQuickSave"
-        class="h-8 px-2.5 sm:px-3 rounded-xl transition text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-sm border"
-        :class="isRecentlySaved ? 'bg-emerald-50 text-emerald-700 border-emerald-400' : 'bg-white/95 hover:bg-white text-slate-700 hover:text-indigo-600 border-slate-200'"
+        class="h-8 px-2.5 sm:px-3 rounded-xl transition-all duration-200 text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-sm border"
+        :class="[
+          saveStatus === 'saved' || isRecentlySaved
+            ? 'bg-emerald-50 text-emerald-700 border-emerald-400'
+            : saveStatus === 'saving'
+              ? 'bg-indigo-50 text-indigo-700 border-indigo-300'
+              : saveStatus === 'offline'
+                ? 'bg-amber-50 text-amber-700 border-amber-300'
+                : 'bg-white/95 hover:bg-white text-slate-700 hover:text-indigo-600 border-slate-200'
+        ]"
         title="Save whiteboard to Room Album (Ctrl+S)"
       >
-        <Check v-if="isRecentlySaved" class="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+        <Loader2 v-if="saveStatus === 'saving'" class="w-3.5 h-3.5 text-indigo-600 animate-spin shrink-0" />
+        <Check v-else-if="saveStatus === 'saved' || isRecentlySaved" class="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+        <CloudOff v-else-if="saveStatus === 'offline'" class="w-3.5 h-3.5 text-amber-600 shrink-0" />
         <Save v-else class="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-        <span v-if="whiteboardContainerWidth >= 680">{{ isRecentlySaved ? 'Saved' : 'Save Board' }}</span>
+        <span v-if="whiteboardContainerWidth >= 680">
+          {{
+            saveStatus === 'saving'
+              ? 'Saving...'
+              : saveStatus === 'saved' || isRecentlySaved
+                ? 'Saved'
+                : saveStatus === 'offline'
+                  ? 'Saved offline'
+                  : 'Save Board'
+          }}
+        </span>
       </button>
 
       <!-- Toggle: Make Private (if Shared & Host) OR Share Board (if Personal) directly next to Save -->
@@ -5346,9 +5535,10 @@ onUnmounted(() => {
 
       <!-- Live Collaborative Cursors & Live Stroke Overlay -->
       <div v-if="isCollabActive" class="absolute inset-0 pointer-events-none z-30 overflow-hidden">
-        <!-- Live Remote In-Progress Strokes -->
+        <!-- Live Remote In-Progress Strokes & Shapes -->
         <svg class="absolute inset-0 w-full h-full pointer-events-none">
           <template v-for="c in Object.values(smoothedCursors)" :key="'stroke-' + c.uid">
+            <!-- Freehand & Arrow In-Progress Strokes -->
             <path
               v-if="c.liveStroke?.points && c.liveStroke.points.length >= 2"
               :d="pointsToSvgPath(c.liveStroke.points)"
@@ -5357,6 +5547,52 @@ onUnmounted(() => {
               :stroke-width="(c.liveStroke.width || 4) * (canvas?.getZoom() || 1)"
               stroke-linecap="round"
               stroke-linejoin="round"
+              class="opacity-80"
+            />
+            <!-- Live Rectangle -->
+            <rect
+              v-if="c.liveShape?.shapeType === 'rect'"
+              :x="getNodeScreenPos({ x: c.liveShape.x, y: c.liveShape.y }).x"
+              :y="getNodeScreenPos({ x: c.liveShape.x, y: c.liveShape.y }).y"
+              :width="c.liveShape.w * (canvas?.getZoom() || 1)"
+              :height="c.liveShape.h * (canvas?.getZoom() || 1)"
+              fill="none"
+              :stroke="c.liveShape.color || c.color"
+              :stroke-width="(c.liveShape.strokeWidth || 3) * (canvas?.getZoom() || 1)"
+              class="opacity-80"
+            />
+            <!-- Live Circle (Ellipse) -->
+            <ellipse
+              v-else-if="c.liveShape?.shapeType === 'circle'"
+              :cx="getNodeScreenPos({ x: c.liveShape.x, y: c.liveShape.y }).x"
+              :cy="getNodeScreenPos({ x: c.liveShape.x, y: c.liveShape.y }).y"
+              :rx="c.liveShape.w * (canvas?.getZoom() || 1)"
+              :ry="c.liveShape.h * (canvas?.getZoom() || 1)"
+              fill="none"
+              :stroke="c.liveShape.color || c.color"
+              :stroke-width="(c.liveShape.strokeWidth || 3) * (canvas?.getZoom() || 1)"
+              class="opacity-80"
+            />
+            <!-- Live Triangle -->
+            <polygon
+              v-else-if="c.liveShape?.shapeType === 'triangle'"
+              :points="getTriangleScreenPoints(c.liveShape)"
+              fill="none"
+              :stroke="c.liveShape.color || c.color"
+              :stroke-width="(c.liveShape.strokeWidth || 3) * (canvas?.getZoom() || 1)"
+              stroke-linejoin="round"
+              class="opacity-80"
+            />
+            <!-- Live Line -->
+            <line
+              v-else-if="c.liveShape?.shapeType === 'line'"
+              :x1="getNodeScreenPos({ x: c.liveShape.x, y: c.liveShape.y }).x"
+              :y1="getNodeScreenPos({ x: c.liveShape.x, y: c.liveShape.y }).y"
+              :x2="getNodeScreenPos({ x: c.liveShape.w, y: c.liveShape.h }).x"
+              :y2="getNodeScreenPos({ x: c.liveShape.w, y: c.liveShape.h }).y"
+              :stroke="c.liveShape.color || c.color"
+              :stroke-width="(c.liveShape.strokeWidth || 3) * (canvas?.getZoom() || 1)"
+              stroke-linecap="round"
               class="opacity-80"
             />
           </template>

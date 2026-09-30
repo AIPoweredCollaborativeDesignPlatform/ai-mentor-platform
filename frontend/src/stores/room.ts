@@ -1601,6 +1601,44 @@ export const useRoomStore = defineStore('room', () => {
     }
   };
 
+  const toggleMessageReaction = async (messageId: string, emoji: string) => {
+    if (!currentRoom.value || !authStore.uid) return;
+    const msg = currentRoom.value.messages.find(m => m.id === messageId);
+    if (!msg) return;
+
+    const currentReactions: Record<string, string[]> = { ...(msg.reactions || {}) };
+    const userList = Array.isArray(currentReactions[emoji]) ? [...currentReactions[emoji]] : [];
+    const userIdx = userList.indexOf(authStore.uid);
+
+    if (userIdx >= 0) {
+      userList.splice(userIdx, 1);
+    } else {
+      userList.push(authStore.uid);
+    }
+
+    if (userList.length === 0) {
+      delete currentReactions[emoji];
+    } else {
+      currentReactions[emoji] = userList;
+    }
+
+    // Optimistic local update
+    msg.reactions = currentReactions;
+
+    if (db) {
+      try {
+        const msgRef = doc(db, 'rooms', currentRoom.value.roomId, 'messages', messageId);
+        await updateDoc(msgRef, {
+          reactions: currentReactions
+        });
+      } catch (e) {
+        console.warn('Failed to update reaction in Firestore:', e);
+      }
+    } else {
+      saveToStorage(currentRoom.value);
+    }
+  };
+
   let lastWhiteboardMemoryRecordedTime = 0;
 
   const recordWhiteboardSnapshotMemory = async (previewUrl: string, json: string, assetId?: string) => {
@@ -1773,6 +1811,7 @@ export const useRoomStore = defineStore('room', () => {
     updateSharedApiKeys,
     recordWhiteboardSnapshotMemory,
     retryAiMentorMessage,
-    updateRoomInfo
+    updateRoomInfo,
+    toggleMessageReaction
   };
 });

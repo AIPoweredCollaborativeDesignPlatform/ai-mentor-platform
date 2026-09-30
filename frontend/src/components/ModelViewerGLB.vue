@@ -22,6 +22,7 @@ import { useRoomStore } from '../stores/room';
 const props = defineProps<{
   assetData: any;
   message?: MessageItem;
+  isResizing?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -141,27 +142,50 @@ const initThreeScene = () => {
   let lastRenderWidth = width;
   let lastRenderHeight = height;
 
+  const updateDimensions = () => {
+    if (!container || !camera || !renderer) return;
+    const newWidth = container.clientWidth;
+    const newHeight = container.clientHeight;
+    if (newWidth > 0 && newHeight > 0) {
+      lastRenderWidth = newWidth;
+      lastRenderHeight = newHeight;
+      camera.aspect = newWidth / newHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(newWidth, newHeight, false);
+    }
+  };
+
   resizeObserver = new ResizeObserver(() => {
     if (!container || !camera || !renderer) return;
+    if (props.isResizing) {
+      // During active divider drag: DO NOT reallocate WebGL buffers. The canvas CSS style naturally stretches with ZERO flashing!
+      return;
+    }
     if (resizeRafId !== null) cancelAnimationFrame(resizeRafId);
     resizeRafId = requestAnimationFrame(() => {
       resizeRafId = null;
-      if (!container || !camera || !renderer) return;
-      const newWidth = container.clientWidth;
-      const newHeight = container.clientHeight;
-      if (newWidth > 0 && newHeight > 0) {
-        if (Math.abs(newWidth - lastRenderWidth) > 3 || Math.abs(newHeight - lastRenderHeight) > 3) {
-          lastRenderWidth = newWidth;
-          lastRenderHeight = newHeight;
-          camera.aspect = newWidth / newHeight;
-          camera.updateProjectionMatrix();
-          renderer.setSize(newWidth, newHeight, false);
-        }
-      }
+      if (props.isResizing) return;
+      updateDimensions();
     });
   });
   resizeObserver.observe(container);
 };
+
+watch(() => props.isResizing, (resizing) => {
+  if (!resizing) {
+    // Divider drag released: single clean render buffer update
+    nextTick(() => {
+      if (!canvasContainerRef.value || !camera || !renderer) return;
+      const newWidth = canvasContainerRef.value.clientWidth;
+      const newHeight = canvasContainerRef.value.clientHeight;
+      if (newWidth > 0 && newHeight > 0) {
+        camera.aspect = newWidth / newHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(newWidth, newHeight, false);
+      }
+    });
+  }
+});
 
 // Load GLB Model into Three.js Scene
 const loadGlbModel = (rawUrl: string) => {

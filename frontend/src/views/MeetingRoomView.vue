@@ -58,6 +58,8 @@ const activeWhiteboardAssetId = ref<string | null>(null);
 const currentWhiteboardJson = ref<string | undefined>(undefined);
 const whiteboardWidth = ref<number | null>(null);
 const isResizingWhiteboard = ref(false);
+const isPipDismissed = ref(false);
+const isJoiningSharedBoard = ref(false);
 
 watch(isWhiteboardOpen, (isOpen) => {
   if (isOpen) {
@@ -102,8 +104,11 @@ const startWhiteboardResize = (e: MouseEvent) => {
 
 // When broadcast/publishing stops or converts to private, auto-eject non-publisher participants
 watch(() => roomStore.currentRoom?.whiteboardActive, (isActive, wasActive) => {
-  if (isActive === true && roomStore.currentRoom?.whiteboardHostUid === authStore.uid) {
-    isLocalWhiteboardPublisher.value = true;
+  if (isActive === true) {
+    isPipDismissed.value = false;
+    if (roomStore.currentRoom?.whiteboardHostUid === authStore.uid) {
+      isLocalWhiteboardPublisher.value = true;
+    }
   }
   if (wasActive === true && isActive === false) {
     if (isLocalWhiteboardPublisher.value) {
@@ -111,8 +116,9 @@ watch(() => roomStore.currentRoom?.whiteboardActive, (isActive, wasActive) => {
       isLocalWhiteboardPublisher.value = false;
       return;
     }
-    if (isWhiteboardOpen.value) {
+    if (isJoiningSharedBoard.value && isWhiteboardOpen.value) {
       isWhiteboardOpen.value = false;
+      isJoiningSharedBoard.value = false;
       activeWhiteboardAssetId.value = null;
       currentWhiteboardJson.value = undefined;
       roomStore.pushToast('Collaboration Ended', 'The host converted the whiteboard to private.', 'info');
@@ -121,8 +127,16 @@ watch(() => roomStore.currentRoom?.whiteboardActive, (isActive, wasActive) => {
 });
 
 const handleOpenNewWhiteboard = () => {
+  isJoiningSharedBoard.value = false;
   activeWhiteboardAssetId.value = null;
   currentWhiteboardJson.value = undefined;
+  isWhiteboardOpen.value = true;
+};
+
+const handleJoinSharedWhiteboard = () => {
+  isJoiningSharedBoard.value = true;
+  activeWhiteboardAssetId.value = null;
+  currentWhiteboardJson.value = roomStore.currentRoom?.whiteboardState || undefined;
   isWhiteboardOpen.value = true;
 };
 
@@ -133,7 +147,17 @@ const handleShareWhiteboard = async (file: File) => {
 
 const handleSaveWhiteboardState = async (json: string, previewUrl: string, explicitAssetId?: string | null, isPrivateParam?: boolean) => {
   let assetId = explicitAssetId || activeWhiteboardAssetId.value;
-  const isPrivate = isPrivateParam !== undefined ? isPrivateParam : !roomStore.currentRoom?.whiteboardActive;
+  // If explicitly passed, use it; otherwise check if whiteboard is in shared mode or personal mode
+  const isPrivate = isPrivateParam !== undefined ? isPrivateParam : (!roomStore.currentRoom?.whiteboardActive || !isJoiningSharedBoard.value);
+
+  // Ownership verification: if editing another user's asset, fork into a new personal asset
+  const existingMsg = assetId ? roomStore.currentRoom?.messages.find(m => m.id === assetId) : null;
+  const isOwner = existingMsg ? (existingMsg.metadata?.creatorUid === authStore.uid || existingMsg.senderUid === authStore.uid) : true;
+  if (assetId && !isOwner) {
+    assetId = null;
+    activeWhiteboardAssetId.value = null;
+  }
+
   const meta = {
     whiteboardJson: json,
     isPrivate,
@@ -153,17 +177,23 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string, expli
       },
       metadata: meta
     });
-    await roomStore.sendCustomMessage({
-      senderUid: 'system',
-      senderName: 'System',
-      content: `${authStore.displayName || 'Participant'} updated a whiteboard in Room Album.`,
-      type: 'text'
-    });
+    // ONLY send a system chat notification if this is a PUBLIC/SHARED whiteboard!
+    if (!isPrivate) {
+      await roomStore.sendCustomMessage({
+        senderUid: 'system',
+        senderName: 'System',
+        content: `${authStore.displayName || 'Participant'} updated a shared whiteboard in Room Album.`,
+        type: 'text'
+      });
+    }
   } else {
-    // Create new whiteboard asset
+    // Create new whiteboard asset with explicit sender attribution
     const newId = await roomStore.sendCustomMessage({
+      senderUid: authStore.uid,
+      senderName: authStore.displayName || 'Participant',
+      senderAvatar: authStore.avatar || '🎨',
       type: 'whiteboard_state',
-      content: 'Whiteboard session saved',
+      content: isPrivate ? 'Personal sketchpad saved to Album' : 'Whiteboard session saved',
       fileData: {
         type: 'image',
         url: previewUrl,
@@ -235,6 +265,34 @@ const personalAlbumItems = computed(() => {
 
 const albumItems = computed(() => {
   return activeAssetTab.value === 'public' ? publicAlbumItems.value : personalAlbumItems.value;
+});
+
+// Filtered messages for the main chat stream:
+// 1. Exclude private whiteboard states (which are saved in the user's Personal Album drawer)
+// 2. Cap join notifications to at most the latest 3 to prevent chat overcrowding
+const visibleChatMessages = computed(() => {
+  if (!roomStore.currentRoom?.messages) return [];
+  const all = roomStore.currentRoom.messages;
+  
+  const joinMsgIds: string[] = [];
+  for (const m of all) {
+    if (m.senderUid === 'system' && (m.content.includes('joined') || m.content.includes('join'))) {
+      joinMsgIds.push(m.id);
+    }
+  }
+  const allowedJoinIds = new Set(joinMsgIds.slice(-3));
+
+  return all.filter(m => {
+    // Hide private whiteboard states from the public chat feed
+    if (m.type === 'whiteboard_state' && m.metadata?.isPrivate) {
+      return false;
+    }
+    // Cap join notices to latest 3
+    if (m.senderUid === 'system' && (m.content.includes('joined') || m.content.includes('join'))) {
+      return allowedJoinIds.has(m.id);
+    }
+    return true;
+  });
 });
 
 const roomId = ref(route.params.roomId as string);
@@ -732,15 +790,34 @@ const handlePaste = async (e: ClipboardEvent) => {
 
 const insertQuickTag = (tag: string) => {
   if (isMeetingClosed.value) return;
-  inputMessage.value = inputMessage.value ? `${inputMessage.value} ${tag} ` : `${tag} `;
-  adjustTextarea();
-  nextTick(() => {
-    if (textareaRef.value) {
-      textareaRef.value.focus();
-      const len = textareaRef.value.value.length;
-      textareaRef.value.setSelectionRange(len, len);
+  const el = textareaRef.value;
+  if (el) {
+    el.focus();
+    const curVal = el.value;
+    const prefix = curVal && !curVal.endsWith(' ') && !curVal.endsWith('\n') ? ' ' : '';
+    const textToInsert = `${prefix}${tag} `;
+
+    let success = false;
+    try {
+      // document.execCommand natively preserves the browser's textarea undo/redo stack (Ctrl+Z)
+      success = document.execCommand('insertText', false, textToInsert);
+    } catch {
+      success = false;
     }
-  });
+
+    if (success) {
+      inputMessage.value = el.value;
+    } else {
+      inputMessage.value = inputMessage.value ? `${inputMessage.value} ${tag} ` : `${tag} `;
+      nextTick(() => {
+        const len = el.value.length;
+        el.setSelectionRange(len, len);
+      });
+    }
+  } else {
+    inputMessage.value = inputMessage.value ? `${inputMessage.value} ${tag} ` : `${tag} `;
+  }
+  adjustTextarea();
 };
 
 const handleUnload = () => {
@@ -1066,26 +1143,35 @@ onUnmounted(() => {
 
     <!-- Whiteboard PIP Thumbnail -->
     <div
-      v-if="roomStore.currentRoom?.whiteboardActive && !isWhiteboardOpen"
-      @click="isWhiteboardOpen = true"
-      class="absolute top-16 right-4 sm:right-6 z-40 w-32 h-24 sm:w-48 sm:h-32 bg-slate-900 rounded-xl shadow-2xl border-2 border-indigo-500 overflow-hidden cursor-pointer group hover:scale-105 transition-transform"
+      v-if="roomStore.currentRoom?.whiteboardActive && !isWhiteboardOpen && !isPipDismissed"
+      class="absolute top-16 right-4 sm:right-6 z-40 w-32 h-24 sm:w-48 sm:h-32 bg-slate-900 rounded-xl shadow-2xl border-2 border-indigo-500 overflow-hidden group hover:scale-105 transition-transform"
       title="Join Whiteboard Session"
     >
-      <img
-        v-if="roomStore.currentRoom?.whiteboardThumbnail"
-        :src="roomStore.currentRoom.whiteboardThumbnail"
-        class="w-full h-full object-cover opacity-90 group-hover:scale-105 transition-transform"
-      />
-      <div class="absolute inset-0 bg-slate-900/20 flex items-center justify-center group-hover:bg-indigo-900/30 transition-colors z-10">
-        <div class="bg-indigo-600 text-white p-2 rounded-full shadow-lg group-hover:scale-110 transition-transform">
-          <Palette class="w-4 h-4 sm:w-5 sm:h-5" />
+      <div class="relative w-full h-full cursor-pointer" @click="handleJoinSharedWhiteboard">
+        <img
+          v-if="roomStore.currentRoom?.whiteboardThumbnail"
+          :src="roomStore.currentRoom.whiteboardThumbnail"
+          class="w-full h-full object-cover opacity-90 group-hover:scale-105 transition-transform"
+        />
+        <div class="absolute inset-0 bg-slate-900/20 flex items-center justify-center group-hover:bg-indigo-900/30 transition-colors z-10">
+          <div class="bg-indigo-600 text-white p-2 rounded-full shadow-lg group-hover:scale-110 transition-transform">
+            <Palette class="w-4 h-4 sm:w-5 sm:h-5" />
+          </div>
+        </div>
+        <!-- Mini text overlay -->
+        <div class="absolute bottom-0 left-0 right-0 bg-indigo-950/80 px-2 py-1 text-[9px] sm:text-[10px] text-white font-medium truncate flex justify-between items-center z-10">
+          <span class="truncate">{{ roomStore.currentRoom?.whiteboardHostName }}'s Board</span>
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0"></span>
         </div>
       </div>
-      <!-- Mini text overlay -->
-      <div class="absolute bottom-0 left-0 right-0 bg-indigo-950/80 px-2 py-1 text-[9px] sm:text-[10px] text-white font-medium truncate flex justify-between items-center z-10">
-        <span>{{ roomStore.currentRoom?.whiteboardHostName }}'s Board</span>
-        <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-      </div>
+      <!-- Dismiss button -->
+      <button
+        @click.stop="isPipDismissed = true"
+        class="absolute top-1.5 right-1.5 z-20 w-5 h-5 rounded-full bg-slate-950/80 hover:bg-rose-600 text-slate-300 hover:text-white flex items-center justify-center transition shadow-md cursor-pointer"
+        title="Dismiss thumbnail"
+      >
+        <X class="w-3 h-3" />
+      </button>
     </div>
 
     <div class="flex-1 flex overflow-hidden w-full relative" :class="{ 'select-none': isResizingWhiteboard }">
@@ -1106,7 +1192,7 @@ onUnmounted(() => {
     >
       <div class="max-w-5xl mx-auto w-full p-3 sm:p-5 space-y-3">
         <div
-          v-for="msg in roomStore.currentRoom?.messages"
+          v-for="msg in visibleChatMessages"
           :key="msg.id"
           :id="'msg_' + msg.id"
           class="transition-colors duration-500 rounded-xl"
@@ -1323,6 +1409,7 @@ onUnmounted(() => {
                 v-if="msg.type === 'ai_asset' && msg.assetType === 'mesh_3d'"
                 :assetData="msg.assetPayload"
                 :message="msg"
+                :isResizing="isResizingWhiteboard"
                 @refine="handleRefineModel"
               />
 
@@ -1689,7 +1776,8 @@ onUnmounted(() => {
           ref="whiteboardRef"
           :initialJson="currentWhiteboardJson"
           :activeAssetId="activeWhiteboardAssetId"
-          @close="isWhiteboardOpen = false; activeWhiteboardAssetId = null; currentWhiteboardJson = undefined;"
+          :isSharedSession="isJoiningSharedBoard || roomStore.currentRoom?.whiteboardHostUid === authStore.uid"
+          @close="isWhiteboardOpen = false; isJoiningSharedBoard = false; activeWhiteboardAssetId = null; currentWhiteboardJson = undefined;"
           @share="handleShareWhiteboard"
           @save-state="handleSaveWhiteboardState"
         />

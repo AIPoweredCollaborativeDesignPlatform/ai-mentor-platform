@@ -1548,7 +1548,7 @@ export const useRoomStore = defineStore('room', () => {
       await sendCustomMessage({
         senderUid: 'system',
         senderName: 'System',
-        content: `${hostName} converted the whiteboard to private. Live collaboration ended.`,
+        content: `${hostName} converted the whiteboard to private. Team session ended.`,
         type: 'text'
       });
     } catch (e) {

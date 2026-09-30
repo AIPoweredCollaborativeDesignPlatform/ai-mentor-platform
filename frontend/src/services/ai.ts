@@ -164,10 +164,14 @@ Role & Capabilities:
        c) Lighting & Atmospheric Mood (shadows, illumination, color temperature, tone)
        d) Materials & Surface Textures (tactile finishes, engineered composites, textiles, matte/gloss textures)
        e) Visual Style & Brand Culture (typography, graphics, aesthetic ethos, cultural references)
-     - Provide keywords, color palette (hex + name), materials (name + feature), and 3-4 diverse concept images covering these distinct facets.
+     - Provide keywords, color palette (hex + name), materials (name + feature), and 4 diverse concept images:
+       * Card 1 MUST ALWAYS be the "Hero Concept" (category: "Hero Concept", isAiGenerated: true) — an inspiring master visual concept with a dedicated, photorealistic prompt (e.g. "photorealistic industrial design concept of ..., octane render, 8k, studio lighting, hyper-detailed").
+       * Card 2: User Persona / Context of Use or Lifestyle & Activity (authentic real-world user or scenario, e.g. "engineer in field workshop").
+       * Card 3: Material, Texture & Finish (macro close-up texture, e.g. "weathered aircraft fuselage metal plates with rivets, industrial macro texture").
+       * Card 4: Atmospheric Lighting, Palette or Brand Culture (cinematic volumetric lighting or brand aesthetic).
      - Image prompts MUST be concrete, vivid English visual descriptions specifically matching the category and title (e.g., if title is "Battle-worn Fuselage", prompt must strictly describe "scratched battle-worn aircraft metal fuselage plates, weathered rivets, industrial macro texture", NEVER a human face; if title is "Nomadic Engineer", prompt must describe "hardware engineer working on laptop at portable field workbench with tools", NEVER abstract bubbles).
      - Each image must include:
-       { "title": string, "category": "Persona / Context" | "Activity / Lifestyle" | "Material & Texture" | "Color & Lighting", "prompt": string, "sourceUrl": string, "url": "https://image.pollinations.ai/prompt/" + encodeURIComponent(prompt) + "?width=600&height=400&nologo=true" }
+       { "title": string, "category": "Hero Concept" | "Persona / Context" | "Activity / Lifestyle" | "Material & Texture" | "Color & Lighting", "isAiGenerated": boolean, "prompt": string, "sourceUrl": string, "url": "https://image.pollinations.ai/prompt/" + encodeURIComponent(prompt) + "?width=600&height=450&nologo=true" }
 
 Return ONLY a valid JSON object matching this schema:
 {
@@ -176,7 +180,7 @@ Return ONLY a valid JSON object matching this schema:
   "assetType": "parametric_3d" | "moodboard" | "summary" | "fact_check" | null,
   "assetData": {
     // For parametric_3d: { "title": string, "meshType": "group", "components": [ { "shape": "box"|"cylinder"|"sphere"|"torus", "dimensions": object, "position": object, "material": { "color": string, "roughness": number, "metalness": number } } ] }
-    // For moodboard: { "title": string, "description": string, "keywords": string[], "images": [ { "title": string, "category": string, "prompt": string, "url": string } ], "palette": [ { "hex": string, "name": string } ], "materials": [ { "name": string, "feature": string } ] }
+    // For moodboard: { "title": string, "description": string, "keywords": string[], "images": [ { "title": string, "category": string, "isAiGenerated": boolean, "prompt": string, "sourceUrl": string, "url": string } ], "palette": [ { "hex": string, "name": string } ], "materials": [ { "name": string, "feature": string } ] }
     // For summary: { "title": string, "content": string (Markdown formatted with ## Objectives, ## Key Ideas, ## Consensus, ## Action Items) }
     // For fact_check: { "claim": string, "verdict": string, "details": string, "references": string[] }
   }

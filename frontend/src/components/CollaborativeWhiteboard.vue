@@ -16,17 +16,22 @@ if ((fabric as any).Object?.prototype) {
   (fabric as any).Object.prototype.objectCaching = false;
 }
 import {
-  X, Pencil, Image as ImageIcon, Undo2, Redo2, Trash2, Maximize, Minimize, Check, Loader2, Sparkles, Send, Radio, Settings2, MousePointer2, Type, Square, Circle, Triangle, Minus, ArrowUpRight, Group, Ungroup, BringToFront, SendToBack, MoveUp, MoveDown, Copy, Scissors, ClipboardPaste, AlertTriangle, AlertCircle, RefreshCw, ChevronDown, ChevronUp, StickyNote, MoreHorizontal, Lock, Unlock, HelpCircle, Waypoints, Globe, MicOff
+  X, Pencil, Image as ImageIcon, Undo2, Redo2, Trash2, Maximize, Minimize, Check, Loader2, Sparkles, Send, Radio, Settings2, MousePointer2, Type, Square, Circle, Triangle, Minus, ArrowUpRight, Group, Ungroup, BringToFront, SendToBack, MoveUp, MoveDown, Copy, Scissors, ClipboardPaste, AlertTriangle, AlertCircle, RefreshCw, ChevronDown, ChevronUp, StickyNote, MoreHorizontal, Lock, Unlock, HelpCircle, Waypoints, Globe, MicOff, Save
 } from 'lucide-vue-next';
 import { db } from '../firebase/config';
 import { doc, collection, onSnapshot, setDoc, deleteDoc, type Unsubscribe } from 'firebase/firestore';
 import type { CursorData } from '../types';
 import { generateSvgForWhiteboard } from '../services/ai';
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   initialJson?: string;
   activeAssetId?: string | null;
-}>();
+  isSharedSession?: boolean;
+}>(), {
+  isSharedSession: true
+});
+
+const isCollabActive = computed(() => !!roomStore.currentRoom?.whiteboardActive && props.isSharedSession);
 
 const emit = defineEmits<{
   (e: 'close'): void;
@@ -168,18 +173,20 @@ const redoStack = ref<string[]>([]);
 interface UserUndoItem {
   targetId: string;
   authorUid: string;
-  objectJson: any;
+  objectJson?: any;
+  beforeProps?: any;
+  afterProps?: any;
 }
 
 interface UserUndoAction {
-  type: 'add' | 'remove';
+  type: 'add' | 'remove' | 'modify';
   items: UserUndoItem[];
 }
 
 const localUserUndoStack = ref<UserUndoAction[]>([]);
 const localUserRedoStack = ref<UserUndoAction[]>([]);
-const canUndo = computed(() => localUserUndoStack.value.length > 0 || (!roomStore.currentRoom?.whiteboardActive && historyStack.value.length > 1));
-const canRedo = computed(() => localUserRedoStack.value.length > 0 || (!roomStore.currentRoom?.whiteboardActive && redoStack.value.length > 0));
+const canUndo = computed(() => isCollabActive.value ? localUserUndoStack.value.length > 0 : historyStack.value.length > 1);
+const canRedo = computed(() => isCollabActive.value ? localUserRedoStack.value.length > 0 : redoStack.value.length > 0);
 
 // Selection & Context Menu state
 let clipboard: any = null;
@@ -1929,14 +1936,19 @@ const initFabric = () => {
         });
       }
 
-      // Tag author and unique ID for local user objects and push to user undo stack
+      // Guarantee unique ID and author for every object added to canvas
+      if (!target.id && !target.arrowId) {
+        target.id = 'obj_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
+      }
+      if (!target.authorUid && authStore.uid) {
+        target.authorUid = authStore.uid;
+      }
+      if (!target.authorName && authStore.displayName) {
+        target.authorName = authStore.displayName;
+      }
+
+      // Tag author and push to user undo stack
       if (!isInternalChange) {
-        if (!target.authorUid) {
-          target.authorUid = authStore.uid;
-        }
-        if (!target.id) {
-          target.id = target.arrowId || ('obj_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9));
-        }
         // Don't push temporary preview objects to undo stack
         if (target !== liveArrowPreview && !target._isPreview && target !== drawingObject) {
           localUserUndoStack.value.push({
@@ -1950,6 +1962,27 @@ const initFabric = () => {
           if (localUserUndoStack.value.length > 50) localUserUndoStack.value.shift();
           localUserRedoStack.value = [];
         }
+      }
+    }
+  });
+
+  // Track object transformation before modification for precise undo/redo
+  let objectTransformBefore: { targetId: string; props: any } | null = null;
+  canvas.on('before:transform', (e: any) => {
+    const target = e.transform?.target || canvas?.getActiveObject();
+    if (target && !isInternalChange) {
+      const id = target.id || target.arrowId;
+      if (id) {
+        objectTransformBefore = {
+          targetId: id,
+          props: {
+            left: target.left,
+            top: target.top,
+            scaleX: target.scaleX,
+            scaleY: target.scaleY,
+            angle: target.angle
+          }
+        };
       }
     }
   });
@@ -2086,6 +2119,36 @@ const initFabric = () => {
     }
 
     if (!isInternalChange) {
+      if (objectTransformBefore && obj) {
+        const id = obj.id || obj.arrowId;
+        if (id === objectTransformBefore.targetId) {
+          const afterProps = {
+            left: obj.left,
+            top: obj.top,
+            scaleX: obj.scaleX,
+            scaleY: obj.scaleY,
+            angle: obj.angle
+          };
+          if (afterProps.left !== objectTransformBefore.props.left ||
+              afterProps.top !== objectTransformBefore.props.top ||
+              afterProps.scaleX !== objectTransformBefore.props.scaleX ||
+              afterProps.scaleY !== objectTransformBefore.props.scaleY ||
+              afterProps.angle !== objectTransformBefore.props.angle) {
+            localUserUndoStack.value.push({
+              type: 'modify',
+              items: [{
+                targetId: id,
+                authorUid: authStore.uid,
+                beforeProps: objectTransformBefore.props,
+                afterProps
+              }]
+            });
+            if (localUserUndoStack.value.length > 50) localUserUndoStack.value.shift();
+            localUserRedoStack.value = [];
+          }
+        }
+        objectTransformBefore = null;
+      }
       saveHistoryState();
       syncToFirebase();
     }
@@ -2964,7 +3027,7 @@ const initFabric = () => {
     redoStack.value = [];
     loadFromFirebase(props.initialJson);
     hasUnsavedChanges.value = false;
-  } else if (roomStore.currentRoom?.whiteboardActive && roomStore.currentRoom?.whiteboardState) {
+  } else if (isCollabActive.value && roomStore.currentRoom?.whiteboardState) {
     historyStack.value = [];
     redoStack.value = [];
     loadFromFirebase(roomStore.currentRoom.whiteboardState);
@@ -3232,7 +3295,7 @@ const saveHistoryState = () => {
 };
 
 const syncToFirebase = () => {
-  if (isInternalChange || !canvas || !roomStore.currentRoom?.whiteboardActive) return;
+  if (isInternalChange || !canvas || !isCollabActive.value) return;
   const json = getSerializedCanvasJson();
   lastSyncedJson = json;
   const thumbnail = getCanvasSnapshot(0.3);
@@ -3289,7 +3352,7 @@ const loadFromFirebase = async (json: string) => {
 };
 
 watch(() => roomStore.currentRoom?.whiteboardState, (newState, oldState) => {
-  if (newState && newState !== oldState && roomStore.currentRoom?.whiteboardActive) {
+  if (newState && newState !== oldState && isCollabActive.value) {
     // Ignore echo of local changes
     if (newState === lastSyncedJson) return;
 
@@ -3669,8 +3732,15 @@ const toggleLockSelected = () => {
 };
 
 // Quick save action (Ctrl+S)
+const isRecentlySaved = ref(false);
+let saveFeedbackTimeout: any = null;
 const handleQuickSave = () => {
   triggerAutoSaveAsAsset();
+  isRecentlySaved.value = true;
+  if (saveFeedbackTimeout) clearTimeout(saveFeedbackTimeout);
+  saveFeedbackTimeout = setTimeout(() => {
+    isRecentlySaved.value = false;
+  }, 2500);
   displayToast('Whiteboard saved to Room Album');
 };
 
@@ -3827,7 +3897,7 @@ const deleteSelected = () => {
       const removedItems: UserUndoItem[] = [];
       deletable.forEach((obj: any) => {
         if (obj.isEditing && obj.exitEditing) obj.exitEditing();
-        if (obj.authorUid === authStore.uid || !roomStore.currentRoom?.whiteboardActive) {
+        if (obj.authorUid === authStore.uid || !isCollabActive.value) {
           removedItems.push({
             targetId: obj.id || obj.arrowId || '',
             authorUid: obj.authorUid || authStore.uid,
@@ -3863,7 +3933,7 @@ const deleteSelected = () => {
       displayToast('Locked group or object inside cannot be deleted (Unlock with Ctrl+L first)');
       return;
     }
-    if (activeObj.authorUid === authStore.uid || !roomStore.currentRoom?.whiteboardActive) {
+    if (activeObj.authorUid === authStore.uid || !isCollabActive.value) {
       localUserUndoStack.value.push({
         type: 'remove',
         items: [{
@@ -3885,7 +3955,7 @@ const deleteSelected = () => {
   }
 
   // 4. Single objects (arrow, sticky note, path, shape, etc.)
-  if (activeObj.authorUid === authStore.uid || !roomStore.currentRoom?.whiteboardActive) {
+  if (activeObj.authorUid === authStore.uid || !isCollabActive.value) {
     localUserUndoStack.value.push({
       type: 'remove',
       items: [{
@@ -4035,7 +4105,30 @@ const undo = async () => {
     isolatedItems = [];
   }
 
-  // 1. User-scoped undo (reverts only the local user's own objects)
+  // 1. Personal mode: Deterministic chronological snapshot undo
+  if (!isCollabActive.value) {
+    if (historyStack.value.length > 1) {
+      isInternalChange = true;
+      try {
+        const currentState = historyStack.value.pop()!;
+        redoStack.value.push(currentState);
+        const previousState = historyStack.value[historyStack.value.length - 1];
+        await canvas.loadFromJSON(previousState);
+        rehydrateCanvasObjects();
+        syncNodeEditingStateAfterReload();
+        canvas.requestRenderAll();
+        updateSelectionState();
+        displayToast('Undo (Ctrl+Z)');
+      } finally {
+        isInternalChange = false;
+      }
+    } else {
+      displayToast('Nothing to undo');
+    }
+    return;
+  }
+
+  // 2. Collaborative mode: User-scoped action undo (add, remove, modify)
   if (localUserUndoStack.value.length > 0) {
     const action = localUserUndoStack.value.pop()!;
     isInternalChange = true;
@@ -4075,6 +4168,24 @@ const undo = async () => {
           localUserRedoStack.value.push({ type: 'add', items: redoItems });
         }
         rehydrateCanvasObjects();
+      } else if (action.type === 'modify') {
+        const redoItems: UserUndoItem[] = [];
+        for (const item of action.items) {
+          const found = canvas.getObjects().find((o: any) => (o.id && o.id === item.targetId) || (o.arrowId && o.arrowId === item.targetId));
+          if (found && item.beforeProps) {
+            redoItems.push({
+              targetId: item.targetId,
+              authorUid: item.authorUid,
+              beforeProps: item.afterProps,
+              afterProps: item.beforeProps
+            });
+            found.set(item.beforeProps);
+            found.setCoords();
+          }
+        }
+        if (redoItems.length > 0) {
+          localUserRedoStack.value.push({ type: 'modify', items: redoItems });
+        }
       }
       canvas.requestRenderAll();
       syncToFirebase();
@@ -4084,25 +4195,6 @@ const undo = async () => {
     } finally {
       isInternalChange = false;
     }
-  }
-
-  // 2. Fallback to snapshot undo ONLY if not in active collaborative session
-  if (!roomStore.currentRoom?.whiteboardActive && historyStack.value.length > 1) {
-    isInternalChange = true;
-    try {
-      const currentState = historyStack.value.pop()!;
-      redoStack.value.push(currentState);
-      const previousState = historyStack.value[historyStack.value.length - 1];
-      await canvas.loadFromJSON(previousState);
-      rehydrateCanvasObjects();
-      syncNodeEditingStateAfterReload();
-      canvas.requestRenderAll();
-      updateSelectionState();
-      displayToast('Undo (Ctrl+Z)');
-    } finally {
-      isInternalChange = false;
-    }
-    return;
   }
 
   displayToast('Nothing to undo');
@@ -4117,7 +4209,29 @@ const redo = async () => {
     isolatedItems = [];
   }
 
-  // 1. User-scoped redo
+  // 1. Personal mode: Deterministic chronological snapshot redo
+  if (!isCollabActive.value) {
+    if (redoStack.value.length > 0) {
+      isInternalChange = true;
+      try {
+        const nextState = redoStack.value.pop()!;
+        historyStack.value.push(nextState);
+        await canvas.loadFromJSON(nextState);
+        rehydrateCanvasObjects();
+        syncNodeEditingStateAfterReload();
+        canvas.requestRenderAll();
+        updateSelectionState();
+        displayToast('Redo (Ctrl+Y)');
+      } finally {
+        isInternalChange = false;
+      }
+    } else {
+      displayToast('Nothing to redo');
+    }
+    return;
+  }
+
+  // 2. Collaborative mode: User-scoped action redo (remove, add, modify)
   if (localUserRedoStack.value.length > 0) {
     const action = localUserRedoStack.value.pop()!;
     isInternalChange = true;
@@ -4157,6 +4271,24 @@ const redo = async () => {
           localUserUndoStack.value.push({ type: 'remove', items: undoItems });
         }
         rehydrateCanvasObjects();
+      } else if (action.type === 'modify') {
+        const undoItems: UserUndoItem[] = [];
+        for (const item of action.items) {
+          const found = canvas.getObjects().find((o: any) => (o.id && o.id === item.targetId) || (o.arrowId && o.arrowId === item.targetId));
+          if (found && item.beforeProps) {
+            undoItems.push({
+              targetId: item.targetId,
+              authorUid: item.authorUid,
+              beforeProps: item.afterProps,
+              afterProps: item.beforeProps
+            });
+            found.set(item.beforeProps);
+            found.setCoords();
+          }
+        }
+        if (undoItems.length > 0) {
+          localUserUndoStack.value.push({ type: 'modify', items: undoItems });
+        }
       }
       canvas.requestRenderAll();
       syncToFirebase();
@@ -4168,58 +4300,80 @@ const redo = async () => {
     }
   }
 
-  // 2. Fallback to snapshot redo ONLY if not in active collaborative session
-  if (!roomStore.currentRoom?.whiteboardActive && redoStack.value.length > 0) {
-    isInternalChange = true;
-    try {
-      const nextState = redoStack.value.pop()!;
-      historyStack.value.push(nextState);
-      await canvas.loadFromJSON(nextState);
-      rehydrateCanvasObjects();
-      syncNodeEditingStateAfterReload();
-      canvas.requestRenderAll();
-      updateSelectionState();
-      displayToast('Redo (Ctrl+Y)');
-    } finally {
-      isInternalChange = false;
-    }
-    return;
-  }
-
   displayToast('Nothing to redo');
 };
 
-const handleImageUpload = (e: Event) => {
+const compressImage = (file: File, maxDim = 1200, quality = 0.8): Promise<string> => {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const src = event.target?.result as string;
+      const img = new Image();
+      img.onload = () => {
+        let w = img.width;
+        let h = img.height;
+        if (w > maxDim || h > maxDim) {
+          if (w > h) {
+            h = Math.round((h * maxDim) / w);
+            w = maxDim;
+          } else {
+            w = Math.round((w * maxDim) / h);
+            h = maxDim;
+          }
+        }
+        const cvs = document.createElement('canvas');
+        cvs.width = w;
+        cvs.height = h;
+        const ctx = cvs.getContext('2d');
+        if (!ctx) {
+          resolve(src);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(cvs.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = () => resolve(src);
+      img.src = src;
+    };
+    reader.onerror = () => resolve('');
+    reader.readAsDataURL(file);
+  });
+};
+
+const handleImageUpload = async (e: Event) => {
   const target = e.target as HTMLInputElement;
   const file = target.files?.[0];
   if (!file || !canvas) return;
 
-  const reader = new FileReader();
-  reader.onload = (event) => {
-    const imgUrl = event.target?.result as string;
-    fabric.Image.fromURL(imgUrl).then(img => {
-      if (img.width && img.width > 800) {
-        img.scaleToWidth(800);
-      }
-      if (canvas && wrapperRef.value) {
-        const center = canvas.getVpCenter();
-        img.set({
-          left: center.x,
-          top: center.y,
-          originX: 'center',
-          originY: 'center',
-          perPixelTargetFind: true
-        });
-        canvas.add(img);
-        canvas.setActiveObject(img);
-        saveHistoryState();
-        syncToFirebase();
-        updateSelectionState();
-        toggleMode(false);
-      }
-    });
-  };
-  reader.readAsDataURL(file);
+  const compressedDataUrl = await compressImage(file);
+  if (!compressedDataUrl) return;
+
+  fabric.Image.fromURL(compressedDataUrl).then(img => {
+    if (img.width && img.width > 800) {
+      img.scaleToWidth(800);
+    }
+    if (canvas && wrapperRef.value) {
+      const center = canvas.getVpCenter();
+      const objId = 'img_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
+      img.set({
+        left: center.x,
+        top: center.y,
+        originX: 'center',
+        originY: 'center',
+        perPixelTargetFind: true
+      });
+      (img as any).id = objId;
+      (img as any).authorUid = authStore.uid;
+      (img as any).authorName = authStore.displayName || 'Participant';
+
+      canvas.add(img);
+      canvas.setActiveObject(img);
+      saveHistoryState();
+      syncToFirebase();
+      updateSelectionState();
+      toggleMode(false);
+    }
+  });
   target.value = '';
 };
 
@@ -4303,17 +4457,19 @@ const handlePublish = () => {
   const json = getSerializedCanvasJson();
   const thumbnail = getCanvasSnapshot(0.3);
   roomStore.startWhiteboardSession(json, thumbnail);
-  displayToast('Whiteboard published for live collaboration');
+  displayToast('Whiteboard published for team collaboration');
 };
 
 const handleConfirmMakePrivate = async () => {
   if (!canvas) return;
+  // Optimistically close modal immediately without waiting for Firebase latency
+  showPrivateConfirmModal.value = false;
+  showPublishMenu.value = false;
+  displayToast('Board converted to private. Team session ended.');
+
   isConvertingToPrivate.value = true;
   try {
     await roomStore.makeWhiteboardPrivate();
-    showPrivateConfirmModal.value = false;
-    showPublishMenu.value = false;
-    displayToast('Board converted to private. Other members have exited.');
   } catch (e) {
     console.error('Failed to make private:', e);
   } finally {
@@ -4322,7 +4478,7 @@ const handleConfirmMakePrivate = async () => {
 };
 
 const handleCloseRequest = () => {
-  if (roomStore.currentRoom?.whiteboardActive) {
+  if (isCollabActive.value) {
     // When closing active whiteboard, save state to room assets so anyone can open & edit it!
     triggerAutoSaveAsAsset();
     emit('close');
@@ -4360,25 +4516,25 @@ const handleKeydown = (e: KeyboardEvent) => {
     return;
   }
 
-  // Check if keystroke target is outside the whiteboard container (e.g. Chat input, message list)
-  const isInsideWhiteboard = rootRef.value ? rootRef.value.contains(e.target as Node) : true;
-  if (!isInsideWhiteboard) {
-    // Keystroke originated in chat, sidebar, or other page elements — DO NOT intercept
-    return;
+  // Check if keystroke target is an external input outside the whiteboard container (e.g. Chat input, external search)
+  const activeEl = document.activeElement as HTMLElement | null;
+  const isExternalInput = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA') && !rootRef.value?.contains(activeEl);
+  if (isExternalInput) return;
+
+  const targetEl = e.target as HTMLElement | null;
+  const targetTag = targetEl?.tagName?.toLowerCase();
+  const isInputTarget = (targetTag === 'input' || targetTag === 'textarea') && !targetEl?.classList?.contains('fabric-canvas-textarea') && !rootRef.value?.contains(targetEl);
+  if (isInputTarget) return;
+
+  // If user has highlighted text on screen outside the whiteboard (e.g. In chat), let system copy naturally
+  const selection = window.getSelection();
+  if (selection && selection.toString().trim() && !rootRef.value?.contains(selection.anchorNode)) {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
+      return;
+    }
   }
 
   const activeObj = canvas?.getActiveObject() as any;
-  const targetTag = (e.target as HTMLElement)?.tagName?.toLowerCase();
-  const isInputTarget = targetTag === 'input' || (targetTag === 'textarea' && !(e.target as HTMLElement)?.classList.contains('fabric-canvas-textarea'));
-
-  // If focused in external app input elements (e.g. AI prompt), ignore canvas shortcuts
-  if (isInputTarget) return;
-
-  // If user has highlighted text on screen, let system copy naturally
-  const hasSelectedText = !!window.getSelection()?.toString()?.trim();
-  if (hasSelectedText && (e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
-    return;
-  }
 
   // 1. ESC: Exit sticky/text editing, Arrow Node Editing, or Group Isolation Mode
   if (e.key === 'Escape') {
@@ -4819,10 +4975,10 @@ onUnmounted(() => {
       class="absolute top-4 left-4 z-10 flex items-center gap-2 transition-opacity duration-200"
       :class="{ 'opacity-15': isHoveringSend }"
     >
-      <div v-if="roomStore.currentRoom?.whiteboardActive" class="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-emerald-600/90 shadow-sm border border-emerald-400 flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-white">
+      <div v-if="isCollabActive" class="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-emerald-600/90 shadow-sm border border-emerald-400 flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-white">
         <span class="w-2 h-2 rounded-full bg-emerald-200 animate-pulse"></span>
-        <span v-if="whiteboardContainerWidth >= 640">{{ roomStore.currentRoom?.whiteboardHostName }} Live Collaboration</span>
-        <span v-else>Live</span>
+        <span v-if="whiteboardContainerWidth >= 640">{{ roomStore.currentRoom?.whiteboardHostName }} Shared Canvas</span>
+        <span v-else>Shared</span>
       </div>
       <div v-else class="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-white/90 shadow-sm border border-slate-200 flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-slate-700">
         <Sparkles class="w-3.5 h-3.5 text-sky-500" />
@@ -4889,7 +5045,7 @@ onUnmounted(() => {
       :class="{ 'opacity-15': isHoveringSend }"
     >
       <!-- Publisher Settings Dropdown Menu (Protected from accidental clicks) -->
-      <div v-if="roomStore.currentRoom?.whiteboardActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid" class="relative">
+      <div v-if="isCollabActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid" class="relative">
         <button
           @click="showPublishMenu = !showPublishMenu"
           class="px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-xl bg-white/90 hover:bg-white text-slate-700 hover:text-indigo-600 shadow-sm transition cursor-pointer flex items-center gap-1 text-xs font-medium"
@@ -4912,12 +5068,26 @@ onUnmounted(() => {
           </button>
         </div>
       </div>
+
+      <!-- Explicit Save Button -->
       <button
-        v-if="!roomStore.currentRoom?.whiteboardActive"
+        @click="handleQuickSave"
+        class="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-xl bg-white/90 hover:bg-white text-slate-700 hover:text-indigo-600 shadow-sm transition text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+        :class="{ 'bg-emerald-50 text-emerald-700 border border-emerald-300': isRecentlySaved }"
+        title="Save whiteboard to Room Album (Ctrl+S)"
+      >
+        <Check v-if="isRecentlySaved" class="w-3.5 h-3.5 text-emerald-600" />
+        <Save v-else class="w-3.5 h-3.5 text-indigo-500" />
+        <span v-if="whiteboardContainerWidth >= 640">{{ isRecentlySaved ? 'Saved' : 'Save Board' }}</span>
+        <span v-else>{{ isRecentlySaved ? 'Saved' : 'Save' }}</span>
+      </button>
+
+      <button
+        v-if="!isCollabActive"
         @click="handlePublish"
         :disabled="isCurrentUserMuted"
         class="px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm transition text-xs font-semibold flex items-center gap-1 cursor-pointer disabled:opacity-50"
-        title="Publish as public whiteboard for real-time collaboration"
+        title="Publish as shared canvas for team collaboration"
       >
         <Globe class="w-3.5 h-3.5" />
         <span v-if="whiteboardContainerWidth >= 640">Publish Board</span>
@@ -5273,7 +5443,7 @@ onUnmounted(() => {
 
 
     <div
-      class="absolute bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 sm:gap-2 transition-all duration-300 w-max max-w-[96%] overflow-x-auto scrollbar-none flex-nowrap"
+      class="absolute bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1.5 sm:gap-2 transition-all duration-300 w-max max-w-[96%] overflow-visible flex-nowrap"
       :class="[
         isStackedToolbar ? 'flex-col items-center' : 'flex-row',
         { 'opacity-40 pointer-events-none select-none': isCurrentUserMuted }
@@ -5332,7 +5502,7 @@ onUnmounted(() => {
               <Pencil class="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </button>
             
-            <div v-if="isBrushMenuOpen && isDrawingMode" class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-white rounded-xl shadow-xl border border-slate-200 p-3 flex flex-col gap-3 min-w-[140px] z-30">
+            <div v-if="isBrushMenuOpen && isDrawingMode" class="absolute bottom-full mb-3 left-1/2 -translate-x-1/2 bg-white rounded-xl shadow-2xl border border-slate-200 p-3 flex flex-col gap-3 min-w-[140px] z-50 animate-in fade-in zoom-in-95">
               <div class="flex items-center justify-between gap-1">
                 <button v-for="size in strokeSizes" :key="size.value" @click="strokeWidth = size.value; isBrushMenuOpen = false" class="px-2 py-1 rounded-lg text-[10px] font-bold transition flex-1 cursor-pointer" :class="strokeWidth === size.value ? 'bg-indigo-100 text-indigo-700' : 'text-slate-400 hover:text-slate-600 bg-slate-50'">
                   {{ size.label }}
@@ -5365,7 +5535,7 @@ onUnmounted(() => {
             </button>
             <div
               v-if="isStickyMenuOpen"
-              class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-white rounded-xl shadow-xl border border-slate-200 p-2 flex items-center gap-1.5 z-30 min-w-max"
+              class="absolute bottom-full mb-3 left-1/2 -translate-x-1/2 bg-white rounded-xl shadow-2xl border border-slate-200 p-2 flex items-center gap-1.5 z-50 min-w-max animate-in fade-in zoom-in-95"
             >
               <button
                 v-for="color in stickyColors"
@@ -5401,7 +5571,7 @@ onUnmounted(() => {
               </button>
               <div
                 v-if="isColorPickerOpen"
-                class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-white rounded-xl shadow-xl border border-slate-200 p-2 flex items-center gap-1.5 z-30 min-w-max animate-in fade-in zoom-in-95"
+                class="absolute bottom-full mb-3 left-1/2 -translate-x-1/2 bg-white rounded-xl shadow-2xl border border-slate-200 p-2 flex items-center gap-1.5 z-50 min-w-max animate-in fade-in zoom-in-95"
               >
                 <button
                   v-for="color in colors"
@@ -5422,6 +5592,7 @@ onUnmounted(() => {
             <button @click="fileInputRef?.click()" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="isNarrowToolbar ? 'p-1' : 'p-1.5'" title="Add Image"><ImageIcon class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
             <button @click="undo" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="[{'opacity-50 cursor-not-allowed': !canUndo}, isNarrowToolbar ? 'p-1' : 'p-1.5']" title="Undo (Ctrl+Z)" :disabled="!canUndo"><Undo2 class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
             <button @click="redo" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="[{'opacity-50 cursor-not-allowed': !canRedo}, isNarrowToolbar ? 'p-1' : 'p-1.5']" title="Redo (Ctrl+Y / Ctrl+Shift+Z)" :disabled="!canRedo"><Redo2 class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
+            <button @click="handleQuickSave" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="[isRecentlySaved ? 'text-emerald-600 bg-emerald-50' : '', isNarrowToolbar ? 'p-1' : 'p-1.5']" title="Save whiteboard (Ctrl+S)"><Save class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
             <button @click="deleteSelected" class="rounded-xl hover:bg-rose-100 text-rose-500 transition cursor-pointer" :class="isNarrowToolbar ? 'p-1' : 'p-1.5'" title="Delete Selected (Del)"><Trash2 class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
           </div>
         </div>

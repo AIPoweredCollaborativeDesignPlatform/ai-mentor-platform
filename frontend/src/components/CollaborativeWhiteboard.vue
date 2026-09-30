@@ -60,7 +60,9 @@ const CUSTOM_PROPS = [
   'lockScalingY',
   'hasControls',
   'isClosedLoop',
-  'padding'
+  'padding',
+  'authorUid',
+  'id'
 ];
 
 const hasUnsavedChanges = ref(false);
@@ -161,6 +163,23 @@ const currentTool = ref('draw'); // 'select', 'draw', 'text', 'sticky', 'rect', 
 let isInternalChange = false;
 const historyStack = ref<string[]>([]);
 const redoStack = ref<string[]>([]);
+
+// User-scoped Undo/Redo tracking: strictly reverts local user's own actions
+interface UserUndoItem {
+  targetId: string;
+  authorUid: string;
+  objectJson: any;
+}
+
+interface UserUndoAction {
+  type: 'add' | 'remove';
+  items: UserUndoItem[];
+}
+
+const localUserUndoStack = ref<UserUndoAction[]>([]);
+const localUserRedoStack = ref<UserUndoAction[]>([]);
+const canUndo = computed(() => localUserUndoStack.value.length > 0 || (!roomStore.currentRoom?.whiteboardActive && historyStack.value.length > 1));
+const canRedo = computed(() => localUserRedoStack.value.length > 0 || (!roomStore.currentRoom?.whiteboardActive && redoStack.value.length > 0));
 
 // Selection & Context Menu state
 let clipboard: any = null;
@@ -942,11 +961,25 @@ let quickShapeBaseScaleY = 1;
 let lastSyncedJson = '';
 let pendingRemoteState: string | null = null;
 
-// Live Collaborative Cursors
+// Live Collaborative Cursors & Real-Time Smoothing (60fps RAF lerp)
+interface SmoothCursor {
+  uid: string;
+  name: string;
+  avatar: string;
+  color: string;
+  currentX: number;
+  currentY: number;
+  targetX: number;
+  targetY: number;
+  liveStroke?: { points: { x: number; y: number }[]; color: string; width: number; tool: string } | null;
+}
+
 const remoteCursors = ref<Record<string, CursorData>>({});
+const smoothedCursors = ref<Record<string, SmoothCursor>>({});
 let unsubCursors: Unsubscribe | null = null;
 let lastCursorBroadcast = 0;
 let lastCursorPos = { x: -9999, y: -9999 };
+let cursorLerpRafId: number | null = null;
 
 const CURSOR_COLORS = [
   '#6366f1', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6',
@@ -961,6 +994,41 @@ const getCursorColor = (uid: string) => {
   return CURSOR_COLORS[Math.abs(hash) % CURSOR_COLORS.length];
 };
 
+const startCursorLerpLoop = () => {
+  if (cursorLerpRafId) cancelAnimationFrame(cursorLerpRafId);
+  const loop = () => {
+    for (const uid in smoothedCursors.value) {
+      const c = smoothedCursors.value[uid];
+      const dx = c.targetX - c.currentX;
+      const dy = c.targetY - c.currentY;
+      if (Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1) {
+        c.currentX += dx * 0.28;
+        c.currentY += dy * 0.28;
+      } else {
+        c.currentX = c.targetX;
+        c.currentY = c.targetY;
+      }
+    }
+    cursorLerpRafId = requestAnimationFrame(loop);
+  };
+  cursorLerpRafId = requestAnimationFrame(loop);
+};
+
+const stopCursorLerpLoop = () => {
+  if (cursorLerpRafId) {
+    cancelAnimationFrame(cursorLerpRafId);
+    cursorLerpRafId = null;
+  }
+};
+
+const pointsToSvgPath = (points: { x: number; y: number }[]) => {
+  if (!points || points.length < 2) return '';
+  return points.map((p, idx) => {
+    const sp = getNodeScreenPos(p);
+    return `${idx === 0 ? 'M' : 'L'} ${sp.x.toFixed(1)} ${sp.y.toFixed(1)}`;
+  }).join(' ');
+};
+
 const broadcastMyCursor = (opt: any) => {
   if (!db || !authStore.uid || !roomStore.currentRoom) return;
   const now = Date.now();
@@ -970,13 +1038,24 @@ const broadcastMyCursor = (opt: any) => {
   const pointer = (canvas as any).getScenePoint ? (canvas as any).getScenePoint(opt.e || opt) : ((canvas as any).getPointer?.(opt.e || opt) || { x: 0, y: 0 });
   const dx = Math.abs(pointer.x - lastCursorPos.x);
   const dy = Math.abs(pointer.y - lastCursorPos.y);
-  if (dx < 3 && dy < 3) return;
+  if (dx < 2 && dy < 2 && !isMouseDown) return;
 
   lastCursorBroadcast = now;
   lastCursorPos = { x: pointer.x, y: pointer.y };
 
   const roomId = roomStore.currentRoom.roomId;
   const cursorRef = doc(db, 'rooms', roomId, 'cursors', authStore.uid);
+
+  let liveStrokePayload = null;
+  if (isMouseDown && (currentTool.value === 'draw' || currentTool.value === 'arrow') && pencilStrokePoints.length >= 2) {
+    liveStrokePayload = {
+      points: pencilStrokePoints.slice(-30).map(p => ({ x: Math.round(p.x), y: Math.round(p.y) })),
+      color: activeColor.value,
+      width: strokeWidth.value,
+      tool: currentTool.value
+    };
+  }
+
   setDoc(cursorRef, {
     uid: authStore.uid,
     name: authStore.displayName || 'Guest',
@@ -984,7 +1063,8 @@ const broadcastMyCursor = (opt: any) => {
     color: getCursorColor(authStore.uid),
     x: Math.round(pointer.x),
     y: Math.round(pointer.y),
-    updatedAt: now
+    updatedAt: now,
+    liveStroke: liveStrokePayload
   }).catch(() => {});
 };
 
@@ -1010,12 +1090,40 @@ const startCursorListener = () => {
       const data = docSnap.data() as CursorData;
       if (data.uid !== authStore.uid && now - data.updatedAt < 10000) {
         map[data.uid] = data;
+        if (smoothedCursors.value[data.uid]) {
+          smoothedCursors.value[data.uid].targetX = data.x;
+          smoothedCursors.value[data.uid].targetY = data.y;
+          smoothedCursors.value[data.uid].name = data.name;
+          smoothedCursors.value[data.uid].avatar = data.avatar;
+          smoothedCursors.value[data.uid].color = data.color;
+          smoothedCursors.value[data.uid].liveStroke = data.liveStroke;
+        } else {
+          smoothedCursors.value[data.uid] = {
+            uid: data.uid,
+            name: data.name,
+            avatar: data.avatar,
+            color: data.color,
+            currentX: data.x,
+            currentY: data.y,
+            targetX: data.x,
+            targetY: data.y,
+            liveStroke: data.liveStroke
+          };
+        }
       }
     });
+    // Clean stale cursors
+    for (const uid in smoothedCursors.value) {
+      if (!map[uid]) {
+        delete smoothedCursors.value[uid];
+      }
+    }
     remoteCursors.value = map;
   }, (err) => {
     console.warn('[Cursors] listener error:', err);
   });
+
+  startCursorLerpLoop();
 };
 
 // Muted Participant Canvas Lock
@@ -1733,12 +1841,36 @@ const initFabric = () => {
 
   // Ensure all objects added to canvas unconditionally disable bitmap caching for true vector rendering
   canvas.on('object:added', (e: any) => {
-    if (e.target) {
-      e.target.objectCaching = false;
-      if (typeof e.target.getObjects === 'function') {
-        e.target.getObjects().forEach((o: any) => {
+    const target = e.target;
+    if (target) {
+      target.objectCaching = false;
+      if (typeof target.getObjects === 'function') {
+        target.getObjects().forEach((o: any) => {
           o.objectCaching = false;
         });
+      }
+
+      // Tag author and unique ID for local user objects and push to user undo stack
+      if (!isInternalChange) {
+        if (!target.authorUid) {
+          target.authorUid = authStore.uid;
+        }
+        if (!target.id) {
+          target.id = target.arrowId || ('obj_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9));
+        }
+        // Don't push temporary preview objects to undo stack
+        if (target !== liveArrowPreview && !target._isPreview && target !== drawingObject) {
+          localUserUndoStack.value.push({
+            type: 'add',
+            items: [{
+              targetId: target.id,
+              authorUid: authStore.uid,
+              objectJson: target.toObject(CUSTOM_PROPS)
+            }]
+          });
+          if (localUserUndoStack.value.length > 50) localUserUndoStack.value.shift();
+          localUserRedoStack.value = [];
+        }
       }
     }
   });
@@ -2333,6 +2465,11 @@ const initFabric = () => {
     const e = opt.e as MouseEvent;
     isMouseDown = false;
 
+    // Release Fabric dragging transform state to prevent sticky drag
+    if ((canvas as any)._currentTransform) {
+      (canvas as any)._currentTransform = null;
+    }
+
     if (pencilHoldTimer) {
       clearTimeout(pencilHoldTimer);
       pencilHoldTimer = null;
@@ -2344,16 +2481,22 @@ const initFabric = () => {
     }
     canvas.selection = currentTool.value === 'select';
 
+    // Broadcast cursor without liveStroke to clear live stroke overlay for other participants
+    broadcastMyCursor(opt);
+
     // Flush any deferred canvas resizing that arrived during drawing or dragging
     if (pendingResize) {
       performCanvasResize(pendingResize.w, pendingResize.h);
       pendingResize = null;
     }
 
-    // Flush any deferred remote Firebase sync that arrived during drawing or dragging
+    // Flush any deferred remote Firebase sync (defer to next tick so Fabric completes mouseup cleanly)
     if (pendingRemoteState) {
-      loadFromFirebase(pendingRemoteState);
+      const stateToLoad = pendingRemoteState;
       pendingRemoteState = null;
+      setTimeout(() => {
+        loadFromFirebase(stateToLoad);
+      }, 0);
     }
 
     // Arrow brush: finish live preview, quickshape resizing, or create final arrow
@@ -2489,6 +2632,18 @@ const initFabric = () => {
         canvas.requestRenderAll();
       } else {
         drawingObject.set({ selectable: true, evented: true, perPixelTargetFind: true });
+        drawingObject.authorUid = authStore.uid;
+        if (!drawingObject.id) drawingObject.id = 'obj_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
+        localUserUndoStack.value.push({
+          type: 'add',
+          items: [{
+            targetId: drawingObject.id,
+            authorUid: authStore.uid,
+            objectJson: drawingObject.toObject(CUSTOM_PROPS)
+          }]
+        });
+        if (localUserUndoStack.value.length > 50) localUserUndoStack.value.shift();
+        localUserRedoStack.value = [];
         drawingObject.setCoords();
         canvas.setActiveObject(drawingObject);
         canvas.requestRenderAll();
@@ -2630,14 +2785,37 @@ const initFabric = () => {
     updateStickyToolbar();
     updateArrowToolbar();
   });
+  canvas.on('before:transform', (e: any) => {
+    const transform = e?.transform;
+    const obj = transform?.target;
+    if (obj) {
+      // Alt modifier: scale from center
+      obj.centeredScaling = !!(e.e?.altKey);
+    }
+  });
+
   canvas.on('object:scaling', (e: any) => {
     const obj = e?.target;
     if (obj) {
-      if (obj.isStickyNote || obj.stickyColorConfig) {
+      // Alt modifier: scale from center
+      obj.centeredScaling = !!(e.e?.altKey);
+
+      // Shift modifier: enforce uniform proportional aspect ratio scaling
+      if (e.e?.shiftKey || obj.isStickyNote || obj.stickyColorConfig) {
         const s = Math.max(Math.abs(obj.scaleX || 1), Math.abs(obj.scaleY || 1));
         obj.scaleX = (obj.scaleX < 0 ? -1 : 1) * s;
         obj.scaleY = (obj.scaleY < 0 ? -1 : 1) * s;
       }
+
+      // Ctrl modifier: snap scale factor to discrete 10% steps
+      if (e.e?.ctrlKey) {
+        const snap = 0.1;
+        const signX = obj.scaleX < 0 ? -1 : 1;
+        const signY = obj.scaleY < 0 ? -1 : 1;
+        obj.scaleX = signX * Math.max(snap, Math.round(Math.abs(obj.scaleX) / snap) * snap);
+        obj.scaleY = signY * Math.max(snap, Math.round(Math.abs(obj.scaleY) / snap) * snap);
+      }
+
       obj.setCoords();
       if ((obj.type === 'activeselection' || obj.type === 'activeSelection') && obj.forEachObject) {
         obj.forEachObject((c: any) => c.setCoords());
@@ -2825,6 +3003,22 @@ const applyStickyNoteMethods = (note: any) => {
     const extraOffset = Math.max(0, (h - textH) / 2);
     return -h / 2 + extraOffset;
   };
+
+  // Pure visual canvas placeholder render that disappears on typing and never serializes
+  const origRender = note._render;
+  note._render = function(ctx: CanvasRenderingContext2D) {
+    origRender.call(this, ctx);
+    if (!this.text && !this.isEditing) {
+      ctx.save();
+      ctx.font = `${Math.round((this.fontSize || 15) * 0.95)}px ${this.fontFamily || 'Inter, sans-serif'}`;
+      ctx.fillStyle = this.stickyColorConfig?.text === '#f8fafc' ? 'rgba(255, 255, 255, 0.45)' : 'rgba(0, 0, 0, 0.35)';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('Type note here...', 0, 0);
+      ctx.restore();
+    }
+  };
+
   setupStickyControls(note);
 };
 
@@ -2852,6 +3046,9 @@ const rehydrateCanvasObjects = () => {
 
     if (o.isStickyNote || (o.type === 'textbox' && (o.stickyColorConfig || o.backgroundColor))) {
       o.isStickyNote = true;
+      if (o.text === 'Type note here...' || o.text === 'Type here...') {
+        o.text = '';
+      }
       o.minHeight = o.minHeight || 180;
       o.textAlign = 'center';
       o.splitByGrapheme = true;
@@ -3008,7 +3205,7 @@ watch(isCurrentUserMuted, (muted) => {
     });
     exitArrowNodeEditing();
     canvas.renderAll();
-    displayToast('唯讀模式：您已被主持人禁言，暫時無法編輯畫布', 4000);
+    displayToast('View-Only: You have been muted by the host and cannot edit the whiteboard.', 4000);
   } else {
     canvas.selection = true;
     canvas.forEachObject(o => {
@@ -3130,7 +3327,7 @@ const pasteSelection = async (targetPoint?: { x: number; y: number }) => {
 const spawnStickyNote = (x: number, y: number, colorCfg = selectedStickyColor.value) => {
   if (!canvas) return;
   const size = 180;
-  const note = new fabric.Textbox('Type note here...', {
+  const note = new fabric.Textbox('', {
     left: x - size / 2,
     top: y - size / 2,
     width: size,
@@ -3514,10 +3711,23 @@ const deleteSelected = () => {
     }
     if (deletable.length) {
       canvas.discardActiveObject();
+      const removedItems: UserUndoItem[] = [];
       deletable.forEach((obj: any) => {
         if (obj.isEditing && obj.exitEditing) obj.exitEditing();
+        if (obj.authorUid === authStore.uid || !roomStore.currentRoom?.whiteboardActive) {
+          removedItems.push({
+            targetId: obj.id || obj.arrowId || '',
+            authorUid: obj.authorUid || authStore.uid,
+            objectJson: obj.toObject(CUSTOM_PROPS)
+          });
+        }
         canvas?.remove(obj);
       });
+      if (removedItems.length > 0) {
+        localUserUndoStack.value.push({ type: 'remove', items: removedItems });
+        if (localUserUndoStack.value.length > 50) localUserUndoStack.value.shift();
+        localUserRedoStack.value = [];
+      }
       if (locked.length === 1) {
         canvas.setActiveObject(locked[0]);
       } else if (locked.length > 1) {
@@ -3540,6 +3750,18 @@ const deleteSelected = () => {
       displayToast('Locked group or object inside cannot be deleted (Unlock with Ctrl+L first)');
       return;
     }
+    if (activeObj.authorUid === authStore.uid || !roomStore.currentRoom?.whiteboardActive) {
+      localUserUndoStack.value.push({
+        type: 'remove',
+        items: [{
+          targetId: activeObj.id || activeObj.arrowId || '',
+          authorUid: activeObj.authorUid || authStore.uid,
+          objectJson: activeObj.toObject(CUSTOM_PROPS)
+        }]
+      });
+      if (localUserUndoStack.value.length > 50) localUserUndoStack.value.shift();
+      localUserRedoStack.value = [];
+    }
     canvas.remove(activeObj);
     canvas.discardActiveObject();
     canvas.requestRenderAll();
@@ -3550,6 +3772,18 @@ const deleteSelected = () => {
   }
 
   // 4. Single objects (arrow, sticky note, path, shape, etc.)
+  if (activeObj.authorUid === authStore.uid || !roomStore.currentRoom?.whiteboardActive) {
+    localUserUndoStack.value.push({
+      type: 'remove',
+      items: [{
+        targetId: activeObj.id || activeObj.arrowId || '',
+        authorUid: activeObj.authorUid || authStore.uid,
+        objectJson: activeObj.toObject(CUSTOM_PROPS)
+      }]
+    });
+    if (localUserUndoStack.value.length > 50) localUserUndoStack.value.shift();
+    localUserRedoStack.value = [];
+  }
   canvas.remove(activeObj);
   canvas.discardActiveObject();
   canvas.requestRenderAll();
@@ -3680,31 +3914,89 @@ const ungroupObjects = () => {
 };
 
 const undo = async () => {
-  if (!canvas || historyStack.value.length <= 1) return;
+  if (!canvas) return;
 
-  // Clean up group isolation mode state safely if currently in isolation mode
   if (isIsolationMode.value) {
     isIsolationMode.value = false;
     isolatedGroup = null;
     isolatedItems = [];
   }
 
-  isInternalChange = true;
-  const currentState = historyStack.value.pop()!; // remove current state
-  redoStack.value.push(currentState);
-  const previousState = historyStack.value[historyStack.value.length - 1];
-  await canvas.loadFromJSON(previousState);
-  rehydrateCanvasObjects();
-  syncNodeEditingStateAfterReload();
-  canvas.requestRenderAll();
-  syncToFirebase();
-  updateSelectionState();
-  isInternalChange = false;
-  displayToast('Undo (Ctrl+Z)');
+  // 1. User-scoped undo (reverts only the local user's own objects)
+  if (localUserUndoStack.value.length > 0) {
+    const action = localUserUndoStack.value.pop()!;
+    isInternalChange = true;
+    try {
+      if (action.type === 'add') {
+        const redoItems: UserUndoItem[] = [];
+        for (const item of action.items) {
+          const found = canvas.getObjects().find((o: any) => (o.id && o.id === item.targetId) || (o.arrowId && o.arrowId === item.targetId));
+          if (found) {
+            redoItems.push({
+              targetId: item.targetId,
+              authorUid: item.authorUid,
+              objectJson: found.toObject(CUSTOM_PROPS)
+            });
+            canvas.remove(found);
+          }
+        }
+        if (redoItems.length > 0) {
+          localUserRedoStack.value.push({ type: 'remove', items: redoItems });
+        }
+      } else if (action.type === 'remove') {
+        const redoItems: UserUndoItem[] = [];
+        for (const item of action.items) {
+          if (item.objectJson) {
+            const enlivened = await fabric.util.enlivenObjects([item.objectJson]);
+            if (enlivened && enlivened[0]) {
+              const obj = enlivened[0] as any;
+              obj.authorUid = item.authorUid;
+              obj.id = item.targetId;
+              canvas.add(obj);
+              obj.setCoords();
+              redoItems.push(item);
+            }
+          }
+        }
+        if (redoItems.length > 0) {
+          localUserRedoStack.value.push({ type: 'add', items: redoItems });
+        }
+        rehydrateCanvasObjects();
+      }
+      canvas.requestRenderAll();
+      syncToFirebase();
+      updateSelectionState();
+      displayToast('Undo: reverted your change (Ctrl+Z)');
+      return;
+    } finally {
+      isInternalChange = false;
+    }
+  }
+
+  // 2. Fallback to snapshot undo ONLY if not in active collaborative session
+  if (!roomStore.currentRoom?.whiteboardActive && historyStack.value.length > 1) {
+    isInternalChange = true;
+    try {
+      const currentState = historyStack.value.pop()!;
+      redoStack.value.push(currentState);
+      const previousState = historyStack.value[historyStack.value.length - 1];
+      await canvas.loadFromJSON(previousState);
+      rehydrateCanvasObjects();
+      syncNodeEditingStateAfterReload();
+      canvas.requestRenderAll();
+      updateSelectionState();
+      displayToast('Undo (Ctrl+Z)');
+    } finally {
+      isInternalChange = false;
+    }
+    return;
+  }
+
+  displayToast('Nothing to undo');
 };
 
 const redo = async () => {
-  if (!canvas || redoStack.value.length === 0) return;
+  if (!canvas) return;
 
   if (isIsolationMode.value) {
     isIsolationMode.value = false;
@@ -3712,17 +4004,76 @@ const redo = async () => {
     isolatedItems = [];
   }
 
-  isInternalChange = true;
-  const nextState = redoStack.value.pop()!;
-  historyStack.value.push(nextState);
-  await canvas.loadFromJSON(nextState);
-  rehydrateCanvasObjects();
-  syncNodeEditingStateAfterReload();
-  canvas.requestRenderAll();
-  syncToFirebase();
-  updateSelectionState();
-  isInternalChange = false;
-  displayToast('Redo (Ctrl+Y)');
+  // 1. User-scoped redo
+  if (localUserRedoStack.value.length > 0) {
+    const action = localUserRedoStack.value.pop()!;
+    isInternalChange = true;
+    try {
+      if (action.type === 'remove') {
+        const undoItems: UserUndoItem[] = [];
+        for (const item of action.items) {
+          const found = canvas.getObjects().find((o: any) => (o.id && o.id === item.targetId) || (o.arrowId && o.arrowId === item.targetId));
+          if (found) {
+            undoItems.push({
+              targetId: item.targetId,
+              authorUid: item.authorUid,
+              objectJson: found.toObject(CUSTOM_PROPS)
+            });
+            canvas.remove(found);
+          }
+        }
+        if (undoItems.length > 0) {
+          localUserUndoStack.value.push({ type: 'add', items: undoItems });
+        }
+      } else if (action.type === 'add') {
+        const undoItems: UserUndoItem[] = [];
+        for (const item of action.items) {
+          if (item.objectJson) {
+            const enlivened = await fabric.util.enlivenObjects([item.objectJson]);
+            if (enlivened && enlivened[0]) {
+              const obj = enlivened[0] as any;
+              obj.authorUid = item.authorUid;
+              obj.id = item.targetId;
+              canvas.add(obj);
+              obj.setCoords();
+              undoItems.push(item);
+            }
+          }
+        }
+        if (undoItems.length > 0) {
+          localUserUndoStack.value.push({ type: 'remove', items: undoItems });
+        }
+        rehydrateCanvasObjects();
+      }
+      canvas.requestRenderAll();
+      syncToFirebase();
+      updateSelectionState();
+      displayToast('Redo: reapplied your change (Ctrl+Y)');
+      return;
+    } finally {
+      isInternalChange = false;
+    }
+  }
+
+  // 2. Fallback to snapshot redo ONLY if not in active collaborative session
+  if (!roomStore.currentRoom?.whiteboardActive && redoStack.value.length > 0) {
+    isInternalChange = true;
+    try {
+      const nextState = redoStack.value.pop()!;
+      historyStack.value.push(nextState);
+      await canvas.loadFromJSON(nextState);
+      rehydrateCanvasObjects();
+      syncNodeEditingStateAfterReload();
+      canvas.requestRenderAll();
+      updateSelectionState();
+      displayToast('Redo (Ctrl+Y)');
+    } finally {
+      isInternalChange = false;
+    }
+    return;
+  }
+
+  displayToast('Nothing to redo');
 };
 
 const handleImageUpload = (e: Event) => {
@@ -3839,7 +4190,7 @@ const handlePublish = () => {
   const json = getSerializedCanvasJson();
   const thumbnail = getCanvasSnapshot(0.3);
   roomStore.startWhiteboardSession(json, thumbnail);
-  displayToast('畫布已發布為公開協作');
+  displayToast('Whiteboard published for live collaboration');
 };
 
 const handleConfirmMakePrivate = async () => {
@@ -3849,7 +4200,7 @@ const handleConfirmMakePrivate = async () => {
     await roomStore.makeWhiteboardPrivate();
     showPrivateConfirmModal.value = false;
     showPublishMenu.value = false;
-    displayToast('已將畫布改回私人，其他成員已退出');
+    displayToast('Board converted to private. Other members have exited.');
   } catch (e) {
     console.error('Failed to make private:', e);
   } finally {
@@ -4248,7 +4599,16 @@ const handleWhiteboardWheel = (e: WheelEvent) => {
   }
 };
 
+const onWindowPointerUp = () => {
+  if (canvas && (canvas as any)._currentTransform) {
+    (canvas as any)._currentTransform = null;
+  }
+  isMouseDown = false;
+  isDragging = false;
+};
+
 onMounted(() => {
+  window.addEventListener('pointerup', onWindowPointerUp);
   window.addEventListener('keydown', handleKeydown, { capture: true });
   window.addEventListener('click', handleWindowClick);
   window.addEventListener('paste', handleGlobalPaste);
@@ -4274,11 +4634,13 @@ watch(() => roomStore.currentRoom?.roomId, (newRoomId) => {
 });
 
 onUnmounted(() => {
+  stopCursorLerpLoop();
   removeMyCursor();
   if (unsubCursors) {
     unsubCursors();
     unsubCursors = null;
   }
+  window.removeEventListener('pointerup', onWindowPointerUp);
   window.removeEventListener('keydown', handleKeydown, { capture: true });
   window.removeEventListener('click', handleWindowClick);
   window.removeEventListener('paste', handleGlobalPaste);
@@ -4306,13 +4668,13 @@ onUnmounted(() => {
     >
       <div v-if="roomStore.currentRoom?.whiteboardActive" class="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-emerald-600/90 shadow-sm border border-emerald-400 flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-white">
         <span class="w-2 h-2 rounded-full bg-emerald-200 animate-pulse"></span>
-        <span v-if="whiteboardContainerWidth >= 640">{{ roomStore.currentRoom?.whiteboardHostName }} 公開協作中</span>
-        <span v-else>公開中</span>
+        <span v-if="whiteboardContainerWidth >= 640">{{ roomStore.currentRoom?.whiteboardHostName }} Live Collaboration</span>
+        <span v-else>Live</span>
       </div>
       <div v-else class="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-white/90 shadow-sm border border-slate-200 flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-slate-700">
         <Sparkles class="w-3.5 h-3.5 text-sky-500" />
-        <span v-if="whiteboardContainerWidth >= 640">私人畫布</span>
-        <span v-else>私人</span>
+        <span v-if="whiteboardContainerWidth >= 640">Personal Board</span>
+        <span v-else>Personal</span>
       </div>
     </div>
 
@@ -4322,7 +4684,7 @@ onUnmounted(() => {
       class="absolute top-4 left-1/2 -translate-x-1/2 z-40 px-3.5 py-1.5 sm:px-4 sm:py-2 rounded-2xl bg-rose-950/90 border border-rose-500/50 text-rose-300 text-xs font-semibold shadow-2xl backdrop-blur-md flex items-center gap-2 select-none"
     >
       <MicOff class="w-4 h-4 text-rose-400 shrink-0" />
-      <span>唯讀模式：您目前已被主持人禁言，暫時無法編輯畫布</span>
+      <span>View-Only: You have been muted by the host and cannot edit the whiteboard.</span>
     </div>
 
     <!-- Group Isolation Mode Top Floating Banner -->
@@ -4378,22 +4740,22 @@ onUnmounted(() => {
         <button
           @click="showPublishMenu = !showPublishMenu"
           class="px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-xl bg-white/90 hover:bg-white text-slate-700 hover:text-indigo-600 shadow-sm transition cursor-pointer flex items-center gap-1 text-xs font-medium"
-          title="協作設定"
+          title="Collaboration Settings"
         >
           <Settings2 class="w-3.5 h-3.5" />
-          <span v-if="whiteboardContainerWidth >= 640">協作設定</span>
+          <span v-if="whiteboardContainerWidth >= 640">Settings</span>
         </button>
         <div
           v-if="showPublishMenu"
           @click.stop
-          class="absolute right-0 mt-1 w-44 bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl p-1 z-50 text-xs flex flex-col"
+          class="absolute right-0 mt-1 w-48 bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl p-1 z-50 text-xs flex flex-col"
         >
           <button
             @click="showPublishMenu = false; showPrivateConfirmModal = true"
             class="w-full text-left px-3 py-2 rounded-lg hover:bg-rose-950/60 text-rose-300 flex items-center gap-2 transition cursor-pointer"
           >
             <Lock class="w-3.5 h-3.5 text-rose-400" />
-            <span>改回私人畫布...</span>
+            <span>Make Board Private...</span>
           </button>
         </div>
       </div>
@@ -4402,11 +4764,11 @@ onUnmounted(() => {
         @click="handlePublish"
         :disabled="isCurrentUserMuted"
         class="px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm transition text-xs font-semibold flex items-center gap-1 cursor-pointer disabled:opacity-50"
-        title="發布為公開畫布，供所有成員即時協作"
+        title="Publish as public whiteboard for real-time collaboration"
       >
         <Globe class="w-3.5 h-3.5" />
-        <span v-if="whiteboardContainerWidth >= 640">發布畫布</span>
-        <span v-else>發布</span>
+        <span v-if="whiteboardContainerWidth >= 640">Publish Board</span>
+        <span v-else>Publish</span>
       </button>
       <button @click="showShortcutsModal = true" class="p-1 sm:p-1.5 rounded-xl bg-white/90 hover:bg-white text-slate-600 hover:text-indigo-600 shadow-sm transition cursor-pointer" title="Shortcuts Cheatsheet (?)">
         <HelpCircle class="w-3.5 sm:w-4 h-3.5 sm:h-4" />
@@ -4441,25 +4803,42 @@ onUnmounted(() => {
     >
       <canvas ref="canvasRef" class="w-full h-full touch-none"></canvas>
 
-      <!-- Live Collaborative Cursors Overlay -->
+      <!-- Live Collaborative Cursors & Live Stroke Overlay -->
       <div class="absolute inset-0 pointer-events-none z-30 overflow-hidden">
+        <!-- Live Remote In-Progress Strokes -->
+        <svg class="absolute inset-0 w-full h-full pointer-events-none">
+          <template v-for="c in Object.values(smoothedCursors)" :key="'stroke-' + c.uid">
+            <path
+              v-if="c.liveStroke?.points && c.liveStroke.points.length >= 2"
+              :d="pointsToSvgPath(c.liveStroke.points)"
+              fill="none"
+              :stroke="c.liveStroke.color || c.color"
+              :stroke-width="(c.liveStroke.width || 4) * (canvas?.getZoom() || 1)"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              class="opacity-80"
+            />
+          </template>
+        </svg>
+
+        <!-- 60fps RAF Lerped Cursors with Natural OS Pointer Angle -->
         <div
-          v-for="c in Object.values(remoteCursors)"
+          v-for="c in Object.values(smoothedCursors)"
           :key="c.uid"
-          class="absolute top-0 left-0 transition-transform duration-75 ease-out will-change-transform"
+          class="absolute top-0 left-0 will-change-transform"
           :style="{
-            transform: `translate3d(${getNodeScreenPos({ x: c.x, y: c.y }).x}px, ${getNodeScreenPos({ x: c.x, y: c.y }).y}px, 0)`
+            transform: `translate3d(${getNodeScreenPos({ x: c.currentX, y: c.currentY }).x}px, ${getNodeScreenPos({ x: c.currentX, y: c.currentY }).y}px, 0)`
           }"
         >
-          <!-- Cursor pointer SVG -->
+          <!-- Natural OS Cursor Pointer SVG (tip at 0,0, classic natural tilt) -->
           <svg
-            class="w-5 h-5 -rotate-45 drop-shadow-md"
+            class="w-5 h-5 drop-shadow-md"
             viewBox="0 0 24 24"
             fill="none"
             xmlns="http://www.w3.org/2000/svg"
           >
             <path
-              d="M3 3L10.07 19.97L12.58 12.58L19.97 10.07L3 3Z"
+              d="M0 0 L5 15 L7.5 9.5 L13 8 L0 0 Z"
               :fill="c.color"
               stroke="#ffffff"
               stroke-width="1.5"
@@ -4741,7 +5120,7 @@ onUnmounted(() => {
 
 
     <div
-      class="absolute bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 sm:gap-2 transition-all duration-300 w-max max-w-[96%]"
+      class="absolute bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 sm:gap-2 transition-all duration-300 w-max max-w-[96%] overflow-x-auto scrollbar-none flex-nowrap"
       :class="[
         isStackedToolbar ? 'flex-col items-center' : 'flex-row',
         { 'opacity-40 pointer-events-none select-none': isCurrentUserMuted }
@@ -4749,7 +5128,7 @@ onUnmounted(() => {
     >
       <!-- AI Input -->
       <div
-        class="flex flex-col gap-1.5 transition-opacity duration-200"
+        class="flex flex-col gap-1.5 transition-opacity duration-200 shrink-0"
         :class="[
           { 'opacity-15': isHoveringSend },
           isStackedToolbar ? 'w-[220px] max-w-[92vw]' : 'w-[150px] sm:w-[200px]'
@@ -4777,7 +5156,7 @@ onUnmounted(() => {
 
       <!-- Main Tools Bar -->
       <div
-        class="h-9 sm:h-10 rounded-2xl border flex items-center transition-all duration-200"
+        class="h-9 sm:h-10 rounded-2xl border flex items-center transition-all duration-200 shrink-0"
         :class="[
           isHoveringSend ? 'bg-white/10 border-white/10 shadow-none' : 'bg-white/95 border-slate-200 shadow-xl',
           isNarrowToolbar ? 'p-1 gap-0.5' : 'p-1 sm:p-1.5 gap-0.5 sm:gap-1'
@@ -4812,7 +5191,7 @@ onUnmounted(() => {
                 <button @click="addShape('circle')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Circle / Ellipse"><Circle class="w-4 h-4" /></button>
                 <button @click="addShape('triangle')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Triangle"><Triangle class="w-4 h-4" /></button>
                 <button @click="addShape('line')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Line"><Minus class="w-4 h-4" /></button>
-                <button @click="addShape('arrow')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" :class="{ 'bg-indigo-100 text-indigo-600': currentTool === 'arrow' }" title="Arrow Brush (箭頭畫筆)"><ArrowUpRight class="w-4 h-4" /></button>
+                <button @click="addShape('arrow')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" :class="{ 'bg-indigo-100 text-indigo-600': currentTool === 'arrow' }" title="Arrow Line (Arrow Brush)"><ArrowUpRight class="w-4 h-4" /></button>
               </div>
             </div>
           </div>
@@ -4827,7 +5206,7 @@ onUnmounted(() => {
               @click="addSticky(); isStickyMenuOpen = !isStickyMenuOpen"
               class="rounded-xl transition flex items-center gap-1 cursor-pointer"
               :class="[currentTool === 'sticky' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500', isNarrowToolbar ? 'p-1' : 'p-1.5']"
-              title="Sticky Note (便條紙)"
+              title="Sticky Note"
             >
               <StickyNote class="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </button>
@@ -4888,8 +5267,8 @@ onUnmounted(() => {
           <div class="flex items-center" :class="isNarrowToolbar ? 'gap-0.5' : 'gap-0.5 sm:gap-1'">
             <input ref="fileInputRef" type="file" accept="image/*" class="hidden" @change="handleImageUpload" />
             <button @click="fileInputRef?.click()" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="isNarrowToolbar ? 'p-1' : 'p-1.5'" title="Add Image"><ImageIcon class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
-            <button @click="undo" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="[{'opacity-50 cursor-not-allowed': historyStack.length <= 1}, isNarrowToolbar ? 'p-1' : 'p-1.5']" title="Undo (Ctrl+Z)" :disabled="historyStack.length <= 1"><Undo2 class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
-            <button @click="redo" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="[{'opacity-50 cursor-not-allowed': redoStack.length === 0}, isNarrowToolbar ? 'p-1' : 'p-1.5']" title="Redo (Ctrl+Y / Ctrl+Shift+Z)" :disabled="redoStack.length === 0"><Redo2 class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
+            <button @click="undo" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="[{'opacity-50 cursor-not-allowed': !canUndo}, isNarrowToolbar ? 'p-1' : 'p-1.5']" title="Undo (Ctrl+Z)" :disabled="!canUndo"><Undo2 class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
+            <button @click="redo" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="[{'opacity-50 cursor-not-allowed': !canRedo}, isNarrowToolbar ? 'p-1' : 'p-1.5']" title="Redo (Ctrl+Y / Ctrl+Shift+Z)" :disabled="!canRedo"><Redo2 class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
             <button @click="deleteSelected" class="rounded-xl hover:bg-rose-100 text-rose-500 transition cursor-pointer" :class="isNarrowToolbar ? 'p-1' : 'p-1.5'" title="Delete Selected (Del)"><Trash2 class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
           </div>
         </div>
@@ -5226,17 +5605,17 @@ onUnmounted(() => {
           <div class="p-2 rounded-xl bg-rose-500/10 border border-rose-500/20">
             <Lock class="w-5 h-5 text-rose-400" />
           </div>
-          <h3 class="text-sm font-bold text-white">將畫布改回私人？</h3>
+          <h3 class="text-sm font-bold text-white">Make Board Private?</h3>
         </div>
         <p class="text-xs text-slate-300 leading-relaxed">
-          改回私人後，其他房間成員將<strong>立即退出此畫布</strong>，且無法再讀取或編輯。
+          Converting to private will immediately <strong>exit other room members</strong> from this whiteboard. They will no longer be able to view or edit it.
         </p>
         <div class="flex items-center justify-end gap-2 pt-2">
           <button
             @click="showPrivateConfirmModal = false"
             class="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition cursor-pointer"
           >
-            取消
+            Cancel
           </button>
           <button
             @click="handleConfirmMakePrivate"
@@ -5244,7 +5623,7 @@ onUnmounted(() => {
             class="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold transition cursor-pointer flex items-center gap-1.5 shadow"
           >
             <Loader2 v-if="isConvertingToPrivate" class="w-3.5 h-3.5 animate-spin" />
-            <span>確認改為私人</span>
+            <span>Confirm & Make Private</span>
           </button>
         </div>
       </div>

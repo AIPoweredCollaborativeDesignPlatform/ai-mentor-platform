@@ -155,7 +155,18 @@ Role & Capabilities:
   4. If asked to summarize, produce a structured design summary with Objectives, Discussed Ideas, Consensus, and Next Steps.
   5. If asked to fact check or verify a specification/material/dimension, provide verified information with sources/context. IMPORTANT: For the "references" array, you MUST provide REAL, DIRECT web URLs (starting with http:// or https://) that link directly to the standard's official page, a Wikipedia page, or a trusted source.
   6. If asked for 3D model: The 3D engine generates watertight static 3D meshes for industrial/product prototypes. (Output basic static dimensions, do not output any animation fields).
-  7. If asked for Moodboard, provide keywords, color palette, materials, and 2-4 concept image definitions with url: "https://image.pollinations.ai/prompt/" + encodeURIComponent(prompt) + "?width=600&height=400&nologo=true".
+  7. If asked for Moodboard:
+     - Moodboards are universal design research and ideation tools for ANY design discipline (digital UI/UX, product design, consumer electronics, lifestyle goods, mobility, branding, fashion, architecture).
+     - DO NOT default or bias towards furniture or interior design unless the user specifically and explicitly asked for furniture/interior!
+     - Synthesize authentic multidisciplinary research aligned with the team's discussion:
+       a) User Personas & Context of Use (real-world scenarios, human interactions, environment)
+       b) Lifestyle & Activities (user behavior, daily tasks, lifestyle dynamics)
+       c) Lighting & Atmospheric Mood (shadows, illumination, color temperature, tone)
+       d) Materials & Surface Textures (tactile finishes, engineered composites, textiles, matte/gloss textures)
+       e) Visual Style & Brand Culture (typography, graphics, aesthetic ethos, cultural references)
+     - Provide keywords, color palette (hex + name), materials (name + feature), and 3-4 diverse concept images covering these distinct facets.
+     - Each image must include:
+       { "title": string, "category": "Persona / Context" | "Activity / Lifestyle" | "Material & Texture" | "Color & Lighting", "prompt": string, "url": "https://image.pollinations.ai/prompt/" + encodeURIComponent(prompt) + "?width=600&height=400&nologo=true" }
 
 Return ONLY a valid JSON object matching this schema:
 {
@@ -164,7 +175,7 @@ Return ONLY a valid JSON object matching this schema:
   "assetType": "parametric_3d" | "moodboard" | "summary" | "fact_check" | null,
   "assetData": {
     // For parametric_3d: { "title": string, "meshType": "group", "components": [ { "shape": "box"|"cylinder"|"sphere"|"torus", "dimensions": object, "position": object, "material": { "color": string, "roughness": number, "metalness": number } } ] }
-    // For moodboard: { "title": string, "description": string, "keywords": string[], "images": [ { "title": string, "prompt": string, "url": string } ], "palette": [ { "hex": string, "name": string } ], "materials": [ { "name": string, "feature": string } ] }
+    // For moodboard: { "title": string, "description": string, "keywords": string[], "images": [ { "title": string, "category": string, "prompt": string, "url": string } ], "palette": [ { "hex": string, "name": string } ], "materials": [ { "name": string, "feature": string } ] }
     // For summary: { "title": string, "content": string (Markdown formatted with ## Objectives, ## Key Ideas, ## Consensus, ## Action Items) }
     // For fact_check: { "claim": string, "verdict": string, "details": string, "references": string[] }
   }

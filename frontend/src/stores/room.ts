@@ -1445,7 +1445,7 @@ export const useRoomStore = defineStore('room', () => {
       await sendCustomMessage({
         senderUid: 'system',
         senderName: 'System',
-        content: `${hostName} 發布了公開協作畫布。`,
+        content: `${hostName} published a collaborative whiteboard.`,
         type: 'text'
       });
     } catch (e) {
@@ -1485,7 +1485,7 @@ export const useRoomStore = defineStore('room', () => {
       await sendCustomMessage({
         senderUid: 'system',
         senderName: 'System',
-        content: `${hostName} 關閉了公開畫布。`,
+        content: `${hostName} closed the public whiteboard.`,
         type: 'text'
       });
     } catch (e) {
@@ -1507,7 +1507,7 @@ export const useRoomStore = defineStore('room', () => {
       await sendCustomMessage({
         senderUid: 'system',
         senderName: 'System',
-        content: `${hostName} 已將畫布轉為私人，結束公開協作。`,
+        content: `${hostName} converted the whiteboard to private. Live collaboration ended.`,
         type: 'text'
       });
     } catch (e) {

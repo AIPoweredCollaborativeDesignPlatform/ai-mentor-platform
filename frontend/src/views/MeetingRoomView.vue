@@ -62,6 +62,8 @@ watch(isWhiteboardOpen, (isOpen) => {
   }
 });
 
+const isLocalWhiteboardPublisher = ref(false);
+
 const startWhiteboardResize = (e: MouseEvent) => {
   e.preventDefault();
   isResizingWhiteboard.value = true;
@@ -76,7 +78,7 @@ const startWhiteboardResize = (e: MouseEvent) => {
       whiteboardRef.value?.handleCloseRequest();
       return;
     }
-    const maxWhiteboardW = window.innerWidth - 320;
+    const maxWhiteboardW = Math.max(300, window.innerWidth - 240);
     const clampedW = Math.max(300, Math.min(maxWhiteboardW, remainingFromRight));
     whiteboardWidth.value = clampedW;
   };
@@ -93,15 +95,22 @@ const startWhiteboardResize = (e: MouseEvent) => {
   window.addEventListener('mouseup', stopResize);
 };
 
-// When broadcast/publishing stops or converts to private, auto-eject non-host participants
+// When broadcast/publishing stops or converts to private, auto-eject non-publisher participants
 watch(() => roomStore.currentRoom?.whiteboardActive, (isActive, wasActive) => {
+  if (isActive === true && roomStore.currentRoom?.whiteboardHostUid === authStore.uid) {
+    isLocalWhiteboardPublisher.value = true;
+  }
   if (wasActive === true && isActive === false) {
-    const isPublisher = roomStore.currentRoom?.whiteboardHostUid === authStore.uid;
-    if (!isPublisher && isWhiteboardOpen.value) {
+    if (isLocalWhiteboardPublisher.value) {
+      // Keep publisher's whiteboard open seamlessly as a Personal Board!
+      isLocalWhiteboardPublisher.value = false;
+      return;
+    }
+    if (isWhiteboardOpen.value) {
       isWhiteboardOpen.value = false;
       activeWhiteboardAssetId.value = null;
       currentWhiteboardJson.value = undefined;
-      roomStore.pushToast('協作已結束', '發起人已將畫布改回私人，已自動退出協作。', 'info');
+      roomStore.pushToast('Collaboration Ended', 'The host converted the whiteboard to private.', 'info');
     }
   }
 });
@@ -117,8 +126,17 @@ const handleShareWhiteboard = async (file: File) => {
   await handleSend();
 };
 
-const handleSaveWhiteboardState = async (json: string, previewUrl: string, explicitAssetId?: string | null) => {
+const handleSaveWhiteboardState = async (json: string, previewUrl: string, explicitAssetId?: string | null, isPrivateParam?: boolean) => {
   let assetId = explicitAssetId || activeWhiteboardAssetId.value;
+  const isPrivate = isPrivateParam !== undefined ? isPrivateParam : !roomStore.currentRoom?.whiteboardActive;
+  const meta = {
+    whiteboardJson: json,
+    isPrivate,
+    creatorUid: authStore.uid,
+    creatorName: authStore.displayName || 'Participant',
+    creatorAvatar: authStore.avatar || '🎨'
+  };
+
   if (assetId) {
     // Update existing asset in Room Album (deduplication & overwrite update)
     await roomStore.updateCustomMessage(assetId, {
@@ -128,7 +146,7 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string, expli
         name: 'whiteboard.jpg',
         size: 0
       },
-      metadata: { whiteboardJson: json }
+      metadata: meta
     });
     await roomStore.sendCustomMessage({
       senderUid: 'system',
@@ -147,7 +165,7 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string, expli
         name: 'whiteboard.jpg',
         size: 0
       },
-      metadata: { whiteboardJson: json }
+      metadata: meta
     });
     if (newId) {
       activeWhiteboardAssetId.value = newId;
@@ -174,20 +192,28 @@ const handleRetryAiMessage = async (messageId: string) => {
 
 const openWhiteboardState = (msg: any) => {
   if (msg.type !== 'whiteboard_state' || !msg.metadata?.whiteboardJson) return;
+  if (msg.metadata?.isPrivate && msg.metadata?.creatorUid !== authStore.uid && msg.senderUid !== authStore.uid) {
+    roomStore.pushToast('Access Restricted', 'This whiteboard is private to its creator.', 'warning');
+    return;
+  }
   // Open locally with asset JSON; DO NOT involuntarily trigger broadcast session!
   activeWhiteboardAssetId.value = msg.id;
   currentWhiteboardJson.value = msg.metadata.whiteboardJson;
   isWhiteboardOpen.value = true;
 };
 
-// Computed property to sort album items newest first
+// Computed property to sort album items newest first (strictly filtering out other users' private boards)
 const albumItems = computed(() => {
   if (!roomStore.currentRoom?.messages) return [];
-  const items = roomStore.currentRoom.messages.filter(m =>
-    m.type === 'whiteboard_state' ||
-    m.type === 'ai_asset' ||
-    (m.type === 'file' && m.fileData?.type === 'image')
-  );
+  const items = roomStore.currentRoom.messages.filter(m => {
+    if (m.type === 'whiteboard_state') {
+      if (m.metadata?.isPrivate && m.metadata?.creatorUid !== authStore.uid && m.senderUid !== authStore.uid) {
+        return false;
+      }
+      return true;
+    }
+    return m.type === 'ai_asset' || (m.type === 'file' && m.fileData?.type === 'image');
+  });
   return [...items].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 });
 
@@ -939,7 +965,7 @@ onUnmounted(() => {
       <div class="flex flex-col h-full w-full min-w-0"
            :class="[
              isResizingWhiteboard ? 'transition-none' : 'transition-all duration-75',
-             isWhiteboardOpen ? 'flex-1 min-w-[320px]' : 'flex-1'
+             isWhiteboardOpen ? 'hidden sm:flex sm:flex-1 sm:min-w-[260px]' : 'flex-1'
            ]">
       <!-- Chat Stream Area with 3-second fading scrollbar -->
       <main
@@ -1418,7 +1444,7 @@ onUnmounted(() => {
       <!-- Resizer Handle Divider between Chat and Whiteboard -->
       <div
         v-if="isWhiteboardOpen"
-        class="hidden lg:flex w-2.5 hover:w-3 bg-slate-900 hover:bg-indigo-500/80 active:bg-indigo-600 transition-all cursor-col-resize shrink-0 z-30 items-center justify-center select-none group border-x border-slate-800"
+        class="hidden sm:flex w-2.5 hover:w-3 bg-slate-900 hover:bg-indigo-500/80 active:bg-indigo-600 transition-all cursor-col-resize shrink-0 z-30 items-center justify-center select-none group border-x border-slate-800"
         @mousedown="startWhiteboardResize"
         title="Drag to resize whiteboard (drag to right edge to close)"
       >
@@ -1428,7 +1454,7 @@ onUnmounted(() => {
       <!-- Collaborative Whiteboard Column -->
       <div
         v-if="isWhiteboardOpen"
-        class="h-full relative overflow-hidden bg-slate-900 shrink-0 w-full lg:w-auto"
+        class="h-full relative overflow-hidden bg-slate-900 shrink-0 w-full sm:w-auto min-w-[320px] max-w-[calc(100%-260px)]"
         :class="{ 'transition-none': isResizingWhiteboard }"
         :style="whiteboardWidth ? { width: `${whiteboardWidth}px` } : { width: '68%' }"
       >
@@ -1455,7 +1481,7 @@ onUnmounted(() => {
         </h2>
         <button
           @click="isAssetsDrawerOpen = false"
-          class="p-2 rounded-xl hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition"
+          class="p-2 rounded-xl hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition cursor-pointer"
         >
           <X class="w-4 h-4" />
         </button>
@@ -1483,14 +1509,14 @@ onUnmounted(() => {
               <!-- Creator Avatar Badge (Top Right) -->
               <div
                 class="absolute top-1 right-1 bg-slate-900/95 text-white w-5 h-5 rounded-full border border-slate-700/80 backdrop-blur-sm flex items-center justify-center text-[10px] z-10 shadow select-none"
-                :title="`發起人: ${msg.metadata?.creatorName || msg.senderName || '成員'}`"
+                :title="`Creator: ${msg.metadata?.creatorName || msg.senderName || 'Member'}`"
               >
                 <span>{{ msg.metadata?.creatorAvatar || msg.senderAvatar || '🎨' }}</span>
               </div>
               <!-- Creator Name Pill (Bottom) -->
               <div class="absolute bottom-1 left-1 right-1 bg-slate-950/85 px-1.5 py-0.5 rounded text-[8px] text-slate-300 font-medium truncate backdrop-blur-xs z-10 flex items-center gap-1">
                 <span class="text-[9px]">{{ msg.metadata?.creatorAvatar || msg.senderAvatar || '🎨' }}</span>
-                <span class="truncate">{{ msg.metadata?.creatorName || msg.senderName || '成員' }}</span>
+                <span class="truncate">{{ msg.metadata?.creatorName || msg.senderName || 'Member' }}</span>
               </div>
               <!-- Hover Overlay -->
               <div class="absolute inset-0 bg-indigo-950/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">

@@ -99,6 +99,12 @@ export interface CursorData {
   x: number;
   y: number;
   updatedAt: number;
+  liveStroke?: {
+    points: { x: number; y: number }[];
+    color: string;
+    width: number;
+    tool: string;
+  } | null;
 }
 
 export type AnimationMotionType = 'harmonic' | 'bounce' | 'pendulum' | 'spin' | 'pulse' | 'wave';

@@ -39,11 +39,12 @@ const getImageUrl = (img: any, index: number) => {
 const handleImgError = (e: Event, index: number) => {
   const target = e.target as HTMLImageElement;
   if (!target) return;
+  // Multidisciplinary design research fallbacks (product, persona, material, lighting)
   const fallbacks = [
-    'https://images.unsplash.com/photo-1618221195710-dd6b41faaea6?auto=format&fit=crop&w=600&h=450&q=80',
-    'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=600&h=450&q=80',
-    'https://images.unsplash.com/photo-1513694203232-719a280e022f?auto=format&fit=crop&w=600&h=450&q=80',
-    'https://images.unsplash.com/photo-1507652313519-d4e9174996dd?auto=format&fit=crop&w=600&h=450&q=80'
+    'https://images.unsplash.com/photo-1581291518857-4e27b48ff24e?auto=format&fit=crop&w=600&h=450&q=80', // Product engineering / hardware
+    'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=600&h=450&q=80', // User persona / lifestyle
+    'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=600&h=450&q=80', // Material & generative texture
+    'https://images.unsplash.com/photo-1550684848-fac1c5b4e853?auto=format&fit=crop&w=600&h=450&q=80'  // Lighting & color atmosphere
   ];
   target.src = fallbacks[index % fallbacks.length];
 };
@@ -105,6 +106,10 @@ const closePreview = () => {
             class="w-full h-full object-cover group-hover:scale-105 transition duration-300"
             loading="lazy"
           />
+          <!-- Category Badge -->
+          <div v-if="img?.category" class="absolute top-1.5 left-1.5 bg-black/65 backdrop-blur-xs text-amber-300 px-1.5 py-0.5 rounded text-[8px] font-semibold border border-amber-500/30 shadow-xs z-10">
+            {{ img.category }}
+          </div>
           <div class="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent flex items-end p-2 opacity-90">
             <p class="text-[11px] text-slate-200 font-medium truncate">{{ img?.title || img?.caption || 'Concept Reference' }}</p>
           </div>

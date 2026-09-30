@@ -116,6 +116,20 @@ const selected3DEngine = ref<'meshy' | 'tripo' | 'threejs'>(
 const meshyApiKey = ref(getStoredMeshyApiKey());
 const tripoApiKey = ref(getStoredTripoApiKey());
 const geminiApiKey = ref(localStorage.getItem('ai_gemini_api_key') || '');
+
+const geminiKeyScope = ref<'shared' | 'private'>(
+  (localStorage.getItem('ai_gemini_key_scope') as any) || 'shared'
+);
+const meshyKeyScope = ref<'shared' | 'private'>(
+  (localStorage.getItem('ai_meshy_key_scope') as any) || 'shared'
+);
+const tripoKeyScope = ref<'shared' | 'private'>(
+  (localStorage.getItem('ai_tripo_key_scope') as any) || 'shared'
+);
+
+const geminiSavedMsg = ref('');
+const meshySavedMsg = ref('');
+const tripoSavedMsg = ref('');
 const engineSavedMsg = ref('');
 
 const handleSelectEngine = (engine: 'meshy' | 'tripo' | 'threejs') => {
@@ -128,28 +142,48 @@ const handleSelectEngine = (engine: 'meshy' | 'tripo' | 'threejs') => {
 
 const handleSaveGeminiKey = () => {
   const val = geminiApiKey.value.trim();
+  localStorage.setItem('ai_gemini_key_scope', geminiKeyScope.value);
   authStore.syncUserApiKeys({ geminiApiKey: val });
-  roomStore.updateSharedApiKeys({ geminiApiKey: val });
-  engineSavedMsg.value = val ? 'Gemini API Key saved & shared with room!' : 'Gemini API Key removed';
-  setTimeout(() => (engineSavedMsg.value = ''), 2500);
+  if (geminiKeyScope.value === 'shared') {
+    roomStore.updateSharedApiKeys({ geminiApiKey: val });
+    geminiSavedMsg.value = val ? 'Saved as Shared Room Key (available to room participants)' : 'Gemini Key removed';
+  } else {
+    roomStore.updateSharedApiKeys({ geminiApiKey: '' });
+    geminiSavedMsg.value = val ? 'Saved as Private Key (only used by you)' : 'Gemini Key removed';
+  }
+  setTimeout(() => (geminiSavedMsg.value = ''), 3000);
 };
 
 const handleSaveMeshyKey = () => {
-  setStoredMeshyApiKey(meshyApiKey.value);
-  if (meshyApiKey.value) selected3DEngine.value = 'meshy';
-  authStore.syncUserApiKeys({ meshyApiKey: meshyApiKey.value, engine3D: selected3DEngine.value });
-  roomStore.updateSharedApiKeys({ meshyApiKey: meshyApiKey.value, engine3D: selected3DEngine.value });
-  engineSavedMsg.value = meshyApiKey.value ? 'Meshy AI Key saved & shared with room!' : 'Meshy Key removed';
-  setTimeout(() => (engineSavedMsg.value = ''), 2500);
+  const val = meshyApiKey.value.trim();
+  localStorage.setItem('ai_meshy_key_scope', meshyKeyScope.value);
+  setStoredMeshyApiKey(val);
+  if (val) selected3DEngine.value = 'meshy';
+  authStore.syncUserApiKeys({ meshyApiKey: val, engine3D: selected3DEngine.value });
+  if (meshyKeyScope.value === 'shared') {
+    roomStore.updateSharedApiKeys({ meshyApiKey: val, engine3D: selected3DEngine.value });
+    meshySavedMsg.value = val ? 'Saved as Shared Room Key (available to room participants)' : 'Meshy Key removed';
+  } else {
+    roomStore.updateSharedApiKeys({ meshyApiKey: '', engine3D: selected3DEngine.value });
+    meshySavedMsg.value = val ? 'Saved as Private Key (only used by you)' : 'Meshy Key removed';
+  }
+  setTimeout(() => (meshySavedMsg.value = ''), 3000);
 };
 
 const handleSaveTripoKey = () => {
-  setStoredTripoApiKey(tripoApiKey.value);
-  if (tripoApiKey.value) selected3DEngine.value = 'tripo';
-  authStore.syncUserApiKeys({ tripoApiKey: tripoApiKey.value, engine3D: selected3DEngine.value });
-  roomStore.updateSharedApiKeys({ tripoApiKey: tripoApiKey.value, engine3D: selected3DEngine.value });
-  engineSavedMsg.value = tripoApiKey.value ? 'Tripo3D Key saved & shared with room!' : 'Tripo3D Key removed';
-  setTimeout(() => (engineSavedMsg.value = ''), 2500);
+  const val = tripoApiKey.value.trim();
+  localStorage.setItem('ai_tripo_key_scope', tripoKeyScope.value);
+  setStoredTripoApiKey(val);
+  if (val) selected3DEngine.value = 'tripo';
+  authStore.syncUserApiKeys({ tripoApiKey: val, engine3D: selected3DEngine.value });
+  if (tripoKeyScope.value === 'shared') {
+    roomStore.updateSharedApiKeys({ tripoApiKey: val, engine3D: selected3DEngine.value });
+    tripoSavedMsg.value = val ? 'Saved as Shared Room Key (available to room participants)' : 'Tripo3D Key removed';
+  } else {
+    roomStore.updateSharedApiKeys({ tripoApiKey: '', engine3D: selected3DEngine.value });
+    tripoSavedMsg.value = val ? 'Saved as Private Key (only used by you)' : 'Tripo3D Key removed';
+  }
+  setTimeout(() => (tripoSavedMsg.value = ''), 3000);
 };
 
 const isGoogleSigningIn = ref(false);
@@ -695,7 +729,7 @@ const sensitivities: { id: SensitivityLevel; name: string; desc: string }[] = [
           </div>
 
           <!-- 3.0 Google Gemini API Key -->
-          <div class="mt-3 p-3 bg-slate-950/70 rounded-xl border border-slate-800 space-y-2">
+          <div class="mt-3 p-3 bg-slate-950/70 rounded-xl border border-slate-800 space-y-2.5">
             <div class="flex items-center justify-between">
               <span class="text-xs font-semibold text-sky-400 flex items-center gap-1.5">
                 <Sparkles class="w-3.5 h-3.5" />
@@ -713,6 +747,27 @@ const sensitivities: { id: SensitivityLevel; name: string; desc: string }[] = [
             <p class="text-[11px] text-slate-400 leading-relaxed">
               Connect your <strong>Google AI Studio</strong> Gemini API key for full AI dialogue, critique, and structured consensus:
             </p>
+
+            <!-- Scope Toggle: Private vs Shared -->
+            <div class="flex items-center gap-1 p-0.5 bg-slate-900 rounded-lg border border-slate-800 w-max text-[10px]">
+              <button
+                type="button"
+                @click="geminiKeyScope = 'shared'"
+                :class="geminiKeyScope === 'shared' ? 'bg-sky-600 text-white font-semibold shadow-xs' : 'text-slate-400 hover:text-slate-200'"
+                class="px-2 py-0.5 rounded transition flex items-center gap-1 cursor-pointer"
+              >
+                <Globe class="w-3 h-3" /> Shared Room Key
+              </button>
+              <button
+                type="button"
+                @click="geminiKeyScope = 'private'"
+                :class="geminiKeyScope === 'private' ? 'bg-slate-700 text-white font-semibold shadow-xs' : 'text-slate-400 hover:text-slate-200'"
+                class="px-2 py-0.5 rounded transition flex items-center gap-1 cursor-pointer"
+              >
+                <ShieldCheck class="w-3 h-3" /> Private Key (Only Me)
+              </button>
+            </div>
+
             <div class="flex items-center gap-2">
               <input
                 v-model="geminiApiKey"
@@ -723,11 +778,16 @@ const sensitivities: { id: SensitivityLevel; name: string; desc: string }[] = [
               />
               <button
                 @click="handleSaveGeminiKey"
-                class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold shrink-0 transition"
+                class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold shrink-0 transition cursor-pointer"
               >
                 Save
               </button>
             </div>
+
+            <!-- Direct per-field Saved message -->
+            <p v-if="geminiSavedMsg" class="text-[11px] text-emerald-400 flex items-center gap-1.5 animate-in fade-in">
+              <Check class="w-3.5 h-3.5" /> {{ geminiSavedMsg }}
+            </p>
           </div>
 
           <!-- 3.1 3D Generation Engine (Meshy.ai & Tripo3D) -->
@@ -748,7 +808,7 @@ const sensitivities: { id: SensitivityLevel; name: string; desc: string }[] = [
                 type="button"
                 @click="handleSelectEngine('meshy')"
                 :class="[
-                  'py-1 text-[11px] font-medium rounded-md transition text-center',
+                  'py-1 text-[11px] font-medium rounded-md transition text-center cursor-pointer',
                   selected3DEngine === 'meshy'
                     ? 'bg-indigo-600 text-white font-semibold shadow-sm'
                     : 'text-slate-400 hover:text-slate-200'
@@ -760,7 +820,7 @@ const sensitivities: { id: SensitivityLevel; name: string; desc: string }[] = [
                 type="button"
                 @click="handleSelectEngine('tripo')"
                 :class="[
-                  'py-1 text-[11px] font-medium rounded-md transition text-center',
+                  'py-1 text-[11px] font-medium rounded-md transition text-center cursor-pointer',
                   selected3DEngine === 'tripo'
                     ? 'bg-sky-600 text-white font-semibold shadow-sm'
                     : 'text-slate-400 hover:text-slate-200'
@@ -772,7 +832,7 @@ const sensitivities: { id: SensitivityLevel; name: string; desc: string }[] = [
                 type="button"
                 @click="handleSelectEngine('threejs')"
                 :class="[
-                  'py-1 text-[11px] font-medium rounded-md transition text-center',
+                  'py-1 text-[11px] font-medium rounded-md transition text-center cursor-pointer',
                   selected3DEngine === 'threejs'
                     ? 'bg-purple-600 text-white font-semibold shadow-sm'
                     : 'text-slate-400 hover:text-slate-200'
@@ -783,10 +843,31 @@ const sensitivities: { id: SensitivityLevel; name: string; desc: string }[] = [
             </div>
 
             <!-- Meshy AI Input -->
-            <div v-if="selected3DEngine === 'meshy'" class="space-y-1.5">
+            <div v-if="selected3DEngine === 'meshy'" class="space-y-2">
               <p class="text-[11px] text-slate-400 leading-relaxed">
                 Connect your <strong>Meshy.ai</strong> API key to generate high-res organic 3D models with PBR textures:
               </p>
+
+              <!-- Meshy Scope Toggle -->
+              <div class="flex items-center gap-1 p-0.5 bg-slate-900 rounded-lg border border-slate-800 w-max text-[10px]">
+                <button
+                  type="button"
+                  @click="meshyKeyScope = 'shared'"
+                  :class="meshyKeyScope === 'shared' ? 'bg-indigo-600 text-white font-semibold shadow-xs' : 'text-slate-400 hover:text-slate-200'"
+                  class="px-2 py-0.5 rounded transition flex items-center gap-1 cursor-pointer"
+                >
+                  <Globe class="w-3 h-3" /> Shared Room Key
+                </button>
+                <button
+                  type="button"
+                  @click="meshyKeyScope = 'private'"
+                  :class="meshyKeyScope === 'private' ? 'bg-slate-700 text-white font-semibold shadow-xs' : 'text-slate-400 hover:text-slate-200'"
+                  class="px-2 py-0.5 rounded transition flex items-center gap-1 cursor-pointer"
+                >
+                  <ShieldCheck class="w-3 h-3" /> Private Key (Only Me)
+                </button>
+              </div>
+
               <div class="flex items-center gap-2">
                 <input
                   v-model="meshyApiKey"
@@ -797,18 +878,44 @@ const sensitivities: { id: SensitivityLevel; name: string; desc: string }[] = [
                 />
                 <button
                   @click="handleSaveMeshyKey"
-                  class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shrink-0 transition"
+                  class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shrink-0 transition cursor-pointer"
                 >
                   Save
                 </button>
               </div>
+
+              <!-- Direct per-field Saved message -->
+              <p v-if="meshySavedMsg" class="text-[11px] text-emerald-400 flex items-center gap-1.5 animate-in fade-in">
+                <Check class="w-3.5 h-3.5" /> {{ meshySavedMsg }}
+              </p>
             </div>
 
             <!-- Tripo3D Input -->
-            <div v-else-if="selected3DEngine === 'tripo'" class="space-y-1.5">
+            <div v-else-if="selected3DEngine === 'tripo'" class="space-y-2">
               <p class="text-[11px] text-slate-400 leading-relaxed">
                 Connect your <strong>Tripo3D</strong> API key to generate smooth neural meshes:
               </p>
+
+              <!-- Tripo Scope Toggle -->
+              <div class="flex items-center gap-1 p-0.5 bg-slate-900 rounded-lg border border-slate-800 w-max text-[10px]">
+                <button
+                  type="button"
+                  @click="tripoKeyScope = 'shared'"
+                  :class="tripoKeyScope === 'shared' ? 'bg-sky-600 text-white font-semibold shadow-xs' : 'text-slate-400 hover:text-slate-200'"
+                  class="px-2 py-0.5 rounded transition flex items-center gap-1 cursor-pointer"
+                >
+                  <Globe class="w-3 h-3" /> Shared Room Key
+                </button>
+                <button
+                  type="button"
+                  @click="tripoKeyScope = 'private'"
+                  :class="tripoKeyScope === 'private' ? 'bg-slate-700 text-white font-semibold shadow-xs' : 'text-slate-400 hover:text-slate-200'"
+                  class="px-2 py-0.5 rounded transition flex items-center gap-1 cursor-pointer"
+                >
+                  <ShieldCheck class="w-3 h-3" /> Private Key (Only Me)
+                </button>
+              </div>
+
               <div class="flex items-center gap-2">
                 <input
                   v-model="tripoApiKey"
@@ -819,11 +926,16 @@ const sensitivities: { id: SensitivityLevel; name: string; desc: string }[] = [
                 />
                 <button
                   @click="handleSaveTripoKey"
-                  class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold shrink-0 transition"
+                  class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold shrink-0 transition cursor-pointer"
                 >
                   Save
                 </button>
               </div>
+
+              <!-- Direct per-field Saved message -->
+              <p v-if="tripoSavedMsg" class="text-[11px] text-emerald-400 flex items-center gap-1.5 animate-in fade-in">
+                <Check class="w-3.5 h-3.5" /> {{ tripoSavedMsg }}
+              </p>
             </div>
 
             <!-- Three.js Notice -->

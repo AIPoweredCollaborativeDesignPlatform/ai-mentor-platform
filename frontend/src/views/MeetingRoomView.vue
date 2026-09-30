@@ -1417,11 +1417,34 @@ onUnmounted(() => {
               <!-- Embedded Whiteboard State (50% size, light background) -->
               <div
                 v-if="msg.type === 'whiteboard_state'"
-                class="mt-2 rounded-xl overflow-hidden cursor-pointer group shadow relative border border-slate-700/80 hover:border-indigo-500/50 transition max-w-[130px] sm:max-w-[150px] bg-slate-100"
+                class="mt-2 rounded-xl overflow-hidden shadow relative border border-slate-700/80 transition max-w-[130px] sm:max-w-[150px] bg-slate-100"
+                :class="[
+                  msg.metadata?.isPrivate && msg.senderUid !== authStore.uid && msg.metadata?.creatorUid !== authStore.uid
+                    ? 'opacity-60 cursor-not-allowed border-slate-800'
+                    : 'cursor-pointer group hover:border-indigo-500/50'
+                ]"
                 @click="openWhiteboardState(msg)"
               >
-                <img :src="msg.fileData?.url" class="w-full h-auto max-h-24 object-contain group-hover:scale-105 transition" />
-                <div class="absolute inset-0 flex items-center justify-center bg-slate-950/40 opacity-0 group-hover:opacity-100 transition">
+                <img
+                  :src="msg.fileData?.url"
+                  class="w-full h-auto max-h-24 object-contain transition"
+                  :class="[
+                    msg.metadata?.isPrivate && msg.senderUid !== authStore.uid && msg.metadata?.creatorUid !== authStore.uid
+                      ? 'grayscale brightness-75'
+                      : 'group-hover:scale-105'
+                  ]"
+                />
+                <!-- Non-author private lock overlay -->
+                <div
+                  v-if="msg.metadata?.isPrivate && msg.senderUid !== authStore.uid && msg.metadata?.creatorUid !== authStore.uid"
+                  class="absolute inset-0 bg-slate-950/75 flex flex-col items-center justify-center p-1 text-center"
+                >
+                  <Lock class="w-4 h-4 text-amber-400 mb-0.5" />
+                  <span class="text-[9px] font-semibold text-slate-200 leading-tight">Private Board</span>
+                  <span class="text-[8px] text-slate-400">Author only</span>
+                </div>
+                <!-- Author or public edit hover -->
+                <div v-else class="absolute inset-0 flex items-center justify-center bg-slate-950/40 opacity-0 group-hover:opacity-100 transition">
                   <span class="bg-indigo-600 text-white px-2 py-0.5 rounded text-[10px] font-bold shadow-lg flex items-center gap-1">
                     <PenTool class="w-3 h-3" /> Edit
                   </span>

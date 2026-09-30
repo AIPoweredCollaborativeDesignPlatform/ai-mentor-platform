@@ -16,7 +16,7 @@ if ((fabric as any).Object?.prototype) {
   (fabric as any).Object.prototype.objectCaching = false;
 }
 import {
-  X, Pencil, Image as ImageIcon, Undo2, Redo2, Trash2, Maximize, Minimize, Check, Loader2, Sparkles, Send, Radio, Settings2, MousePointer2, Type, Square, Circle, Triangle, Minus, ArrowUpRight, Group, Ungroup, BringToFront, SendToBack, MoveUp, MoveDown, Copy, Scissors, ClipboardPaste, AlertTriangle, AlertCircle, RefreshCw, ChevronDown, ChevronUp, StickyNote, MoreHorizontal, Lock, Unlock, HelpCircle, Waypoints, Globe, MicOff, Save
+  X, Pencil, Image as ImageIcon, Undo2, Redo2, Trash2, Maximize, Minimize, Check, Loader2, Sparkles, Send, Radio, Settings2, MousePointer2, Type, Square, Circle, Triangle, Minus, ArrowUpRight, Group, Ungroup, BringToFront, SendToBack, MoveUp, MoveDown, Copy, Scissors, ClipboardPaste, AlertTriangle, AlertCircle, RefreshCw, ChevronDown, ChevronUp, StickyNote, MoreHorizontal, Lock, Unlock, HelpCircle, Waypoints, Globe, MicOff, Save, User, Users, Camera
 } from 'lucide-vue-next';
 import { db } from '../firebase/config';
 import { doc, collection, onSnapshot, setDoc, deleteDoc, type Unsubscribe } from 'firebase/firestore';
@@ -36,7 +36,7 @@ const isCollabActive = computed(() => !!roomStore.currentRoom?.whiteboardActive 
 const emit = defineEmits<{
   (e: 'close'): void;
   (e: 'share', file: File): void;
-  (e: 'save-state', json: string, previewDataUrl: string, assetId?: string | null): void;
+  (e: 'save-state', json: string, previewDataUrl: string, assetId?: string | null, isPrivate?: boolean): void;
 }>();
 
 const currentAssetId = ref<string | null | undefined>(props.activeAssetId);
@@ -214,6 +214,32 @@ const displayToast = (msg: string, duration = 2500) => {
   toastTimer = setTimeout(() => { showToast.value = false; }, duration);
 };
 const showShortcutsModal = ref(false);
+
+const viewfinderBounds = computed(() => {
+  if (!canvas || !wrapperRef.value) return null;
+  void viewportVersion.value;
+  const screenW = canvas.getWidth();
+  const screenH = canvas.getHeight();
+  const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
+  const zoom = canvas.getZoom();
+
+  // Workspace bounds in screen coordinates
+  const wsScreenLeft = vpt[4];
+  const wsScreenTop = vpt[5];
+  const wsScreenRight = WORKSPACE_WIDTH * zoom + vpt[4];
+  const wsScreenBottom = WORKSPACE_HEIGHT * zoom + vpt[5];
+
+  // Intersection between visible container and editable workspace
+  const l = Math.max(0, wsScreenLeft);
+  const t = Math.max(0, wsScreenTop);
+  const r = Math.min(screenW, wsScreenRight);
+  const b = Math.min(screenH, wsScreenBottom);
+
+  const w = r - l;
+  const h = b - t;
+  if (w <= 20 || h <= 20) return null;
+  return { left: Math.round(l), top: Math.round(t), width: Math.round(w), height: Math.round(h) };
+});
 
 const updateStickyToolbar = () => {
   if (!canvas) {
@@ -433,10 +459,49 @@ const liveNodeArrowSvg = computed(() => {
 const enterArrowNodeEditing = (arrow: any) => {
   if (!arrow || !(arrow as any).isArrow) return;
   isArrowNodeEditing.value = true;
-  editingArrow.value = arrow;
 
   if (Array.isArray(arrow.arrowPoints) && arrow.arrowPoints.length > 0) {
-    editingArrowPoints.value = arrow.arrowPoints.map((p: any) => ({ x: p.x, y: p.y }));
+    const M0 = (arrow as any).initialMatrix || arrow.calcTransformMatrix();
+    const M1 = arrow.calcTransformMatrix();
+    let pts = arrow.arrowPoints.map((p: any) => ({ x: p.x, y: p.y }));
+
+    let matrixChanged = false;
+    for (let i = 0; i < 6; i++) {
+      if (Math.abs(M1[i] - M0[i]) > 1e-4) {
+        matrixChanged = true;
+        break;
+      }
+    }
+    if (matrixChanged) {
+      try {
+        const invM0 = fabric.util.invertTransform(M0);
+        const M_delta = fabric.util.multiplyTransformMatrices(M1, invM0);
+        pts = pts.map((pt: any) => fabric.util.transformPoint(pt, M_delta));
+
+        // Recreate the arrow at scale=1, angle=0 with the transformed world points
+        const updated = createArrowFromPoints(pts, (arrow as any).arrowColor, (arrow as any).arrowStrokeWidth, true);
+        if (updated && canvas) {
+          (updated as any).arrowId = (arrow as any).arrowId;
+          (updated as any).isLocked = (arrow as any).isLocked;
+          (updated as any).authorUid = (arrow as any).authorUid;
+          (updated as any).authorName = (arrow as any).authorName;
+          const allObjs = canvas.getObjects();
+          const idx = allObjs.indexOf(arrow);
+          if (idx !== -1) {
+            canvas.remove(arrow);
+            canvas.insertAt(idx, updated);
+            arrow = updated;
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to transform arrow nodes:', err);
+      }
+    }
+
+    editingArrow.value = arrow;
+    editingArrowPoints.value = pts;
+    (arrow as any).arrowPoints = pts.map((p: any) => ({ ...p }));
+    (arrow as any).initialMatrix = arrow.calcTransformMatrix();
   } else {
     return;
   }
@@ -954,15 +1019,35 @@ const getCanvasSnapshot = (quality = 0.7, highRes = false): string => {
     }
   }
 
-  // 3. Draw fabric lower canvas elements clipped strictly to workspace intersection
-  const lowerCanvas = canvas.lowerCanvasEl;
-  if (lowerCanvas) {
-    const dpr = lowerCanvas.width / screenW;
-    const sx = finalCropLeft * dpr;
-    const sy = finalCropTop * dpr;
-    const sw = finalCropW * dpr;
-    const sh = finalCropH * dpr;
-    ctx.drawImage(lowerCanvas, sx, sy, sw, sh, 0, 0, outW, outH);
+  // 3. Draw fabric elements clipped strictly to workspace intersection at true high resolution
+  let renderedVector = false;
+  if ((highRes || quality >= 0.8) && typeof (canvas as any).toCanvasElement === 'function') {
+    try {
+      const vectorEl = (canvas as any).toCanvasElement(scaleOut, {
+        left: finalCropLeft,
+        top: finalCropTop,
+        width: finalCropW,
+        height: finalCropH
+      });
+      if (vectorEl && vectorEl.width > 0 && vectorEl.height > 0) {
+        ctx.drawImage(vectorEl, 0, 0, outW, outH);
+        renderedVector = true;
+      }
+    } catch (err) {
+      console.warn('Vector snapshot fallback to lowerCanvas:', err);
+    }
+  }
+
+  if (!renderedVector) {
+    const lowerCanvas = canvas.lowerCanvasEl;
+    if (lowerCanvas) {
+      const dpr = lowerCanvas.width / screenW;
+      const sx = finalCropLeft * dpr;
+      const sy = finalCropTop * dpr;
+      const sw = finalCropW * dpr;
+      const sh = finalCropH * dpr;
+      ctx.drawImage(lowerCanvas, sx, sy, sw, sh, 0, 0, outW, outH);
+    }
   }
 
   // Restore selection
@@ -1016,6 +1101,7 @@ interface SmoothCursor {
   targetX: number;
   targetY: number;
   liveStroke?: { points: { x: number; y: number }[]; color: string; width: number; tool: string } | null;
+  strokeCompletedAt?: number;
 }
 
 const remoteCursors = ref<Record<string, CursorData>>({});
@@ -1070,8 +1156,8 @@ const startCursorLerpLoop = () => {
       const dx = c.targetX - c.currentX;
       const dy = c.targetY - c.currentY;
       if (Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1) {
-        c.currentX += dx * 0.35;
-        c.currentY += dy * 0.35;
+        c.currentX += dx * 0.22;
+        c.currentY += dy * 0.22;
       } else {
         c.currentX = c.targetX;
         c.currentY = c.targetY;
@@ -1098,7 +1184,7 @@ const pointsToSvgPath = (points: { x: number; y: number }[]) => {
 };
 
 const broadcastMyCursor = (opt: any) => {
-  if (!db || !authStore.uid || !roomStore.currentRoom) return;
+  if (!isCollabActive.value || !db || !authStore.uid || !roomStore.currentRoom) return;
   const now = Date.now();
   if (now - lastCursorBroadcast < 35) return; // 35ms throttle (~30Hz update)
 
@@ -1149,7 +1235,7 @@ const startCursorListener = () => {
     unsubCursors();
     unsubCursors = null;
   }
-  if (!db || !roomStore.currentRoom) return;
+  if (!isCollabActive.value || !db || !roomStore.currentRoom) return;
   const roomId = roomStore.currentRoom.roomId;
   const cursorsCol = collection(db, 'rooms', roomId, 'cursors');
   unsubCursors = onSnapshot(cursorsCol, (snapshot) => {
@@ -1165,7 +1251,18 @@ const startCursorListener = () => {
           smoothedCursors.value[data.uid].name = data.name;
           smoothedCursors.value[data.uid].avatar = data.avatar;
           smoothedCursors.value[data.uid].color = data.color;
-          smoothedCursors.value[data.uid].liveStroke = data.liveStroke;
+          if (data.liveStroke) {
+            smoothedCursors.value[data.uid].liveStroke = data.liveStroke;
+            smoothedCursors.value[data.uid].strokeCompletedAt = undefined;
+          } else if (smoothedCursors.value[data.uid].liveStroke) {
+            // Keep remote stroke temporarily so it doesn't flicker/vanish before Firestore state arrives
+            if (!smoothedCursors.value[data.uid].strokeCompletedAt) {
+              smoothedCursors.value[data.uid].strokeCompletedAt = Date.now();
+            } else if (Date.now() - (smoothedCursors.value[data.uid].strokeCompletedAt || 0) > 3500) {
+              smoothedCursors.value[data.uid].liveStroke = null;
+              smoothedCursors.value[data.uid].strokeCompletedAt = undefined;
+            }
+          }
         } else {
           smoothedCursors.value[data.uid] = {
             uid: data.uid,
@@ -2154,12 +2251,28 @@ const initFabric = () => {
     }
   });
 
-  canvas.on('text:editing:exited', (e) => {
+  canvas.on('text:changed', (e: any) => {
+    if (!canvas || isInternalChange) return;
+    const target = e.target;
+    if (target && (target.isStickyNote || target.stickyColorConfig)) {
+      target.initDimensions?.();
+      target.setCoords?.();
+    }
+  });
+
+  canvas.on('text:editing:exited', (e: any) => {
     if (!canvas) return;
     const textObj = e.target as any;
+    if (!textObj) return;
     if (!textObj.text?.trim() || textObj.text === 'Type here...' || textObj.text === 'Type note here...') {
       canvas.remove(textObj);
       canvas.requestRenderAll();
+      saveHistoryState();
+      syncToFirebase();
+      updateSelectionState();
+      return;
+    }
+    if (!isInternalChange) {
       saveHistoryState();
       syncToFirebase();
       updateSelectionState();
@@ -2527,7 +2640,14 @@ const initFabric = () => {
 
     // Arrow live sampled drawing: real-time vector arrow preview while dragging
     if (currentTool.value === 'arrow' && isMouseDown) {
-      const scenePoint = canvas.getScenePoint(e);
+      let scenePoint = canvas.getScenePoint(e);
+      if (e.shiftKey && pencilStrokePoints.length >= 1) {
+        const p0 = pencilStrokePoints[0];
+        const angle = Math.atan2(scenePoint.y - p0.y, scenePoint.x - p0.x);
+        const snapped = Math.round(angle / (Math.PI / 4)) * (Math.PI / 4);
+        const dist = Math.hypot(scenePoint.x - p0.x, scenePoint.y - p0.y);
+        scenePoint = new fabric.Point(p0.x + dist * Math.cos(snapped), p0.y + dist * Math.sin(snapped));
+      }
       const lastPt = pencilStrokePoints[pencilStrokePoints.length - 1];
       const dist = lastPt ? Math.hypot(scenePoint.x - lastPt.x, scenePoint.y - lastPt.y) : 0;
       if (!lastPt || dist >= 8) {
@@ -2577,26 +2697,85 @@ const initFabric = () => {
 
     if (!drawingObject || !drawingStartPoint) return;
     const scenePoint = canvas.getScenePoint(e);
+    const isShift = e.shiftKey;
+    const isAlt = e.altKey;
+
+    const dx = scenePoint.x - drawingStartPoint.x;
+    const dy = scenePoint.y - drawingStartPoint.y;
 
     if (currentTool.value === 'rect' || currentTool.value === 'triangle') {
-      const left = Math.min(scenePoint.x, drawingStartPoint.x);
-      const top = Math.min(scenePoint.y, drawingStartPoint.y);
-      const width = Math.abs(scenePoint.x - drawingStartPoint.x);
-      const height = Math.abs(scenePoint.y - drawingStartPoint.y);
-      drawingObject.set({ left, top, width, height });
+      let w = Math.abs(dx);
+      let h = Math.abs(dy);
+
+      if (isShift) {
+        const size = Math.max(w, h);
+        w = size;
+        h = size;
+      }
+
+      let l: number, t: number;
+      if (isAlt) {
+        l = drawingStartPoint.x - w;
+        t = drawingStartPoint.y - h;
+        w *= 2;
+        h *= 2;
+      } else {
+        l = dx >= 0 ? drawingStartPoint.x : drawingStartPoint.x - w;
+        t = dy >= 0 ? drawingStartPoint.y : drawingStartPoint.y - h;
+      }
+
+      drawingObject.set({ left: l, top: t, width: w, height: h });
     } else if (currentTool.value === 'circle') {
-      const minX = Math.min(scenePoint.x, drawingStartPoint.x);
-      const minY = Math.min(scenePoint.y, drawingStartPoint.y);
-      const rx = Math.abs(scenePoint.x - drawingStartPoint.x) / 2;
-      const ry = Math.abs(scenePoint.y - drawingStartPoint.y) / 2;
+      let rx = Math.abs(dx) / 2;
+      let ry = Math.abs(dy) / 2;
+
+      if (isShift) {
+        const r = Math.max(rx, ry);
+        rx = r;
+        ry = r;
+      }
+
+      let cx: number, cy: number;
+      if (isAlt) {
+        cx = drawingStartPoint.x;
+        cy = drawingStartPoint.y;
+        rx = isShift ? Math.max(Math.abs(dx), Math.abs(dy)) : Math.abs(dx);
+        ry = isShift ? rx : Math.abs(dy);
+      } else {
+        cx = dx >= 0 ? drawingStartPoint.x + rx : drawingStartPoint.x - rx;
+        cy = dy >= 0 ? drawingStartPoint.y + ry : drawingStartPoint.y - ry;
+      }
+
       drawingObject.set({
-        left: minX + rx,
-        top: minY + ry,
+        left: cx,
+        top: cy,
+        originX: 'center',
+        originY: 'center',
         rx,
         ry
       });
     } else if (currentTool.value === 'line') {
-      drawingObject.set({ x2: scenePoint.x, y2: scenePoint.y });
+      let startX = drawingStartPoint.x;
+      let startY = drawingStartPoint.y;
+      let endX = scenePoint.x;
+      let endY = scenePoint.y;
+
+      if (isShift) {
+        const angle = Math.atan2(endY - startY, endX - startX);
+        const snapped = Math.round(angle / (Math.PI / 4)) * (Math.PI / 4);
+        const dist = Math.hypot(endX - startX, endY - startY);
+        endX = startX + dist * Math.cos(snapped);
+        endY = startY + dist * Math.sin(snapped);
+      }
+
+      if (isAlt) {
+        const diffX = endX - startX;
+        const diffY = endY - startY;
+        startX = drawingStartPoint.x - diffX;
+        startY = drawingStartPoint.y - diffY;
+      }
+
+      drawingObject.set({ x1: startX, y1: startY, x2: endX, y2: endY });
     }
     canvas.requestRenderAll();
   });
@@ -3316,7 +3495,15 @@ const loadFromFirebase = async (json: string) => {
     });
   }
 
+  // Preserve user's local viewport transform
+  const savedVpt = canvas.viewportTransform ? [...canvas.viewportTransform] : null;
+
   await canvas.loadFromJSON(json);
+
+  if (savedVpt) {
+    canvas.setViewportTransform(savedVpt as [number, number, number, number, number, number]);
+  }
+
   rehydrateCanvasObjects();
   syncNodeEditingStateAfterReload();
 
@@ -3337,9 +3524,19 @@ const loadFromFirebase = async (json: string) => {
     }
   }
 
+  canvas.calcViewportBoundaries();
   canvas.getObjects().forEach(o => o.setCoords());
+  canvas.requestRenderAll();
   canvas.renderAll();
   viewportVersion.value++;
+
+  // Remote state has successfully synced into Fabric canvas, clear finished live strokes
+  for (const uid in smoothedCursors.value) {
+    if (smoothedCursors.value[uid].strokeCompletedAt) {
+      smoothedCursors.value[uid].liveStroke = null;
+      smoothedCursors.value[uid].strokeCompletedAt = undefined;
+    }
+  }
 
   if (historyStack.value.length === 0) {
     historyStack.value = [json];
@@ -4237,22 +4434,9 @@ const redo = async () => {
     isInternalChange = true;
     try {
       if (action.type === 'remove') {
-        const undoItems: UserUndoItem[] = [];
-        for (const item of action.items) {
-          const found = canvas.getObjects().find((o: any) => (o.id && o.id === item.targetId) || (o.arrowId && o.arrowId === item.targetId));
-          if (found) {
-            undoItems.push({
-              targetId: item.targetId,
-              authorUid: item.authorUid,
-              objectJson: found.toObject(CUSTOM_PROPS)
-            });
-            canvas.remove(found);
-          }
-        }
-        if (undoItems.length > 0) {
-          localUserUndoStack.value.push({ type: 'add', items: undoItems });
-        }
-      } else if (action.type === 'add') {
+        // Redo is re-applying an action that was undone by removing.
+        // Undo undid an 'add' by removing the object and pushed type: 'remove'.
+        // Redo must re-add the object back to the canvas.
         const undoItems: UserUndoItem[] = [];
         for (const item of action.items) {
           if (item.objectJson) {
@@ -4268,9 +4452,27 @@ const redo = async () => {
           }
         }
         if (undoItems.length > 0) {
-          localUserUndoStack.value.push({ type: 'remove', items: undoItems });
+          localUserUndoStack.value.push({ type: 'add', items: undoItems });
         }
         rehydrateCanvasObjects();
+      } else if (action.type === 'add') {
+        // Undo undid a 'remove' by restoring the object and pushed type: 'add'.
+        // Redo must delete the object again.
+        const undoItems: UserUndoItem[] = [];
+        for (const item of action.items) {
+          const found = canvas.getObjects().find((o: any) => (o.id && o.id === item.targetId) || (o.arrowId && o.arrowId === item.targetId));
+          if (found) {
+            undoItems.push({
+              targetId: item.targetId,
+              authorUid: item.authorUid,
+              objectJson: found.toObject(CUSTOM_PROPS)
+            });
+            canvas.remove(found);
+          }
+        }
+        if (undoItems.length > 0) {
+          localUserUndoStack.value.push({ type: 'remove', items: undoItems });
+        }
       } else if (action.type === 'modify') {
         const undoItems: UserUndoItem[] = [];
         for (const item of action.items) {
@@ -4655,7 +4857,7 @@ const triggerAutoSaveAsAsset = async () => {
   if (!canvas) return '';
   const json = getSerializedCanvasJson();
   const dataUrl = getCanvasSnapshot(0.7);
-  emit('save-state', json, dataUrl, currentAssetId.value);
+  emit('save-state', json, dataUrl, currentAssetId.value, !isCollabActive.value);
   hasUnsavedChanges.value = false;
   return json;
 };
@@ -4930,15 +5132,32 @@ onMounted(() => {
   if (wrapperRef.value) {
     wrapperRef.value.addEventListener('contextmenu', handleContextMenuCapture, { capture: true });
   }
-  startCursorListener();
+  if (isCollabActive.value) {
+    startCursorListener();
+  }
   nextTick(() => {
     initFabric();
   });
 });
 
 watch(() => roomStore.currentRoom?.roomId, (newRoomId) => {
-  if (newRoomId) {
+  if (newRoomId && isCollabActive.value) {
     startCursorListener();
+  }
+});
+
+watch(isCollabActive, (active) => {
+  if (active) {
+    startCursorListener();
+  } else {
+    if (unsubCursors) {
+      unsubCursors();
+      unsubCursors = null;
+    }
+    stopCursorLerpLoop();
+    removeMyCursor();
+    smoothedCursors.value = {};
+    remoteCursors.value = {};
   }
 });
 
@@ -4970,20 +5189,30 @@ onUnmounted(() => {
 
 <template>
   <div ref="rootRef" class="h-full w-full flex flex-col relative bg-slate-900 overflow-hidden" @contextmenu.prevent>
-    <!-- Header -->
+    <!-- Header Left: Status Badge -->
     <div
-      class="absolute top-4 left-4 z-10 flex items-center gap-2 transition-opacity duration-200"
+      class="absolute top-4 left-4 z-10 flex items-center gap-2 transition-opacity duration-200 select-none"
       :class="{ 'opacity-15': isHoveringSend }"
     >
-      <div v-if="isCollabActive" class="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-emerald-600/90 shadow-sm border border-emerald-400 flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-white">
-        <span class="w-2 h-2 rounded-full bg-emerald-200 animate-pulse"></span>
-        <span v-if="whiteboardContainerWidth >= 640">{{ roomStore.currentRoom?.whiteboardHostName }} Shared Canvas</span>
-        <span v-else>Shared</span>
+      <!-- Shared Canvas Badge -->
+      <div
+        v-if="isCollabActive"
+        class="h-8 px-2.5 rounded-full bg-emerald-600/90 shadow-sm border border-emerald-400 flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-white shrink-0"
+        title="Shared Canvas (Team Collaboration Active)"
+      >
+        <Users class="w-3.5 h-3.5 text-emerald-200 shrink-0" />
+        <span class="w-2 h-2 rounded-full bg-emerald-300 animate-pulse shrink-0"></span>
+        <span v-if="whiteboardContainerWidth >= 640" class="truncate max-w-[140px]">{{ roomStore.currentRoom?.whiteboardHostName }} Shared Canvas</span>
       </div>
-      <div v-else class="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-white/90 shadow-sm border border-slate-200 flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-slate-700">
-        <Sparkles class="w-3.5 h-3.5 text-sky-500" />
+
+      <!-- Personal Board Badge -->
+      <div
+        v-else
+        class="h-8 px-2.5 rounded-full bg-white/95 shadow-sm border border-slate-200 flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-slate-700 shrink-0"
+        title="Personal Board (Private Draft)"
+      >
+        <User class="w-3.5 h-3.5 text-sky-500 shrink-0" />
         <span v-if="whiteboardContainerWidth >= 640">Personal Board</span>
-        <span v-else>Personal</span>
       </div>
     </div>
 
@@ -5040,64 +5269,53 @@ onUnmounted(() => {
       </div>
     </div>
     
+    <!-- Header Right: Action Buttons -->
     <div
       class="absolute top-4 right-4 z-10 flex items-center gap-1 sm:gap-2 transition-opacity duration-200"
       :class="{ 'opacity-15': isHoveringSend }"
     >
-      <!-- Publisher Settings Dropdown Menu (Protected from accidental clicks) -->
-      <div v-if="isCollabActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid" class="relative">
-        <button
-          @click="showPublishMenu = !showPublishMenu"
-          class="px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-xl bg-white/90 hover:bg-white text-slate-700 hover:text-indigo-600 shadow-sm transition cursor-pointer flex items-center gap-1 text-xs font-medium"
-          title="Collaboration Settings"
-        >
-          <Settings2 class="w-3.5 h-3.5" />
-          <span v-if="whiteboardContainerWidth >= 640">Settings</span>
-        </button>
-        <div
-          v-if="showPublishMenu"
-          @click.stop
-          class="absolute right-0 mt-1 w-48 bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl p-1 z-50 text-xs flex flex-col"
-        >
-          <button
-            @click="showPublishMenu = false; showPrivateConfirmModal = true"
-            class="w-full text-left px-3 py-2 rounded-lg hover:bg-rose-950/60 text-rose-300 flex items-center gap-2 transition cursor-pointer"
-          >
-            <Lock class="w-3.5 h-3.5 text-rose-400" />
-            <span>Make Board Private...</span>
-          </button>
-        </div>
-      </div>
-
-      <!-- Explicit Save Button -->
+      <!-- Explicit Save Button (fixed border & padding to prevent ANY micro layout shift on save) -->
       <button
         @click="handleQuickSave"
-        class="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-xl bg-white/90 hover:bg-white text-slate-700 hover:text-indigo-600 shadow-sm transition text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
-        :class="{ 'bg-emerald-50 text-emerald-700 border border-emerald-300': isRecentlySaved }"
+        class="h-8 px-2.5 sm:px-3 rounded-xl transition text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-sm border"
+        :class="isRecentlySaved ? 'bg-emerald-50 text-emerald-700 border-emerald-400' : 'bg-white/95 hover:bg-white text-slate-700 hover:text-indigo-600 border-slate-200'"
         title="Save whiteboard to Room Album (Ctrl+S)"
       >
-        <Check v-if="isRecentlySaved" class="w-3.5 h-3.5 text-emerald-600" />
-        <Save v-else class="w-3.5 h-3.5 text-indigo-500" />
-        <span v-if="whiteboardContainerWidth >= 640">{{ isRecentlySaved ? 'Saved' : 'Save Board' }}</span>
-        <span v-else>{{ isRecentlySaved ? 'Saved' : 'Save' }}</span>
+        <Check v-if="isRecentlySaved" class="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+        <Save v-else class="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+        <span v-if="whiteboardContainerWidth >= 680">{{ isRecentlySaved ? 'Saved' : 'Save Board' }}</span>
+      </button>
+
+      <!-- Toggle: Make Private (if Shared & Host) OR Share Board (if Personal) directly next to Save -->
+      <button
+        v-if="isCollabActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid"
+        @click="showPrivateConfirmModal = true"
+        class="h-8 px-2.5 sm:px-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white shadow-sm border border-rose-500 transition text-xs font-semibold flex items-center gap-1.5 cursor-pointer shrink-0"
+        title="Convert to Private Board (Stop Team Collaboration)"
+      >
+        <Lock class="w-3.5 h-3.5 shrink-0" />
+        <span v-if="whiteboardContainerWidth >= 680">Make Private</span>
       </button>
 
       <button
-        v-if="!isCollabActive"
+        v-else-if="!isCollabActive"
         @click="handlePublish"
         :disabled="isCurrentUserMuted"
-        class="px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm transition text-xs font-semibold flex items-center gap-1 cursor-pointer disabled:opacity-50"
+        class="h-8 px-2.5 sm:px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm border border-indigo-500 transition text-xs font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0"
         title="Publish as shared canvas for team collaboration"
       >
-        <Globe class="w-3.5 h-3.5" />
-        <span v-if="whiteboardContainerWidth >= 640">Publish Board</span>
-        <span v-else>Publish</span>
+        <Globe class="w-3.5 h-3.5 shrink-0" />
+        <span v-if="whiteboardContainerWidth >= 680">Share Board</span>
       </button>
-      <button @click="showShortcutsModal = true" class="p-1 sm:p-1.5 rounded-xl bg-white/90 hover:bg-white text-slate-600 hover:text-indigo-600 shadow-sm transition cursor-pointer" title="Shortcuts Cheatsheet (?)">
-        <HelpCircle class="w-3.5 sm:w-4 h-3.5 sm:h-4" />
+
+      <!-- Shortcuts Cheatsheet -->
+      <button @click="showShortcutsModal = true" class="h-8 w-8 rounded-xl bg-white/95 hover:bg-white text-slate-600 hover:text-indigo-600 shadow-sm border border-slate-200 transition cursor-pointer flex items-center justify-center shrink-0" title="Shortcuts Cheatsheet (?)">
+        <HelpCircle class="w-3.5 h-3.5" />
       </button>
-      <button @click="handleCloseRequest" class="p-1 sm:p-1.5 rounded-xl bg-white/90 hover:bg-white text-slate-500 hover:text-slate-700 shadow-sm transition cursor-pointer" title="Close Panel">
-        <X class="w-3.5 sm:w-4 h-3.5 sm:h-4" />
+
+      <!-- Close Panel -->
+      <button @click="handleCloseRequest" class="h-8 w-8 rounded-xl bg-white/95 hover:bg-white text-slate-500 hover:text-rose-600 shadow-sm border border-slate-200 transition cursor-pointer flex items-center justify-center shrink-0" title="Close Panel">
+        <X class="w-3.5 h-3.5" />
       </button>
     </div>
 
@@ -5127,7 +5345,7 @@ onUnmounted(() => {
       <canvas ref="canvasRef" class="w-full h-full touch-none"></canvas>
 
       <!-- Live Collaborative Cursors & Live Stroke Overlay -->
-      <div class="absolute inset-0 pointer-events-none z-30 overflow-hidden">
+      <div v-if="isCollabActive" class="absolute inset-0 pointer-events-none z-30 overflow-hidden">
         <!-- Live Remote In-Progress Strokes -->
         <svg class="absolute inset-0 w-full h-full pointer-events-none">
           <template v-for="c in Object.values(smoothedCursors)" :key="'stroke-' + c.uid">
@@ -5179,10 +5397,16 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- Send Viewport Capture Framing Guide / Viewfinder -->
+      <!-- Send Viewport Capture Framing Guide / Viewfinder (Clipped strictly to visible workspace) -->
       <div
-        v-if="isHoveringSend"
-        class="absolute inset-4 sm:inset-8 border-2 border-dashed border-sky-400 pointer-events-none rounded-2xl z-30 flex flex-col justify-start p-3 animate-in fade-in duration-200"
+        v-if="isHoveringSend && viewfinderBounds"
+        class="absolute border-2 border-dashed border-sky-400 pointer-events-none rounded-xl z-30 flex flex-col justify-start p-3 animate-in fade-in duration-200"
+        :style="{
+          left: `${viewfinderBounds.left}px`,
+          top: `${viewfinderBounds.top}px`,
+          width: `${viewfinderBounds.width}px`,
+          height: `${viewfinderBounds.height}px`
+        }"
       >
         <div class="flex justify-between items-center w-full">
           <!-- Top Left -->
@@ -5592,7 +5816,6 @@ onUnmounted(() => {
             <button @click="fileInputRef?.click()" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="isNarrowToolbar ? 'p-1' : 'p-1.5'" title="Add Image"><ImageIcon class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
             <button @click="undo" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="[{'opacity-50 cursor-not-allowed': !canUndo}, isNarrowToolbar ? 'p-1' : 'p-1.5']" title="Undo (Ctrl+Z)" :disabled="!canUndo"><Undo2 class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
             <button @click="redo" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="[{'opacity-50 cursor-not-allowed': !canRedo}, isNarrowToolbar ? 'p-1' : 'p-1.5']" title="Redo (Ctrl+Y / Ctrl+Shift+Z)" :disabled="!canRedo"><Redo2 class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
-            <button @click="handleQuickSave" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="[isRecentlySaved ? 'text-emerald-600 bg-emerald-50' : '', isNarrowToolbar ? 'p-1' : 'p-1.5']" title="Save whiteboard (Ctrl+S)"><Save class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
             <button @click="deleteSelected" class="rounded-xl hover:bg-rose-100 text-rose-500 transition cursor-pointer" :class="isNarrowToolbar ? 'p-1' : 'p-1.5'" title="Delete Selected (Del)"><Trash2 class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
           </div>
         </div>

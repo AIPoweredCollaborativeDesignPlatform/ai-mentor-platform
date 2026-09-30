@@ -178,7 +178,7 @@ const handleToggleHideAsset = async (msg: any) => {
 const handleSaveWhiteboardState = async (json: string, previewUrl: string, explicitAssetId?: string | null, isPrivateParam?: boolean) => {
   let targetAssetId = explicitAssetId || activeWhiteboardAssetId.value;
   // Check if whiteboard is in shared session or personal session
-  const isShared = !!roomStore.currentRoom?.whiteboardActive && (isJoiningSharedBoard.value || roomStore.currentRoom?.whiteboardHostUid === authStore.uid);
+  const isShared = !!roomStore.currentRoom?.whiteboardActive;
   const isPrivate = isPrivateParam !== undefined ? isPrivateParam : !isShared;
 
   const hostUid = roomStore.currentRoom?.whiteboardHostUid || authStore.uid;
@@ -210,6 +210,7 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string, expli
   const meta = {
     whiteboardJson: json,
     isPrivate,
+    isSharedPost: isShared,
     creatorUid: isShared ? hostUid : authStore.uid,
     creatorName: isShared ? hostName : (authStore.displayName || 'Participant'),
     creatorAvatar: isShared ? (roomStore.currentRoom?.participants[hostUid]?.avatar || '🎨') : (authStore.avatar || '🎨'),
@@ -217,7 +218,7 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string, expli
   };
 
   if (targetAssetId) {
-    // Update existing asset in Room Album (silent auto-save, NO chat flood)
+    // Update existing asset in Assets Library (silent auto-save, NO chat flood)
     await roomStore.updateCustomMessage(targetAssetId, {
       fileData: {
         type: 'image',
@@ -234,7 +235,7 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string, expli
       senderName: isShared ? hostName : (authStore.displayName || 'Participant'),
       senderAvatar: isShared ? (roomStore.currentRoom?.participants[hostUid]?.avatar || '🎨') : (authStore.avatar || '🎨'),
       type: 'whiteboard_state',
-      content: isPrivate ? 'Whiteboard saved (Private Draft)' : 'Shared Whiteboard saved to Room Album',
+      content: isPrivate ? 'Whiteboard saved (Personal Draft)' : 'Shared Whiteboard saved to Assets Library',
       fileData: {
         type: 'image',
         url: previewUrl,
@@ -1409,10 +1410,18 @@ onUnmounted(() => {
                 <div
                   v-if="msg.fileData.type === 'image'"
                   class="rounded-xl overflow-hidden max-w-sm cursor-pointer group shadow"
-                  @click="previewMediaUrl = msg.fileData.url"
-                  title="Click to expand"
+                  @click="!msg.metadata?.isHidden && (previewMediaUrl = msg.fileData.url)"
+                  :title="msg.metadata?.isHidden ? 'This image has been hidden from assets' : 'Click to expand'"
                 >
+                  <div
+                    v-if="msg.metadata?.isHidden"
+                    class="px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate-800 text-xs text-slate-400 italic flex items-center gap-2 select-none"
+                  >
+                    <EyeOff class="w-4 h-4 text-slate-500 shrink-0" />
+                    <span>This image has been hidden from assets</span>
+                  </div>
                   <img
+                    v-else
                     :src="msg.fileData.url"
                     alt="Image attachment"
                     class="w-full h-auto max-h-64 object-cover group-hover:scale-105 transition duration-300 rounded-xl"
@@ -1463,25 +1472,42 @@ onUnmounted(() => {
                 :assetData="msg.assetPayload"
               />
 
+              <!-- Embedded 3D Model Hidden Placeholder -->
+              <div
+                v-if="msg.type === 'ai_asset' && (msg.assetType === 'parametric_3d' || msg.assetType === 'mesh_3d') && msg.metadata?.isHidden"
+                class="mt-2 px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate-800 text-xs text-slate-400 italic flex items-center gap-2 select-none max-w-sm"
+              >
+                <EyeOff class="w-4 h-4 text-slate-500 shrink-0" />
+                <span>This 3D model has been hidden from assets</span>
+              </div>
+
               <!-- Embedded 3D Parametric Viewer -->
               <ParametricViewer3D
-                v-if="msg.type === 'ai_asset' && msg.assetType === 'parametric_3d'"
+                v-else-if="msg.type === 'ai_asset' && msg.assetType === 'parametric_3d'"
                 :assetData="msg.assetPayload"
               />
 
               <!-- Embedded GLB Model Viewer -->
               <ModelViewerGLB
-                v-if="msg.type === 'ai_asset' && msg.assetType === 'mesh_3d'"
+                v-else-if="msg.type === 'ai_asset' && msg.assetType === 'mesh_3d'"
                 :assetData="msg.assetPayload"
                 :message="msg"
                 :isResizing="isResizingWhiteboard"
                 @refine="handleRefineModel"
               />
 
-              
+              <!-- Hidden Whiteboard Placeholder in Chat -->
+              <div
+                v-if="msg.type === 'whiteboard_state' && msg.metadata?.isHidden"
+                class="mt-2 px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate-800 text-xs text-slate-400 italic flex items-center gap-2 select-none max-w-[250px]"
+              >
+                <EyeOff class="w-4 h-4 text-slate-500 shrink-0" />
+                <span>This whiteboard preview has been hidden from assets</span>
+              </div>
+
               <!-- Embedded Whiteboard Share Card -->
               <div
-                v-if="msg.type === 'whiteboard_state'"
+                v-else-if="msg.type === 'whiteboard_state'"
                 class="mt-2 rounded-xl overflow-hidden shadow-lg relative border transition max-w-[210px] sm:max-w-[250px] bg-slate-900 select-none"
                 :class="[
                   (!roomStore.currentRoom?.whiteboardActive || msg.metadata?.isPrivate) && msg.senderUid !== authStore.uid && msg.metadata?.creatorUid !== authStore.uid

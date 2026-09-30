@@ -565,7 +565,38 @@ export const useRoomStore = defineStore('room', () => {
 
   // Re-apply to join (after being kicked or rejected)
   const reapplyToJoin = async (pin: string) => {
-    return applyToJoin(pin);
+    myStatus.value = 'pending';
+    const roomInfo = await checkRoomExists(pin);
+    if (!roomInfo.exists) return;
+    const roomId = (roomInfo as any).roomId || `room_${pin}`;
+    const applicant: Participant = {
+      uid: authStore.uid,
+      displayName: authStore.displayName,
+      avatar: authStore.avatar,
+      status: 'pending',
+      isHost: false,
+      isOnline: true,
+      joinedAt: Date.now()
+    };
+    if (db && authStore.uid) {
+      try {
+        startFirestoreListener(roomId);
+        await setDoc(doc(db, 'rooms', roomId, 'participants', authStore.uid), applicant);
+        updateDoc(doc(db, 'rooms', roomId), {
+          participantUids: arrayUnion(authStore.uid),
+          lastActive: Date.now()
+        }).catch(() => {});
+      } catch (err) {
+        console.warn('[Firestore] reapplyToJoin error:', err);
+      }
+    } else {
+      const existing = loadFromStorage(pin);
+      if (existing) {
+        existing.participants[authStore.uid] = applicant;
+        currentRoom.value = existing;
+        saveToStorage(existing);
+      }
+    }
   };
 
   // Host Action: Approve participant
@@ -1567,7 +1598,7 @@ export const useRoomStore = defineStore('room', () => {
           metadata: {
             ...(asset.metadata || {}),
             isPrivate: true,
-            isSharedPost: false
+            isSharedPost: true
           }
         });
       }
@@ -1598,7 +1629,7 @@ export const useRoomStore = defineStore('room', () => {
           metadata: {
             ...(asset.metadata || {}),
             isPrivate: true,
-            isSharedPost: false
+            isSharedPost: true
           }
         });
       }

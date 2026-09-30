@@ -302,13 +302,15 @@ const publicAlbumItems = computed(() => {
   return [...items].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 });
 
-// Personal Album Items (Current user's private saved whiteboards)
+// Personal Drafts (Current user's own private saved whiteboards)
 const personalAlbumItems = computed(() => {
   if (!roomStore.currentRoom?.messages) return [];
   const items = roomStore.currentRoom.messages.filter(m => {
     if (m.type === 'whiteboard_state') {
       const isMine = m.metadata?.creatorUid === authStore.uid || m.senderUid === authStore.uid;
       if (!isMine) return false;
+      // Must be private draft! If it's shared/public, it lives strictly in Public Assets
+      if (!m.metadata?.isPrivate) return false;
       if (!isManagingAssets.value && m.metadata?.isHidden) {
         return false;
       }
@@ -1194,10 +1196,10 @@ onUnmounted(() => {
         <button
           @click="isAssetsDrawerOpen = true"
           class="relative inline-flex items-center gap-1 text-[11px] px-2 py-1.5 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 text-amber-400 font-medium transition cursor-pointer min-h-[36px]"
-          title="Room Assets & Album"
+          title="Assets Library"
         >
           <Box class="w-3.5 h-3.5" />
-          <span class="hidden sm:inline">Album</span>
+          <span class="hidden sm:inline">Assets</span>
         </button>
 
         <!-- Controls Drawer Button -->
@@ -1946,7 +1948,7 @@ onUnmounted(() => {
       <div class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950">
         <h2 class="text-base font-bold text-slate-100 flex items-center gap-2">
           <Box class="w-4 h-4 text-amber-400" />
-          Room Album
+          Assets Library
         </h2>
         <div class="flex items-center gap-1.5">
           <button
@@ -1974,14 +1976,14 @@ onUnmounted(() => {
             class="flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold transition cursor-pointer text-center"
             :class="activeAssetTab === 'public' ? 'bg-sky-600 text-white shadow-xs' : 'text-slate-400 hover:text-slate-200'"
           >
-            Public ({{ publicAlbumItems.length }})
+            Public Assets ({{ publicAlbumItems.length }})
           </button>
           <button
             @click="activeAssetTab = 'personal'"
             class="flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold transition cursor-pointer text-center"
             :class="activeAssetTab === 'personal' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-400 hover:text-slate-200'"
           >
-            Personal ({{ personalAlbumItems.length }})
+            Personal Drafts ({{ personalAlbumItems.length }})
           </button>
         </div>
       </div>
@@ -1990,7 +1992,7 @@ onUnmounted(() => {
         <!-- Render 3D Models & Images in a grid -->
         <div v-if="!albumItems.length" class="text-center text-xs text-slate-500 py-10 px-4">
           <template v-if="activeAssetTab === 'personal'">
-            No personal private whiteboards yet. When you save a board as private, it will appear here only for you.
+            No personal drafts yet. When you save a board as private, it will appear here only for you.
           </template>
           <template v-else>
             No public media assets or shared whiteboards in this room yet.

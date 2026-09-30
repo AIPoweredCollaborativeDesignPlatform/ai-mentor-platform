@@ -1470,7 +1470,7 @@ export const useRoomStore = defineStore('room', () => {
 
   let whiteboardSyncTimer: any = null;
 
-  const startWhiteboardSession = async (initialJson?: string, thumbnail?: string) => {
+  const startWhiteboardSession = async (initialJson?: string, thumbnail?: string, existingAssetId?: string | null) => {
     if (!currentRoom.value || !db) return;
     const hostName = authStore.displayName || 'Participant';
     try {
@@ -1482,27 +1482,47 @@ export const useRoomStore = defineStore('room', () => {
       };
       if (thumbnail) payload.whiteboardThumbnail = thumbnail;
       await updateDoc(doc(db, 'rooms', currentRoom.value.roomId), payload);
-      // Send whiteboard share card to chat
-      await sendCustomMessage({
-        senderUid: authStore.uid,
-        senderName: hostName,
-        senderAvatar: authStore.avatar || '🎨',
-        content: `${hostName} shared a collaborative whiteboard`,
-        type: 'whiteboard_state',
-        fileData: {
-          type: 'image',
-          url: thumbnail || '',
-          name: 'whiteboard.jpg',
-          size: 0
-        },
-        metadata: {
-          whiteboardJson: initialJson || '',
-          isPrivate: false,
-          isSharedPost: true,
-          creatorUid: authStore.uid,
-          creatorName: hostName
-        }
-      });
+
+      if (existingAssetId) {
+        // Move existing asset from Personal to Public (NO DUPLICATION!)
+        await updateCustomMessage(existingAssetId, {
+          fileData: thumbnail ? {
+            type: 'image',
+            url: thumbnail,
+            name: 'whiteboard.jpg',
+            size: 0
+          } : undefined,
+          metadata: {
+            whiteboardJson: initialJson || '',
+            isPrivate: false,
+            isSharedPost: true,
+            creatorUid: authStore.uid,
+            creatorName: hostName
+          }
+        });
+      } else {
+        // Send whiteboard share card to chat
+        await sendCustomMessage({
+          senderUid: authStore.uid,
+          senderName: hostName,
+          senderAvatar: authStore.avatar || '🎨',
+          content: `${hostName} shared a collaborative whiteboard`,
+          type: 'whiteboard_state',
+          fileData: {
+            type: 'image',
+            url: thumbnail || '',
+            name: 'whiteboard.jpg',
+            size: 0
+          },
+          metadata: {
+            whiteboardJson: initialJson || '',
+            isPrivate: false,
+            isSharedPost: true,
+            creatorUid: authStore.uid,
+            creatorName: hostName
+          }
+        });
+      }
     } catch (e) {
       console.error('Failed to start whiteboard:', e);
       alert('Failed to publish whiteboard: ' + ((e as any).message || String(e)));
@@ -1527,7 +1547,6 @@ export const useRoomStore = defineStore('room', () => {
 
   const endWhiteboardSession = async () => {
     if (!currentRoom.value || !db) return;
-    const hostName = authStore.displayName || 'Participant';
     try {
       await updateDoc(doc(db, 'rooms', currentRoom.value.roomId), {
         whiteboardActive: false,
@@ -1536,13 +1555,22 @@ export const useRoomStore = defineStore('room', () => {
         whiteboardState: null,
         whiteboardThumbnail: null
       });
-      // Send capsule announcement to chat
-      await sendCustomMessage({
-        senderUid: 'system',
-        senderName: 'System',
-        content: `${hostName} closed the public whiteboard.`,
-        type: 'text'
-      });
+
+      // Move shared whiteboard back to host's Personal collection (clean out from Public area!)
+      const publicSharedAssets = currentRoom.value.messages.filter(m => 
+        m.type === 'whiteboard_state' && 
+        !m.metadata?.isPrivate && 
+        (m.metadata?.creatorUid === authStore.uid || m.senderUid === authStore.uid)
+      );
+      for (const asset of publicSharedAssets) {
+        await updateCustomMessage(asset.id, {
+          metadata: {
+            ...(asset.metadata || {}),
+            isPrivate: true,
+            isSharedPost: false
+          }
+        });
+      }
     } catch (e) {
       console.warn('Failed to end whiteboard:', e);
     }
@@ -1550,7 +1578,6 @@ export const useRoomStore = defineStore('room', () => {
 
   const makeWhiteboardPrivate = async () => {
     if (!currentRoom.value || !db) return;
-    const hostName = authStore.displayName || 'Participant';
     try {
       await updateDoc(doc(db, 'rooms', currentRoom.value.roomId), {
         whiteboardActive: false,
@@ -1559,12 +1586,22 @@ export const useRoomStore = defineStore('room', () => {
         whiteboardState: null,
         whiteboardThumbnail: null
       });
-      await sendCustomMessage({
-        senderUid: 'system',
-        senderName: 'System',
-        content: `${hostName} converted the whiteboard to private. Team session ended.`,
-        type: 'text'
-      });
+
+      // Move shared whiteboard back to host's Personal collection (clean out from Public area!)
+      const publicSharedAssets = currentRoom.value.messages.filter(m => 
+        m.type === 'whiteboard_state' && 
+        !m.metadata?.isPrivate && 
+        (m.metadata?.creatorUid === authStore.uid || m.senderUid === authStore.uid)
+      );
+      for (const asset of publicSharedAssets) {
+        await updateCustomMessage(asset.id, {
+          metadata: {
+            ...(asset.metadata || {}),
+            isPrivate: true,
+            isSharedPost: false
+          }
+        });
+      }
     } catch (e) {
       console.warn('Failed to make whiteboard private:', e);
     }

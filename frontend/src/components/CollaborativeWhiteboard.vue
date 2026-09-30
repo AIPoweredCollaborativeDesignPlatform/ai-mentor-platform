@@ -948,14 +948,7 @@ let isTakingSnapshot = false;
 const getCanvasSnapshot = (quality = 0.7, highRes = false): string => {
   if (!canvas) return '';
   isTakingSnapshot = true;
-  const activeObj = canvas.getActiveObject();
   try {
-    // Deselect active object temporarily so nodes and handles are never in the exported picture
-    if (activeObj) {
-      canvas.discardActiveObject();
-      canvas.renderAll();
-    }
-
     const screenW = canvas.getWidth();
     const screenH = canvas.getHeight();
     const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
@@ -1041,10 +1034,6 @@ const getCanvasSnapshot = (quality = 0.7, highRes = false): string => {
     return offscreen.toDataURL('image/jpeg', quality);
   } finally {
     isTakingSnapshot = false;
-    if (activeObj) {
-      canvas.setActiveObject(activeObj);
-    }
-    canvas.requestRenderAll();
   }
 };
 
@@ -1951,6 +1940,10 @@ const initFabric = () => {
     uniformScaling: false
   });
 
+  (canvas as any).centeredKey = 'altKey';
+  (canvas as any).uniScaleKey = 'shiftKey';
+  (canvas as any).altActionKey = 'none';
+
   // Guard against browser native context menu anywhere on canvas wrapper and elements
   const blockCanvasContextMenu = (e: MouseEvent) => {
     e.preventDefault();
@@ -2151,6 +2144,7 @@ const initFabric = () => {
   });
 
   // Track object transformation before modification for precise undo/redo
+  let hasObjectTransformed = false;
   let objectTransformBefore: { targetId: string; props: any } | null = null;
   canvas.on('before:transform', (e: any) => {
     const target = e.transform?.target || canvas?.getActiveObject();
@@ -2189,6 +2183,7 @@ const initFabric = () => {
   });
 
   canvas.on('object:modified', (e: any) => {
+    hasObjectTransformed = false;
     const obj = e?.target;
     if (obj && (obj.isStickyNote || obj.stickyColorConfig)) {
       const sx = Math.abs(obj.scaleX || 1);
@@ -2359,7 +2354,6 @@ const initFabric = () => {
         text: target.text || ''
       };
       broadcastMyCursor({});
-      triggerDebouncedAutoSave(600);
     }
   });
 
@@ -2369,6 +2363,18 @@ const initFabric = () => {
     broadcastMyCursor({});
     const textObj = e.target as any;
     if (!textObj) return;
+
+    // Keep sticky notes even if empty! A sticky note is a persistent note pad object on canvas
+    if (textObj.isStickyNote || textObj.stickyColorConfig) {
+      if (!isInternalChange) {
+        saveHistoryState();
+        syncToFirebase();
+        updateSelectionState();
+        triggerDebouncedAutoSave();
+      }
+      return;
+    }
+
     if (!textObj.text?.trim() || textObj.text === 'Type here...' || textObj.text === 'Type note here...') {
       canvas.remove(textObj);
       canvas.requestRenderAll();
@@ -2926,9 +2932,11 @@ const initFabric = () => {
     const e = opt.e as MouseEvent;
     isMouseDown = false;
 
-    // Release Fabric dragging transform state to prevent sticky drag
-    if ((canvas as any)._currentTransform) {
-      (canvas as any)._currentTransform = null;
+    if (hasObjectTransformed) {
+      hasObjectTransformed = false;
+      saveHistoryState();
+      syncToFirebase();
+      triggerDebouncedAutoSave();
     }
 
     if (pencilHoldTimer) {
@@ -3248,6 +3256,7 @@ const initFabric = () => {
       }
       obj.setCoords();
     }
+    hasObjectTransformed = true;
     updateLiveDrag(e);
     updateStickyToolbar();
     updateArrowToolbar();
@@ -3262,18 +3271,9 @@ const initFabric = () => {
   });
 
   canvas.on('object:scaling', (e: any) => {
+    hasObjectTransformed = true;
     const obj = e?.target;
     if (obj) {
-      // Alt modifier: scale from center
-      obj.centeredScaling = !!(e.e?.altKey);
-
-      // Shift modifier: enforce uniform proportional aspect ratio scaling
-      if (e.e?.shiftKey || obj.isStickyNote || obj.stickyColorConfig) {
-        const s = Math.max(Math.abs(obj.scaleX || 1), Math.abs(obj.scaleY || 1));
-        obj.scaleX = (obj.scaleX < 0 ? -1 : 1) * s;
-        obj.scaleY = (obj.scaleY < 0 ? -1 : 1) * s;
-      }
-
       obj.setCoords();
       if ((obj.type === 'activeselection' || obj.type === 'activeSelection') && obj.forEachObject) {
         obj.forEachObject((c: any) => c.setCoords());
@@ -3297,6 +3297,7 @@ const initFabric = () => {
     }
   });
   canvas.on('object:rotating', (e: any) => {
+    hasObjectTransformed = true;
     updateLiveDrag(e);
     updateStickyToolbar();
     updateArrowToolbar();
@@ -3610,8 +3611,7 @@ const syncToFirebase = () => {
   if (isInternalChange || !canvas || !isCollabActive.value) return;
   const json = getSerializedCanvasJson();
   lastSyncedJson = json;
-  const thumbnail = getCanvasSnapshot(0.3);
-  roomStore.syncWhiteboardState(json, thumbnail);
+  roomStore.syncWhiteboardState(json);
 };
 
 const loadFromFirebase = async (json: string) => {
@@ -3734,7 +3734,17 @@ const pasteSelection = async (targetPoint?: { x: number; y: number }) => {
   const clonedObj = await clipboard.clone(CUSTOM_PROPS);
   canvas.discardActiveObject();
 
+  const pastedItemsForUndo: UserUndoItem[] = [];
+
   const preparePastedObject = (obj: any) => {
+    // Generate fresh unique ID so undo/redo and tracking never collides with original copied object!
+    const newId = 'obj_' + Math.random().toString(36).substring(2, 11);
+    obj.id = newId;
+    if (obj.arrowId) {
+      obj.arrowId = newId;
+    }
+    obj.authorUid = authStore.uid;
+
     obj.set({
       selectable: true,
       evented: true,
@@ -3762,6 +3772,12 @@ const pasteSelection = async (targetPoint?: { x: number; y: number }) => {
       obj.initialMatrix = obj.calcTransformMatrix();
       obj.setCoords();
     }
+
+    pastedItemsForUndo.push({
+      targetId: newId,
+      authorUid: authStore.uid,
+      objectJson: obj.toObject(CUSTOM_PROPS)
+    });
   };
 
   if (targetPoint) {
@@ -3794,11 +3810,21 @@ const pasteSelection = async (targetPoint?: { x: number; y: number }) => {
     canvas.add(clonedObj);
   }
 
+  if (pastedItemsForUndo.length > 0) {
+    localUserUndoStack.value.push({
+      type: 'add',
+      items: pastedItemsForUndo
+    });
+    if (localUserUndoStack.value.length > 50) localUserUndoStack.value.shift();
+    localUserRedoStack.value = [];
+  }
+
   canvas.setActiveObject(clonedObj);
   canvas.requestRenderAll();
   saveHistoryState();
   syncToFirebase();
   updateSelectionState();
+  triggerDebouncedAutoSave();
   displayToast('Pasted (Ctrl+V)');
 };
 
@@ -4779,7 +4805,7 @@ const handlePublish = () => {
   if (!canvas) return;
   const json = getSerializedCanvasJson();
   const thumbnail = getCanvasSnapshot(0.3);
-  roomStore.startWhiteboardSession(json, thumbnail);
+  roomStore.startWhiteboardSession(json, thumbnail, currentAssetId.value);
   displayToast('Whiteboard published for team collaboration');
 };
 
@@ -4990,6 +5016,11 @@ async function triggerAutoSaveAsAsset() {
 
 function triggerDebouncedAutoSave(delay = 800) {
   if (!canvas) return;
+  const activeObj = canvas.getActiveObject() as any;
+  if (activeObj?.isEditing) {
+    // Defer auto-save while typing/editing in a note or textbox
+    return;
+  }
   hasUnsavedChanges.value = true;
   saveStatus.value = 'saving';
   if (autoSaveDebounceTimer) clearTimeout(autoSaveDebounceTimer);

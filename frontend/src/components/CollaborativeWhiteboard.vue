@@ -1189,11 +1189,22 @@ const startCursorLerpLoop = () => {
   const loop = () => {
     for (const uid in smoothedCursors.value) {
       const c = smoothedCursors.value[uid];
+      if (typeof c.targetX !== 'number' || isNaN(c.targetX) || typeof c.targetY !== 'number' || isNaN(c.targetY)) {
+        continue;
+      }
+      if (typeof c.currentX !== 'number' || isNaN(c.currentX)) c.currentX = c.targetX;
+      if (typeof c.currentY !== 'number' || isNaN(c.currentY)) c.currentY = c.targetY;
+
       const dx = c.targetX - c.currentX;
       const dy = c.targetY - c.currentY;
-      if (Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1) {
-        c.currentX += dx * 0.22;
-        c.currentY += dy * 0.22;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist > 350) {
+        c.currentX = c.targetX;
+        c.currentY = c.targetY;
+      } else if (dist > 0.1) {
+        c.currentX += dx * 0.45;
+        c.currentY += dy * 0.45;
       } else {
         c.currentX = c.targetX;
         c.currentY = c.targetY;
@@ -1225,13 +1236,22 @@ const broadcastMyCursor = (opt: any) => {
   if (now - lastCursorBroadcast < 35) return; // 35ms throttle (~30Hz update)
 
   if (!canvas) return;
-  const pointer = (canvas as any).getScenePoint ? (canvas as any).getScenePoint(opt.e || opt) : ((canvas as any).getPointer?.(opt.e || opt) || { x: 0, y: 0 });
-  const dx = Math.abs(pointer.x - lastCursorPos.x);
-  const dy = Math.abs(pointer.y - lastCursorPos.y);
+  let rawPointer: any = null;
+  try {
+    if (opt && (opt.e || opt.x !== undefined)) {
+      rawPointer = (canvas as any).getScenePoint ? (canvas as any).getScenePoint(opt.e || opt) : ((canvas as any).getPointer?.(opt.e || opt) || null);
+    }
+  } catch {}
+
+  const pointerX = (rawPointer && Number.isFinite(rawPointer.x)) ? rawPointer.x : (Number.isFinite(lastCursorPos.x) && lastCursorPos.x !== -9999 ? lastCursorPos.x : 0);
+  const pointerY = (rawPointer && Number.isFinite(rawPointer.y)) ? rawPointer.y : (Number.isFinite(lastCursorPos.y) && lastCursorPos.y !== -9999 ? lastCursorPos.y : 0);
+
+  const dx = Math.abs(pointerX - lastCursorPos.x);
+  const dy = Math.abs(pointerY - lastCursorPos.y);
   if (dx < 2 && dy < 2 && !isMouseDown && !currentLiveDrag.value && !currentLiveShape.value && !currentLiveText.value) return;
 
   lastCursorBroadcast = now;
-  lastCursorPos = { x: pointer.x, y: pointer.y };
+  lastCursorPos = { x: pointerX, y: pointerY };
 
   const roomId = roomStore.currentRoom.roomId;
   const cursorRef = doc(db, 'rooms', roomId, 'cursors', authStore.uid);
@@ -1251,8 +1271,8 @@ const broadcastMyCursor = (opt: any) => {
     name: authStore.displayName || 'Guest',
     avatar: authStore.avatar || '🎨',
     color: getCursorColor(authStore.uid),
-    x: Math.round(pointer.x),
-    y: Math.round(pointer.y),
+    x: Math.round(pointerX),
+    y: Math.round(pointerY),
     updatedAt: now,
     liveStroke: liveStrokePayload,
     liveDrag: currentLiveDrag.value,
@@ -3254,15 +3274,6 @@ const initFabric = () => {
         obj.scaleY = (obj.scaleY < 0 ? -1 : 1) * s;
       }
 
-      // Ctrl modifier: snap scale factor to discrete 10% steps
-      if (e.e?.ctrlKey) {
-        const snap = 0.1;
-        const signX = obj.scaleX < 0 ? -1 : 1;
-        const signY = obj.scaleY < 0 ? -1 : 1;
-        obj.scaleX = signX * Math.max(snap, Math.round(Math.abs(obj.scaleX) / snap) * snap);
-        obj.scaleY = signY * Math.max(snap, Math.round(Math.abs(obj.scaleY) / snap) * snap);
-      }
-
       obj.setCoords();
       if ((obj.type === 'activeselection' || obj.type === 'activeSelection') && obj.forEachObject) {
         obj.forEachObject((c: any) => c.setCoords());
@@ -3607,16 +3618,6 @@ const loadFromFirebase = async (json: string) => {
   if (!canvas || !json) return;
   isInternalChange = true;
 
-  // Anti-amnesia: preserve local user's own objects that might not be synced to Firestore yet
-  const localOwnObjects: any[] = [];
-  if (authStore.uid) {
-    canvas.getObjects().forEach((o: any) => {
-      if (o.authorUid === authStore.uid) {
-        localOwnObjects.push(o);
-      }
-    });
-  }
-
   // Preserve user's local viewport transform
   const savedVpt = canvas.viewportTransform ? [...canvas.viewportTransform] : null;
 
@@ -3628,23 +3629,6 @@ const loadFromFirebase = async (json: string) => {
 
   rehydrateCanvasObjects();
   syncNodeEditingStateAfterReload();
-
-  // Check if any of our own local objects were missing in the remote snapshot
-  if (localOwnObjects.length > 0) {
-    const existingIds = new Set(canvas.getObjects().map((o: any) => o.id || o.arrowId).filter(Boolean));
-    let hasMerged = false;
-    for (const obj of localOwnObjects) {
-      const id = obj.id || obj.arrowId;
-      if (id && !existingIds.has(id)) {
-        canvas.add(obj);
-        hasMerged = true;
-      }
-    }
-    if (hasMerged) {
-      canvas.requestRenderAll();
-      syncToFirebase();
-    }
-  }
 
   canvas.calcViewportBoundaries();
   canvas.getObjects().forEach(o => o.setCoords());
@@ -3675,8 +3659,8 @@ watch(() => roomStore.currentRoom?.whiteboardState, (newState, oldState) => {
     // Ignore echo of local changes
     if (newState === lastSyncedJson) return;
 
-    // Defer loading only if user is actively drawing or transforming right now
-    const isInteracting = isMouseDown || isDragging || isQuickShapeResizing || pencilStrokePoints.length > 0 || isDraggingNode.value || !!(canvas as any)._currentTransform;
+    // Defer loading only if user is actively drawing a stroke right now
+    const isInteracting = isMouseDown || pencilStrokePoints.length > 0;
     if (isInteracting) {
       pendingRemoteState = newState;
       return;
@@ -4816,18 +4800,13 @@ const handleConfirmMakePrivate = async () => {
   }
 };
 
-const handleCloseRequest = () => {
-  if (isCollabActive.value) {
-    // When closing active whiteboard, save state to room assets so anyone can open & edit it!
-    triggerAutoSaveAsAsset();
-    emit('close');
-    return;
+const handleCloseRequest = async () => {
+  try {
+    await triggerAutoSaveAsAsset();
+  } catch (e) {
+    console.warn('Auto-save on close error:', e);
   }
-  if (hasUnsavedChanges.value) {
-    showCloseConfirmModal.value = true;
-  } else {
-    emit('close');
-  }
+  emit('close');
 };
 
 const handleConfirmDiscard = () => {
@@ -4848,6 +4827,11 @@ const handleConfirmSave = () => {
 
 // Keyboard Shortcuts
 const handleKeydown = (e: KeyboardEvent) => {
+  // Prevent Windows browser menu activation on Alt key press when canvas is active
+  if (e.key === 'Alt') {
+    e.preventDefault();
+  }
+
   // 0. ESC inside Confirmation Modal: cancel modal and return to editing
   if (e.key === 'Escape' && showCloseConfirmModal.value) {
     e.preventDefault();
@@ -5279,6 +5263,12 @@ const handleWhiteboardWheel = (e: WheelEvent) => {
   }
 };
 
+const handleKeyup = (e: KeyboardEvent) => {
+  if (e.key === 'Alt') {
+    e.preventDefault();
+  }
+};
+
 const onWindowPointerUp = () => {
   if (canvas && (canvas as any)._currentTransform) {
     (canvas as any)._currentTransform = null;
@@ -5290,6 +5280,7 @@ const onWindowPointerUp = () => {
 onMounted(() => {
   window.addEventListener('pointerup', onWindowPointerUp);
   window.addEventListener('keydown', handleKeydown, { capture: true });
+  window.addEventListener('keyup', handleKeyup, { capture: true });
   window.addEventListener('click', handleWindowClick);
   window.addEventListener('paste', handleGlobalPaste);
   window.addEventListener('beforeunload', handleBeforeUnload);
@@ -5339,6 +5330,7 @@ onUnmounted(() => {
   }
   window.removeEventListener('pointerup', onWindowPointerUp);
   window.removeEventListener('keydown', handleKeydown, { capture: true });
+  window.removeEventListener('keyup', handleKeyup, { capture: true });
   window.removeEventListener('click', handleWindowClick);
   window.removeEventListener('paste', handleGlobalPaste);
   window.removeEventListener('beforeunload', handleBeforeUnload);

@@ -33,7 +33,9 @@ import {
   Bell,
   BellOff,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  EyeOff,
+  Settings
 } from 'lucide-vue-next';
 
 import ParametricViewer3D from '../components/ParametricViewer3D.vue';
@@ -145,31 +147,78 @@ const handleShareWhiteboard = async (file: File) => {
   await handleSend();
 };
 
+const isManagingAssets = ref(false);
+
+const toggleManageAssets = () => {
+  isManagingAssets.value = !isManagingAssets.value;
+};
+
+const handleToggleHideAsset = async (msg: any) => {
+  if (!msg.id) return;
+  const newHidden = !msg.metadata?.isHidden;
+  const updatedMeta = {
+    ...(msg.metadata || {}),
+    isHidden: newHidden
+  };
+  msg.metadata = updatedMeta;
+  try {
+    await roomStore.updateCustomMessage(msg.id, {
+      metadata: updatedMeta
+    });
+    roomStore.pushToast(
+      newHidden ? 'Asset Hidden' : 'Asset Unhidden',
+      newHidden ? 'Asset hidden from standard album view.' : 'Asset restored to album view.',
+      'info'
+    );
+  } catch (e) {
+    console.error('Failed to toggle asset hide status:', e);
+  }
+};
+
 const handleSaveWhiteboardState = async (json: string, previewUrl: string, explicitAssetId?: string | null, isPrivateParam?: boolean) => {
-  let assetId = explicitAssetId || activeWhiteboardAssetId.value;
-  // If explicitly passed, use it; otherwise check if whiteboard is in shared mode or personal mode
+  let targetAssetId = explicitAssetId || activeWhiteboardAssetId.value;
+  // Check if whiteboard is in shared session or personal session
   const isShared = !!roomStore.currentRoom?.whiteboardActive && (isJoiningSharedBoard.value || roomStore.currentRoom?.whiteboardHostUid === authStore.uid);
   const isPrivate = isPrivateParam !== undefined ? isPrivateParam : !isShared;
 
-  // Ownership verification: if editing another user's asset, fork into a new personal asset
-  const existingMsg = assetId ? roomStore.currentRoom?.messages.find(m => m.id === assetId) : null;
-  const isOwner = existingMsg ? (existingMsg.metadata?.creatorUid === authStore.uid || existingMsg.senderUid === authStore.uid) : true;
-  if (assetId && !isOwner) {
-    assetId = null;
-    activeWhiteboardAssetId.value = null;
+  const hostUid = roomStore.currentRoom?.whiteboardHostUid || authStore.uid;
+  const hostName = roomStore.currentRoom?.whiteboardHostName || authStore.displayName || 'Host';
+
+  if (isShared) {
+    // In shared session, the asset ALWAYS belongs to the initiator (host)
+    if (!targetAssetId) {
+      const existingShared = roomStore.currentRoom?.messages.find(m => 
+        m.type === 'whiteboard_state' && 
+        (m.metadata?.creatorUid === hostUid || m.senderUid === hostUid) && 
+        !m.metadata?.isPrivate
+      );
+      if (existingShared) {
+        targetAssetId = existingShared.id;
+        activeWhiteboardAssetId.value = existingShared.id;
+      }
+    }
+  } else {
+    // Ownership verification for personal/private mode: if editing another user's asset, fork into a new personal asset
+    const existingMsg = targetAssetId ? roomStore.currentRoom?.messages.find(m => m.id === targetAssetId) : null;
+    const isOwner = existingMsg ? (existingMsg.metadata?.creatorUid === authStore.uid || existingMsg.senderUid === authStore.uid) : true;
+    if (targetAssetId && !isOwner) {
+      targetAssetId = null;
+      activeWhiteboardAssetId.value = null;
+    }
   }
 
   const meta = {
     whiteboardJson: json,
     isPrivate,
-    creatorUid: authStore.uid,
-    creatorName: authStore.displayName || 'Participant',
-    creatorAvatar: authStore.avatar || '🎨'
+    creatorUid: isShared ? hostUid : authStore.uid,
+    creatorName: isShared ? hostName : (authStore.displayName || 'Participant'),
+    creatorAvatar: isShared ? (roomStore.currentRoom?.participants[hostUid]?.avatar || '🎨') : (authStore.avatar || '🎨'),
+    isAutoSave: true
   };
 
-  if (assetId) {
-    // Update existing asset in Room Album (deduplication & overwrite update)
-    await roomStore.updateCustomMessage(assetId, {
+  if (targetAssetId) {
+    // Update existing asset in Room Album (silent auto-save, NO chat flood)
+    await roomStore.updateCustomMessage(targetAssetId, {
       fileData: {
         type: 'image',
         url: previewUrl,
@@ -178,21 +227,12 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string, expli
       },
       metadata: meta
     });
-    // ONLY send a system chat notification if this is a PUBLIC/SHARED whiteboard!
-    if (!isPrivate) {
-      await roomStore.sendCustomMessage({
-        senderUid: 'system',
-        senderName: 'System',
-        content: `${authStore.displayName || 'Participant'} updated a shared whiteboard in Room Album.`,
-        type: 'text'
-      });
-    }
   } else {
-    // Create new whiteboard asset with explicit sender attribution
+    // Create new whiteboard asset under appropriate owner
     const newId = await roomStore.sendCustomMessage({
-      senderUid: authStore.uid,
-      senderName: authStore.displayName || 'Participant',
-      senderAvatar: authStore.avatar || '🎨',
+      senderUid: isShared ? hostUid : authStore.uid,
+      senderName: isShared ? hostName : (authStore.displayName || 'Participant'),
+      senderAvatar: isShared ? (roomStore.currentRoom?.participants[hostUid]?.avatar || '🎨') : (authStore.avatar || '🎨'),
       type: 'whiteboard_state',
       content: isPrivate ? 'Whiteboard saved (Private Draft)' : 'Shared Whiteboard saved to Room Album',
       fileData: {
@@ -205,7 +245,7 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string, expli
     });
     if (newId) {
       activeWhiteboardAssetId.value = newId;
-      assetId = newId;
+      targetAssetId = newId;
       if (whiteboardRef.value) {
         (whiteboardRef.value as any).setCurrentAssetId?.(newId);
       }
@@ -213,7 +253,7 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string, expli
   }
 
   // Trigger Gemini Whiteboard Vision Background Memory Record
-  roomStore.recordWhiteboardSnapshotMemory(previewUrl, json, assetId || undefined);
+  roomStore.recordWhiteboardSnapshotMemory(previewUrl, json, targetAssetId || undefined);
 };
 
 const retryingAiMessageId = ref<string | null>(null);
@@ -227,14 +267,19 @@ const handleRetryAiMessage = async (messageId: string) => {
 };
 
 const openWhiteboardState = (msg: any) => {
-  if (msg.type !== 'whiteboard_state' || !msg.metadata?.whiteboardJson) return;
-  if (msg.metadata?.isPrivate && msg.metadata?.creatorUid !== authStore.uid && msg.senderUid !== authStore.uid) {
-    roomStore.pushToast('Access Restricted', 'This whiteboard is private to its creator.', 'warning');
+  if (msg.type !== 'whiteboard_state') return;
+  const isHost = roomStore.currentRoom?.whiteboardHostUid === authStore.uid || msg.metadata?.creatorUid === authStore.uid || msg.senderUid === authStore.uid;
+  if (!roomStore.currentRoom?.whiteboardActive && !isHost && msg.metadata?.isPrivate) {
+    roomStore.pushToast('Access Restricted', 'This whiteboard is private or the shared session has ended.', 'warning');
+    return;
+  }
+  if (roomStore.currentRoom?.whiteboardActive) {
+    handleJoinSharedWhiteboard();
     return;
   }
   // Open locally with asset JSON; DO NOT involuntarily trigger broadcast session!
   activeWhiteboardAssetId.value = msg.id;
-  currentWhiteboardJson.value = msg.metadata.whiteboardJson;
+  currentWhiteboardJson.value = msg.metadata?.whiteboardJson || null;
   isWhiteboardOpen.value = true;
 };
 
@@ -245,9 +290,14 @@ const publicAlbumItems = computed(() => {
   if (!roomStore.currentRoom?.messages) return [];
   const items = roomStore.currentRoom.messages.filter(m => {
     if (m.type === 'whiteboard_state') {
-      return !m.metadata?.isPrivate;
+      if (m.metadata?.isPrivate) return false;
+    } else if (m.type !== 'ai_asset' && !(m.type === 'file' && m.fileData?.type === 'image')) {
+      return false;
     }
-    return m.type === 'ai_asset' || (m.type === 'file' && m.fileData?.type === 'image');
+    if (!isManagingAssets.value && m.metadata?.isHidden) {
+      return false;
+    }
+    return true;
   });
   return [...items].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 });
@@ -257,7 +307,12 @@ const personalAlbumItems = computed(() => {
   if (!roomStore.currentRoom?.messages) return [];
   const items = roomStore.currentRoom.messages.filter(m => {
     if (m.type === 'whiteboard_state') {
-      return !!m.metadata?.isPrivate && (m.metadata?.creatorUid === authStore.uid || m.senderUid === authStore.uid);
+      const isMine = m.metadata?.creatorUid === authStore.uid || m.senderUid === authStore.uid;
+      if (!isMine) return false;
+      if (!isManagingAssets.value && m.metadata?.isHidden) {
+        return false;
+      }
+      return true;
     }
     return false;
   });
@@ -269,7 +324,7 @@ const albumItems = computed(() => {
 });
 
 // Filtered messages for the main chat stream:
-// 1. Exclude private whiteboard states (which are saved in the user's Personal Album drawer)
+// 1. Exclude all save messages & capsules from auto-saving
 // 2. Cap join notifications to at most the latest 3 to prevent chat overcrowding
 const visibleChatMessages = computed(() => {
   if (!roomStore.currentRoom?.messages) return [];
@@ -288,6 +343,25 @@ const visibleChatMessages = computed(() => {
     if (m.senderUid === 'system' && (m.content.includes('joined') || m.content.includes('join'))) {
       return allowedJoinIds.has(m.id);
     }
+
+    // Filter out all system save notifications (user request: ignore all save messages)
+    if (m.senderUid === 'system') {
+      const c = m.content.toLowerCase();
+      if (c.includes('saved') || c.includes('updated a shared whiteboard') || c.includes('sketchpad saved') || c.includes('whiteboard saved')) {
+        return false;
+      }
+    }
+
+    // Filter out routine auto-save whiteboard capsules from chat, keep only deliberate share posts
+    if (m.type === 'whiteboard_state') {
+      if (m.metadata?.isPrivate && !m.metadata?.isSharedPost) {
+        return false;
+      }
+      if (m.metadata?.isAutoSave && !m.metadata?.isSharedPost) {
+        return false;
+      }
+    }
+
     return true;
   });
 });
@@ -870,9 +944,11 @@ watch(() => roomStore.myStatus, (newStatus) => {
   }
 });
 
-watch(() => roomStore.currentRoom?.messages, () => {
-  scrollToBottom();
-}, { deep: true, immediate: true });
+watch(() => roomStore.currentRoom?.messages?.length, (newLen, oldLen) => {
+  if (newLen && newLen !== oldLen) {
+    scrollToBottom();
+  }
+}, { immediate: true });
 
 let accessCheckTimer: any = null;
 
@@ -933,16 +1009,11 @@ onMounted(async () => {
   }, 6000);
 });
 
-
 const handleWhiteboardBeforeUnload = (e: BeforeUnloadEvent) => {
   if (isWhiteboardOpen.value && roomStore.currentRoom?.whiteboardActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid) {
     whiteboardRef.value?.triggerAutoSaveAsAsset();
     roomStore.endWhiteboardSession();
     return;
-  }
-  if (isWhiteboardOpen.value && whiteboardRef.value?.hasUnsavedChanges && !roomStore.currentRoom?.whiteboardActive) {
-    e.preventDefault();
-    e.returnValue = '';
   }
 };
 
@@ -957,11 +1028,11 @@ onBeforeRouteLeave(async (to, from, next) => {
     next();
     return;
   }
-  if (isWhiteboardOpen.value && whiteboardRef.value?.hasUnsavedChanges && !roomStore.currentRoom?.whiteboardActive) {
-    const confirmLeave = window.confirm('You have unsaved changes on your sketchpad. Are you sure you want to leave without saving?');
-    if (!confirmLeave) {
-      next(false);
-      return;
+  if (isWhiteboardOpen.value && whiteboardRef.value?.hasUnsavedChanges) {
+    try {
+      await whiteboardRef.value?.triggerAutoSaveAsAsset();
+    } catch (err) {
+      console.error('Error auto-saving whiteboard on navigation leave:', err);
     }
   }
   next();
@@ -1148,39 +1219,6 @@ onUnmounted(() => {
       </div>
     </header>
 
-    <!-- Whiteboard PIP Thumbnail -->
-    <div
-      v-if="roomStore.currentRoom?.whiteboardActive && !isWhiteboardOpen && !isPipDismissed"
-      class="absolute top-16 right-4 sm:right-6 z-40 w-32 h-24 sm:w-48 sm:h-32 bg-slate-900 rounded-xl shadow-2xl border-2 border-indigo-500 overflow-hidden group hover:scale-105 transition-transform"
-      title="Join Whiteboard Session"
-    >
-      <div class="relative w-full h-full cursor-pointer" @click="handleJoinSharedWhiteboard">
-        <img
-          v-if="roomStore.currentRoom?.whiteboardThumbnail"
-          :src="roomStore.currentRoom.whiteboardThumbnail"
-          class="w-full h-full object-cover opacity-90 group-hover:scale-105 transition-transform"
-        />
-        <div class="absolute inset-0 bg-slate-900/20 flex items-center justify-center group-hover:bg-indigo-900/30 transition-colors z-10">
-          <div class="bg-indigo-600 text-white p-2 rounded-full shadow-lg group-hover:scale-110 transition-transform">
-            <Palette class="w-4 h-4 sm:w-5 sm:h-5" />
-          </div>
-        </div>
-        <!-- Mini text overlay -->
-        <div class="absolute bottom-0 left-0 right-0 bg-indigo-950/80 px-2 py-1 text-[9px] sm:text-[10px] text-white font-medium truncate flex justify-between items-center z-10">
-          <span class="truncate">{{ roomStore.currentRoom?.whiteboardHostName }}'s Board</span>
-          <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0"></span>
-        </div>
-      </div>
-      <!-- Dismiss button -->
-      <button
-        @click.stop="isPipDismissed = true"
-        class="absolute top-1.5 right-1.5 z-20 w-5 h-5 rounded-full bg-slate-950/80 hover:bg-rose-600 text-slate-300 hover:text-white flex items-center justify-center transition shadow-md cursor-pointer"
-        title="Dismiss thumbnail"
-      >
-        <X class="w-3 h-3" />
-      </button>
-    </div>
-
     <div class="flex-1 flex overflow-hidden w-full relative" :class="{ 'select-none': isResizingWhiteboard }">
       <!-- Fullscreen drag overlay to prevent canvas mouse capture while resizing -->
       <div v-if="isResizingWhiteboard" class="fixed inset-0 z-50 cursor-col-resize pointer-events-auto"></div>
@@ -1217,28 +1255,6 @@ onUnmounted(() => {
           class="flex gap-2.5 group relative"
           :class="msg.senderUid === authStore.uid ? 'flex-row-reverse' : ''"
         >
-          <!-- Floating Action Micro-Bar (Reply & Copy) -->
-          <div
-            v-if="msg.senderUid !== 'system'"
-            class="absolute -top-3.5 z-20 flex items-center gap-1 bg-slate-900/95 border border-slate-700/80 rounded-full px-1.5 py-0.5 shadow-md opacity-0 group-hover:opacity-100 transition-opacity duration-150"
-            :class="msg.senderUid === authStore.uid ? 'right-10' : 'left-10'"
-          >
-            <button
-              @click="replyToMessage(msg)"
-              class="p-1 rounded-full hover:bg-slate-800 text-slate-400 hover:text-sky-400 transition cursor-pointer"
-              title="Reply"
-            >
-              <CornerUpLeft class="w-3 h-3" />
-            </button>
-            <button
-              @click="copyMessageContent(msg)"
-              class="p-1 rounded-full hover:bg-slate-800 text-slate-400 hover:text-emerald-400 transition cursor-pointer"
-              title="Copy message"
-            >
-              <Copy class="w-3 h-3" />
-            </button>
-          </div>
-
           <!-- Avatar -->
           <div
             class="w-8 h-8 rounded-xl flex items-center justify-center text-base shrink-0 select-none shadow"
@@ -1258,21 +1274,43 @@ onUnmounted(() => {
               msg.type === 'ai_asset' ? 'w-full max-w-2xl sm:max-w-3xl' : 'max-w-2xl'
             ]"
           >
-            <!-- Messenger-Style Hover Reaction Picker -->
+            <!-- Unified Hover Action Bar (Emojis, Reply, Copy) -->
             <div
               v-if="!isMeetingClosed && msg.senderUid !== 'system'"
-              class="absolute -top-3.5 z-30 hidden group-hover/msg:flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-slate-900/95 border border-slate-700/90 shadow-xl backdrop-blur-sm select-none transition-all duration-150 animate-in fade-in zoom-in-90"
+              class="absolute -top-4 z-30 hidden group-hover/msg:flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-slate-900/95 border border-slate-700/90 shadow-xl backdrop-blur-sm select-none transition-all duration-150 animate-in fade-in zoom-in-90"
               :class="msg.senderUid === authStore.uid ? 'right-0' : 'left-0'"
             >
+              <!-- 6 Emojis -->
               <button
                 v-for="emoji in ['👍', '❤️', '😂', '😮', '😢', '🎉']"
                 :key="emoji"
                 @click.stop="roomStore.toggleMessageReaction(msg.id, emoji)"
                 class="w-6 h-6 rounded-full hover:bg-slate-700/80 flex items-center justify-center text-xs sm:text-sm transition transform hover:scale-130 active:scale-95 cursor-pointer"
-                :class="{ 'bg-sky-500/25 scale-110': msg.reactions?.[emoji]?.includes(authStore.uid) }"
+                :class="{ 'bg-sky-500/25 ring-1 ring-sky-400/50 scale-110': msg.reactions?.[emoji]?.includes(authStore.uid) }"
                 :title="`React ${emoji}`"
               >
                 {{ emoji }}
+              </button>
+
+              <!-- Subtle Divider -->
+              <div class="h-3.5 w-px bg-slate-700/80 mx-0.5"></div>
+
+              <!-- Reply Button -->
+              <button
+                @click.stop="replyToMessage(msg)"
+                class="p-1 rounded-full hover:bg-slate-700/80 text-slate-400 hover:text-sky-400 transition cursor-pointer"
+                title="Reply"
+              >
+                <CornerUpLeft class="w-3.5 h-3.5" />
+              </button>
+
+              <!-- Copy Button -->
+              <button
+                @click.stop="copyMessageContent(msg)"
+                class="p-1 rounded-full hover:bg-slate-700/80 text-slate-400 hover:text-emerald-400 transition cursor-pointer"
+                title="Copy message"
+              >
+                <Copy class="w-3.5 h-3.5" />
               </button>
             </div>
 
@@ -1439,39 +1477,75 @@ onUnmounted(() => {
               />
 
               
-              <!-- Embedded Whiteboard State (50% size, light background) -->
+              <!-- Embedded Whiteboard Share Card -->
               <div
                 v-if="msg.type === 'whiteboard_state'"
-                class="mt-2 rounded-xl overflow-hidden shadow relative border border-slate-700/80 transition max-w-[130px] sm:max-w-[150px] bg-slate-100"
+                class="mt-2 rounded-xl overflow-hidden shadow-lg relative border transition max-w-[210px] sm:max-w-[250px] bg-slate-900 select-none"
                 :class="[
-                  msg.metadata?.isPrivate && msg.senderUid !== authStore.uid && msg.metadata?.creatorUid !== authStore.uid
+                  (!roomStore.currentRoom?.whiteboardActive || msg.metadata?.isPrivate) && msg.senderUid !== authStore.uid && msg.metadata?.creatorUid !== authStore.uid
                     ? 'opacity-60 cursor-not-allowed border-slate-800'
-                    : 'cursor-pointer group hover:border-indigo-500/50'
+                    : 'cursor-pointer group hover:border-indigo-500 border-indigo-500/40'
                 ]"
                 @click="openWhiteboardState(msg)"
               >
-                <img
-                  :src="msg.fileData?.url"
-                  class="w-full h-auto max-h-24 object-contain transition"
-                  :class="[
-                    msg.metadata?.isPrivate && msg.senderUid !== authStore.uid && msg.metadata?.creatorUid !== authStore.uid
-                      ? 'grayscale brightness-75'
-                      : 'group-hover:scale-105'
-                  ]"
-                />
-                <!-- Non-author private lock overlay -->
-                <div
-                  v-if="msg.metadata?.isPrivate && msg.senderUid !== authStore.uid && msg.metadata?.creatorUid !== authStore.uid"
-                  class="absolute inset-0 bg-slate-950/75 flex flex-col items-center justify-center p-1 text-center"
-                >
-                  <Lock class="w-4 h-4 text-amber-400 mb-0.5" />
-                  <span class="text-[9px] font-semibold text-slate-200 leading-tight">Private Board</span>
-                  <span class="text-[8px] text-slate-400">Author only</span>
+                <div class="relative w-full aspect-[4/3] bg-slate-950 flex items-center justify-center overflow-hidden">
+                  <img
+                    v-if="msg.fileData?.url || (roomStore.currentRoom?.whiteboardActive && roomStore.currentRoom?.whiteboardThumbnail)"
+                    :src="msg.fileData?.url || roomStore.currentRoom?.whiteboardThumbnail"
+                    class="w-full h-full object-cover transition duration-300"
+                    :class="[
+                      (!roomStore.currentRoom?.whiteboardActive || msg.metadata?.isPrivate) && msg.senderUid !== authStore.uid && msg.metadata?.creatorUid !== authStore.uid
+                        ? 'grayscale brightness-75'
+                        : 'group-hover:scale-105'
+                    ]"
+                  />
+                  <div v-else class="text-slate-600 flex flex-col items-center">
+                    <Palette class="w-8 h-8 opacity-40" />
+                  </div>
+
+                  <!-- Locked Overlay for non-hosts when session ended or private -->
+                  <div
+                    v-if="(!roomStore.currentRoom?.whiteboardActive || msg.metadata?.isPrivate) && msg.senderUid !== authStore.uid && msg.metadata?.creatorUid !== authStore.uid"
+                    class="absolute inset-0 bg-slate-950/80 flex flex-col items-center justify-center p-2 text-center backdrop-blur-xs"
+                  >
+                    <div class="w-7 h-7 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center mb-1">
+                      <Lock class="w-3.5 h-3.5 text-amber-400" />
+                    </div>
+                    <span class="text-[10px] font-bold text-slate-200 leading-tight">Private / Ended</span>
+                    <span class="text-[8px] text-slate-400">Host access only</span>
+                  </div>
+
+                  <!-- Active Live Badge (Top Right) -->
+                  <div
+                    v-else-if="roomStore.currentRoom?.whiteboardActive && !msg.metadata?.isPrivate"
+                    class="absolute top-1.5 right-1.5 z-10 px-1.5 py-0.5 rounded-full bg-emerald-500/90 text-white text-[9px] font-bold shadow flex items-center gap-1 animate-pulse"
+                  >
+                    <span class="w-1.5 h-1.5 rounded-full bg-white"></span>
+                    <span>Live</span>
+                  </div>
+
+                  <!-- Active Join Hover Action -->
+                  <div
+                    v-if="roomStore.currentRoom?.whiteboardActive || msg.senderUid === authStore.uid || msg.metadata?.creatorUid === authStore.uid"
+                    class="absolute inset-0 flex items-center justify-center bg-indigo-950/60 opacity-0 group-hover:opacity-100 transition z-10"
+                  >
+                    <span class="bg-indigo-600 hover:bg-indigo-500 text-white px-2.5 py-1 rounded-lg text-xs font-bold shadow-lg flex items-center gap-1.5 transition">
+                      <Palette class="w-3.5 h-3.5" />
+                      {{ roomStore.currentRoom?.whiteboardActive ? 'Join Canvas' : 'Open Whiteboard' }}
+                    </span>
+                  </div>
                 </div>
-                <!-- Author or public edit hover -->
-                <div v-else class="absolute inset-0 flex items-center justify-center bg-slate-950/40 opacity-0 group-hover:opacity-100 transition">
-                  <span class="bg-indigo-600 text-white px-2 py-0.5 rounded text-[10px] font-bold shadow-lg flex items-center gap-1">
-                    <PenTool class="w-3 h-3" /> Edit
+
+                <!-- Footer label -->
+                <div class="px-2.5 py-1.5 bg-slate-950 border-t border-slate-800/80 flex items-center justify-between text-[10px]">
+                  <span class="text-slate-300 font-medium truncate max-w-[140px]">
+                    {{ msg.metadata?.creatorName || msg.senderName }}'s Board
+                  </span>
+                  <span v-if="roomStore.currentRoom?.whiteboardActive && !msg.metadata?.isPrivate" class="text-emerald-400 font-semibold text-[9px] shrink-0">
+                    Active
+                  </span>
+                  <span v-else class="text-slate-500 text-[9px] shrink-0">
+                    Ended
                   </span>
                 </div>
               </div>
@@ -1874,12 +1948,23 @@ onUnmounted(() => {
           <Box class="w-4 h-4 text-amber-400" />
           Room Album
         </h2>
-        <button
-          @click="isAssetsDrawerOpen = false"
-          class="p-2 rounded-xl hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition cursor-pointer"
-        >
-          <X class="w-4 h-4" />
-        </button>
+        <div class="flex items-center gap-1.5">
+          <button
+            @click="toggleManageAssets"
+            class="px-2.5 py-1 rounded-lg text-xs font-medium transition cursor-pointer flex items-center gap-1"
+            :class="isManagingAssets ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' : 'bg-slate-800 text-slate-400 hover:text-slate-200'"
+            title="Manage hidden assets"
+          >
+            <Settings class="w-3.5 h-3.5" />
+            <span>{{ isManagingAssets ? 'Done' : 'Manage' }}</span>
+          </button>
+          <button
+            @click="isAssetsDrawerOpen = false"
+            class="p-2 rounded-xl hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition cursor-pointer"
+          >
+            <X class="w-4 h-4" />
+          </button>
+        </div>
       </div>
       <!-- Public vs Personal Assets Tabs -->
       <div class="px-4 pt-3 pb-1 bg-slate-950/60 border-b border-slate-800">
@@ -1916,8 +2001,11 @@ onUnmounted(() => {
             <!-- Whiteboard States (Editable) -->
             <div
               v-if="msg.type === 'whiteboard_state'"
-              class="aspect-square rounded-xl bg-slate-950 border-2 border-indigo-500/40 hover:border-indigo-400 overflow-hidden cursor-pointer transition group relative shadow-md"
-              @click="openWhiteboardState(msg); isAssetsDrawerOpen = false"
+              class="aspect-square rounded-xl bg-slate-950 border-2 overflow-hidden cursor-pointer transition group relative shadow-md"
+              :class="[
+                msg.metadata?.isHidden ? 'opacity-55 border-amber-500/50' : 'border-indigo-500/40 hover:border-indigo-400'
+              ]"
+              @click="!isManagingAssets && (openWhiteboardState(msg), isAssetsDrawerOpen = false)"
               title="Click to edit whiteboard"
             >
               <img :src="msg.fileData?.url" class="w-full h-full object-cover group-hover:scale-105 transition duration-300 opacity-85" />
@@ -1926,13 +2014,24 @@ onUnmounted(() => {
                 <Palette class="w-2.5 h-2.5 text-indigo-400" />
                 <span>Whiteboard</span>
               </div>
+              <!-- Hide/Unhide Button in Manage Mode -->
+              <button
+                v-if="isManagingAssets"
+                @click.stop="handleToggleHideAsset(msg)"
+                class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-white text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5"
+                :class="msg.metadata?.isHidden ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-rose-600 hover:bg-rose-500'"
+                :title="msg.metadata?.isHidden ? 'Unhide this asset' : 'Hide this asset'"
+              >
+                <component :is="msg.metadata?.isHidden ? Eye : EyeOff" class="w-2.5 h-2.5" />
+                <span>{{ msg.metadata?.isHidden ? 'Unhide' : 'Hide' }}</span>
+              </button>
               <!-- Creator Name Pill (Bottom) -->
               <div class="absolute bottom-1 left-1 right-1 bg-slate-950/85 px-1.5 py-0.5 rounded text-[8px] text-slate-300 font-medium truncate backdrop-blur-xs z-10 flex items-center gap-1">
                 <span class="text-[9px]">{{ msg.metadata?.creatorAvatar || msg.senderAvatar || '🎨' }}</span>
                 <span class="truncate">{{ msg.metadata?.creatorName || msg.senderName || 'Member' }}</span>
               </div>
               <!-- Hover Overlay -->
-              <div class="absolute inset-0 bg-indigo-950/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
+              <div v-if="!isManagingAssets" class="absolute inset-0 bg-indigo-950/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
                 <span class="bg-indigo-600 text-white px-2 py-0.5 rounded text-[9px] font-bold shadow flex items-center gap-1">
                   <PenTool class="w-2.5 h-2.5" /> Edit
                 </span>
@@ -1942,8 +2041,11 @@ onUnmounted(() => {
             <!-- Static Image Attachments -->
             <div
               v-else-if="msg.type === 'file' && msg.fileData?.type === 'image'"
-              class="aspect-square rounded-xl bg-slate-950 border border-slate-800 hover:border-sky-500/50 overflow-hidden cursor-pointer transition group relative"
-              @click="scrollToMessage(msg.id)"
+              class="aspect-square rounded-xl bg-slate-950 border overflow-hidden cursor-pointer transition group relative"
+              :class="[
+                msg.metadata?.isHidden ? 'opacity-55 border-amber-500/50' : 'border-slate-800 hover:border-sky-500/50'
+              ]"
+              @click="!isManagingAssets && scrollToMessage(msg.id)"
               title="View image in chat"
             >
               <img :src="msg.fileData.url" class="w-full h-full object-cover group-hover:scale-105 transition duration-300" />
@@ -1952,8 +2054,19 @@ onUnmounted(() => {
                 <ImageIcon class="w-2.5 h-2.5 text-sky-400" />
                 <span>Image</span>
               </div>
+              <!-- Hide/Unhide Button in Manage Mode -->
+              <button
+                v-if="isManagingAssets"
+                @click.stop="handleToggleHideAsset(msg)"
+                class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-white text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5"
+                :class="msg.metadata?.isHidden ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-rose-600 hover:bg-rose-500'"
+                :title="msg.metadata?.isHidden ? 'Unhide this asset' : 'Hide this asset'"
+              >
+                <component :is="msg.metadata?.isHidden ? Eye : EyeOff" class="w-2.5 h-2.5" />
+                <span>{{ msg.metadata?.isHidden ? 'Unhide' : 'Hide' }}</span>
+              </button>
               <!-- Hover Overlay -->
-              <div class="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
+              <div v-if="!isManagingAssets" class="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
                 <span class="bg-slate-800 text-slate-200 px-2 py-0.5 rounded text-[9px] font-medium shadow flex items-center gap-1">
                   <Eye class="w-2.5 h-2.5" /> View
                 </span>
@@ -1963,14 +2076,28 @@ onUnmounted(() => {
             <!-- 3D Assets -->
             <div
               v-else-if="msg.type === 'ai_asset' && msg.assetType === 'mesh_3d'"
-              class="aspect-square rounded-xl bg-sky-950/30 border border-sky-500/30 flex flex-col items-center justify-center text-center p-2 cursor-pointer hover:bg-sky-900/50 transition relative group"
-              @click="scrollToMessage(msg.id)"
+              class="aspect-square rounded-xl bg-sky-950/30 border flex flex-col items-center justify-center text-center p-2 cursor-pointer transition relative group"
+              :class="[
+                msg.metadata?.isHidden ? 'opacity-55 border-amber-500/50' : 'border-sky-500/30 hover:bg-sky-900/50'
+              ]"
+              @click="!isManagingAssets && scrollToMessage(msg.id)"
               title="View 3D Model in chat"
             >
               <div class="absolute top-1 left-1 bg-sky-950/90 text-sky-300 px-1.5 py-0.5 rounded text-[8px] font-bold border border-sky-500/40 backdrop-blur-sm flex items-center gap-1">
                 <Box class="w-2.5 h-2.5 text-sky-400" />
                 <span>3D</span>
               </div>
+              <!-- Hide/Unhide Button in Manage Mode -->
+              <button
+                v-if="isManagingAssets"
+                @click.stop="handleToggleHideAsset(msg)"
+                class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-white text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5"
+                :class="msg.metadata?.isHidden ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-rose-600 hover:bg-rose-500'"
+                :title="msg.metadata?.isHidden ? 'Unhide this asset' : 'Hide this asset'"
+              >
+                <component :is="msg.metadata?.isHidden ? Eye : EyeOff" class="w-2.5 h-2.5" />
+                <span>{{ msg.metadata?.isHidden ? 'Unhide' : 'Hide' }}</span>
+              </button>
               <Box class="w-6 h-6 text-sky-400 mb-1 mt-2" />
               <span class="text-[9px] text-sky-300 font-medium truncate w-full px-1">{{ msg.assetPayload?.title || '3D Model' }}</span>
             </div>
@@ -1978,14 +2105,28 @@ onUnmounted(() => {
             <!-- Moodboards -->
             <div
               v-else-if="msg.type === 'ai_asset' && msg.assetType === 'moodboard'"
-              class="aspect-square rounded-xl bg-amber-950/30 border border-amber-500/30 flex flex-col items-center justify-center text-center p-2 cursor-pointer hover:bg-amber-900/50 transition relative group"
-              @click="scrollToMessage(msg.id)"
+              class="aspect-square rounded-xl bg-amber-950/30 border flex flex-col items-center justify-center text-center p-2 cursor-pointer transition relative group"
+              :class="[
+                msg.metadata?.isHidden ? 'opacity-55 border-amber-500/50' : 'border-amber-500/30 hover:bg-amber-900/50'
+              ]"
+              @click="!isManagingAssets && scrollToMessage(msg.id)"
               title="View Moodboard in chat"
             >
               <div class="absolute top-1 left-1 bg-amber-950/90 text-amber-300 px-1.5 py-0.5 rounded text-[8px] font-bold border border-amber-500/40 backdrop-blur-sm flex items-center gap-1">
                 <Palette class="w-2.5 h-2.5 text-amber-400" />
                 <span>Moodboard</span>
               </div>
+              <!-- Hide/Unhide Button in Manage Mode -->
+              <button
+                v-if="isManagingAssets"
+                @click.stop="handleToggleHideAsset(msg)"
+                class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-white text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5"
+                :class="msg.metadata?.isHidden ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-rose-600 hover:bg-rose-500'"
+                :title="msg.metadata?.isHidden ? 'Unhide this asset' : 'Hide this asset'"
+              >
+                <component :is="msg.metadata?.isHidden ? Eye : EyeOff" class="w-2.5 h-2.5" />
+                <span>{{ msg.metadata?.isHidden ? 'Unhide' : 'Hide' }}</span>
+              </button>
               <Palette class="w-6 h-6 text-amber-400 mb-1 mt-2" />
               <span class="text-[9px] text-amber-300 font-medium truncate w-full px-1">{{ msg.assetPayload?.title || 'Moodboard' }}</span>
             </div>

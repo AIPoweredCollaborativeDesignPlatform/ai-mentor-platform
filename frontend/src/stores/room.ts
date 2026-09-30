@@ -1482,12 +1482,26 @@ export const useRoomStore = defineStore('room', () => {
       };
       if (thumbnail) payload.whiteboardThumbnail = thumbnail;
       await updateDoc(doc(db, 'rooms', currentRoom.value.roomId), payload);
-      // Send capsule broadcast announcement to chat
+      // Send whiteboard share card to chat
       await sendCustomMessage({
-        senderUid: 'system',
-        senderName: 'System',
-        content: `${hostName} published a collaborative whiteboard.`,
-        type: 'text'
+        senderUid: authStore.uid,
+        senderName: hostName,
+        senderAvatar: authStore.avatar || '🎨',
+        content: `${hostName} shared a collaborative whiteboard`,
+        type: 'whiteboard_state',
+        fileData: {
+          type: 'image',
+          url: thumbnail || '',
+          name: 'whiteboard.jpg',
+          size: 0
+        },
+        metadata: {
+          whiteboardJson: initialJson || '',
+          isPrivate: false,
+          isSharedPost: true,
+          creatorUid: authStore.uid,
+          creatorName: hostName
+        }
       });
     } catch (e) {
       console.error('Failed to start whiteboard:', e);
@@ -1508,7 +1522,7 @@ export const useRoomStore = defineStore('room', () => {
       } catch (e) {
         console.warn('Failed to sync whiteboard:', e);
       }
-    }, 150);
+    }, 50);
   };
 
   const endWhiteboardSession = async () => {
@@ -1607,19 +1621,25 @@ export const useRoomStore = defineStore('room', () => {
     if (!msg) return;
 
     const currentReactions: Record<string, string[]> = { ...(msg.reactions || {}) };
-    const userList = Array.isArray(currentReactions[emoji]) ? [...currentReactions[emoji]] : [];
-    const userIdx = userList.indexOf(authStore.uid);
+    const myUid = authStore.uid;
+    const alreadySelected = Array.isArray(currentReactions[emoji]) && currentReactions[emoji].includes(myUid);
 
-    if (userIdx >= 0) {
-      userList.splice(userIdx, 1);
-    } else {
-      userList.push(authStore.uid);
+    // Remove user from all reactions on this message first (strict 1-emoji per user rule)
+    for (const key of Object.keys(currentReactions)) {
+      if (Array.isArray(currentReactions[key])) {
+        currentReactions[key] = currentReactions[key].filter(uid => uid !== myUid);
+        if (currentReactions[key].length === 0) {
+          delete currentReactions[key];
+        }
+      }
     }
 
-    if (userList.length === 0) {
-      delete currentReactions[emoji];
-    } else {
-      currentReactions[emoji] = userList;
+    // If user hadn't selected this emoji yet, add it
+    if (!alreadySelected) {
+      if (!currentReactions[emoji]) {
+        currentReactions[emoji] = [];
+      }
+      currentReactions[emoji].push(myUid);
     }
 
     // Optimistic local update

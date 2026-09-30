@@ -28,7 +28,12 @@ import {
   WifiOff,
   Loader2,
   RefreshCw,
-  PenTool
+  PenTool,
+  CornerUpLeft,
+  Bell,
+  BellOff,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-vue-next';
 
 import ParametricViewer3D from '../components/ParametricViewer3D.vue';
@@ -202,19 +207,34 @@ const openWhiteboardState = (msg: any) => {
   isWhiteboardOpen.value = true;
 };
 
-// Computed property to sort album items newest first (strictly filtering out other users' private boards)
-const albumItems = computed(() => {
+const activeAssetTab = ref<'public' | 'personal'>('public');
+
+// Public Album Items (Shared whiteboards, 3D models, images, moodboards)
+const publicAlbumItems = computed(() => {
   if (!roomStore.currentRoom?.messages) return [];
   const items = roomStore.currentRoom.messages.filter(m => {
     if (m.type === 'whiteboard_state') {
-      if (m.metadata?.isPrivate && m.metadata?.creatorUid !== authStore.uid && m.senderUid !== authStore.uid) {
-        return false;
-      }
-      return true;
+      return !m.metadata?.isPrivate;
     }
     return m.type === 'ai_asset' || (m.type === 'file' && m.fileData?.type === 'image');
   });
   return [...items].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+});
+
+// Personal Album Items (Current user's private saved whiteboards)
+const personalAlbumItems = computed(() => {
+  if (!roomStore.currentRoom?.messages) return [];
+  const items = roomStore.currentRoom.messages.filter(m => {
+    if (m.type === 'whiteboard_state') {
+      return !!m.metadata?.isPrivate && (m.metadata?.creatorUid === authStore.uid || m.senderUid === authStore.uid);
+    }
+    return false;
+  });
+  return [...items].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+});
+
+const albumItems = computed(() => {
+  return activeAssetTab.value === 'public' ? publicAlbumItems.value : personalAlbumItems.value;
 });
 
 const roomId = ref(route.params.roomId as string);
@@ -395,6 +415,91 @@ interface StagedAttachment {
 }
 
 const stagedAttachment = ref<StagedAttachment | null>(null);
+const replyingToMessage = ref<MessageItem | null>(null);
+
+const replyToMessage = (msg: MessageItem) => {
+  replyingToMessage.value = msg;
+  nextTick(() => {
+    if (textareaRef.value) {
+      textareaRef.value.focus();
+    }
+  });
+};
+
+const copyMessageContent = (msg: MessageItem) => {
+  if (msg.content) {
+    navigator.clipboard.writeText(msg.content);
+    roomStore.pushToast('Copied', 'Message copied to clipboard', 'success');
+  }
+};
+
+const expandedMessages = ref<Record<string, boolean>>({});
+const isMessageExpanded = (id: string) => !!expandedMessages.value[id];
+const toggleMessageExpanded = (id: string) => {
+  expandedMessages.value[id] = !expandedMessages.value[id];
+};
+
+const shouldShowCollapseToggle = (msg: MessageItem) => {
+  return msg.senderUid !== 'ai_mentor' && (msg.content?.length || 0) > 260;
+};
+
+const getDisplayMessageContent = (msg: MessageItem) => {
+  if (shouldShowCollapseToggle(msg) && !isMessageExpanded(msg.id)) {
+    return msg.content.slice(0, 260) + '...';
+  }
+  return msg.content;
+};
+
+// Web Audio Notification Chime & Mute State
+const isSoundMuted = ref(localStorage.getItem('ai_mentor_sound_muted') === 'true');
+const toggleSoundMute = () => {
+  isSoundMuted.value = !isSoundMuted.value;
+  localStorage.setItem('ai_mentor_sound_muted', String(isSoundMuted.value));
+};
+
+const playNotificationSound = () => {
+  if (isSoundMuted.value) return;
+  try {
+    const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContext) return;
+    const ctx = new AudioContext();
+    const now = ctx.currentTime;
+
+    const osc1 = ctx.createOscillator();
+    const osc2 = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc1.type = 'sine';
+    osc1.frequency.setValueAtTime(587.33, now);
+    osc2.type = 'sine';
+    osc2.frequency.setValueAtTime(880, now + 0.08);
+
+    gain.gain.setValueAtTime(0.04, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.32);
+
+    osc1.connect(gain);
+    osc2.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc1.start(now);
+    osc1.stop(now + 0.08);
+    osc2.start(now + 0.08);
+    osc2.stop(now + 0.32);
+  } catch {
+    // ignore audio policy restrictions
+  }
+};
+
+let lastKnownMsgCount = 0;
+watch(() => roomStore.currentRoom?.messages.length, (newCount) => {
+  if (newCount && lastKnownMsgCount && newCount > lastKnownMsgCount) {
+    const latest = roomStore.currentRoom?.messages[roomStore.currentRoom.messages.length - 1];
+    if (latest && latest.senderUid !== authStore.uid && latest.senderUid !== 'system') {
+      playNotificationSound();
+    }
+  }
+  lastKnownMsgCount = newCount || 0;
+});
 
 const handleSend = async () => {
   if (isMeetingClosed.value) return;
@@ -406,8 +511,15 @@ const handleSend = async () => {
 
   if (!text && !attachment) return;
 
+  const replyPayload = replyingToMessage.value ? {
+    id: replyingToMessage.value.id,
+    senderName: replyingToMessage.value.senderName,
+    text: replyingToMessage.value.content.slice(0, 100)
+  } : undefined;
+
   inputMessage.value = '';
   stagedAttachment.value = null;
+  replyingToMessage.value = null;
 
   if (textareaRef.value) {
     textareaRef.value.style.height = '44px';
@@ -425,7 +537,7 @@ const handleSend = async () => {
       text
     );
   } else if (text) {
-    await roomStore.sendMessage(text);
+    await roomStore.sendMessage(text, replyPayload);
   }
 
   scrollToBottom();
@@ -622,6 +734,13 @@ const insertQuickTag = (tag: string) => {
   if (isMeetingClosed.value) return;
   inputMessage.value = inputMessage.value ? `${inputMessage.value} ${tag} ` : `${tag} `;
   adjustTextarea();
+  nextTick(() => {
+    if (textareaRef.value) {
+      textareaRef.value.focus();
+      const len = textareaRef.value.value.length;
+      textareaRef.value.setSelectionRange(len, len);
+    }
+  });
 };
 
 const handleUnload = () => {
@@ -905,6 +1024,17 @@ onUnmounted(() => {
           <span class="hidden sm:inline">{{ copiedUrl ? 'Copied!' : 'Invite' }}</span>
         </button>
 
+        <!-- Notification Sound Mute Toggle -->
+        <button
+          @click="toggleSoundMute"
+          class="inline-flex items-center gap-1 text-[11px] px-2 py-1.5 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 transition cursor-pointer min-h-[36px]"
+          :class="isSoundMuted ? 'text-slate-500' : 'text-sky-400'"
+          :title="isSoundMuted ? 'Notification sound: Muted (Click to unmute)' : 'Notification sound: Active (Click to mute)'"
+        >
+          <BellOff v-if="isSoundMuted" class="w-3.5 h-3.5" />
+          <Bell v-else class="w-3.5 h-3.5" />
+        </button>
+
         <!-- Album / Assets Drawer Button -->
         <button
           @click="isAssetsDrawerOpen = true"
@@ -991,9 +1121,31 @@ onUnmounted(() => {
         <!-- Normal User or AI Chat Bubble -->
         <div
           v-else
-          class="flex gap-2.5"
+          class="flex gap-2.5 group relative"
           :class="msg.senderUid === authStore.uid ? 'flex-row-reverse' : ''"
         >
+          <!-- Floating Action Micro-Bar (Reply & Copy) -->
+          <div
+            v-if="msg.senderUid !== 'system'"
+            class="absolute -top-3.5 z-20 flex items-center gap-1 bg-slate-900/95 border border-slate-700/80 rounded-full px-1.5 py-0.5 shadow-md opacity-0 group-hover:opacity-100 transition-opacity duration-150"
+            :class="msg.senderUid === authStore.uid ? 'right-10' : 'left-10'"
+          >
+            <button
+              @click="replyToMessage(msg)"
+              class="p-1 rounded-full hover:bg-slate-800 text-slate-400 hover:text-sky-400 transition cursor-pointer"
+              title="Reply"
+            >
+              <CornerUpLeft class="w-3 h-3" />
+            </button>
+            <button
+              @click="copyMessageContent(msg)"
+              class="p-1 rounded-full hover:bg-slate-800 text-slate-400 hover:text-emerald-400 transition cursor-pointer"
+              title="Copy message"
+            >
+              <Copy class="w-3 h-3" />
+            </button>
+          </div>
+
           <!-- Avatar -->
           <div
             class="w-8 h-8 rounded-xl flex items-center justify-center text-base shrink-0 select-none shadow"
@@ -1013,18 +1165,26 @@ onUnmounted(() => {
               msg.type === 'ai_asset' ? 'w-full max-w-2xl sm:max-w-3xl' : 'max-w-2xl'
             ]"
           >
-            <!-- Sender info -->
+            <!-- Sender info (Self: [11:25] [You], Others: [Name] [11:25]) -->
             <div class="flex items-center gap-1.5 mb-0.5 text-[11px] text-slate-400">
-              <span class="font-medium text-slate-300 truncate">{{ msg.senderName }}</span>
-              <span class="text-[9px] text-slate-500/70 font-mono tracking-wider">
-                {{ new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}
-              </span>
-              <span
-                v-if="msg.senderUid === 'ai_mentor'"
-                class="text-[10px] bg-sky-500/20 text-sky-300 border border-sky-500/30 px-1.5 py-0.2 rounded-md font-mono"
-              >
-                AI Mentor
-              </span>
+              <template v-if="msg.senderUid === authStore.uid">
+                <span class="text-[9px] text-slate-500/70 font-mono tracking-wider">
+                  {{ new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}
+                </span>
+                <span class="font-medium text-slate-300 truncate">{{ msg.senderName }}</span>
+              </template>
+              <template v-else>
+                <span class="font-medium text-slate-300 truncate">{{ msg.senderName }}</span>
+                <span class="text-[9px] text-slate-500/70 font-mono tracking-wider">
+                  {{ new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}
+                </span>
+                <span
+                  v-if="msg.senderUid === 'ai_mentor'"
+                  class="text-[10px] bg-sky-500/20 text-sky-300 border border-sky-500/30 px-1.5 py-0.2 rounded-md font-mono"
+                >
+                  AI Mentor
+                </span>
+              </template>
             </div>
 
             <!-- Frameless Media Container (When message has image/video and no caption text) -->
@@ -1064,13 +1224,33 @@ onUnmounted(() => {
                 msg.type === 'ai_asset' ? 'w-full' : 'max-w-[88%] sm:max-w-[80%]'
               ]"
             >
-              <!-- Message Text -->
+              <!-- Quote reply preview if this message replies to someone -->
+              <div
+                v-if="msg.replyTo"
+                class="mb-2 px-2.5 py-1 rounded-lg bg-black/35 border-l-2 border-sky-400 text-xs text-slate-300 select-none"
+              >
+                <div class="font-semibold text-[10px] text-sky-300">{{ msg.replyTo.senderName }}</div>
+                <div class="truncate text-[11px] opacity-80">{{ msg.replyTo.text }}</div>
+              </div>
+
+              <!-- Message Text (Collapsible if > 260 chars) -->
               <div
                 v-if="msg.content && (!msg.type.startsWith('file') || (!msg.content.startsWith('Shared image:') && !msg.content.startsWith('Shared video:') && !msg.content.startsWith('Shared document:')))"
                 class="whitespace-pre-wrap break-words prose prose-sm prose-invert max-w-none text-slate-200"
-                v-html="formatMessageText(msg.content)"
-                @click="handleMessageClick"
-              ></div>
+              >
+                <div
+                  v-html="formatMessageText(getDisplayMessageContent(msg))"
+                  @click="handleMessageClick"
+                ></div>
+                <button
+                  v-if="shouldShowCollapseToggle(msg)"
+                  @click="toggleMessageExpanded(msg.id)"
+                  class="mt-1 inline-flex items-center gap-0.5 text-xs text-sky-400 hover:text-sky-300 font-medium underline cursor-pointer"
+                >
+                  <component :is="isMessageExpanded(msg.id) ? ChevronUp : ChevronDown" class="w-3 h-3" />
+                  {{ isMessageExpanded(msg.id) ? 'Show less' : 'Show more' }}
+                </button>
+              </div>
 
               <!-- Embedded File / Media Attachment -->
               <div v-if="msg.type === 'file' && msg.fileData" :class="{ 'mt-2': msg.content }">
@@ -1300,6 +1480,53 @@ onUnmounted(() => {
     <!-- Bottom Input & Triggers Bar -->
     <footer class="border-t border-slate-800 bg-slate-900/90 backdrop-blur-md p-2.5 sm:p-3 shrink-0">
       <div class="max-w-4xl mx-auto space-y-1.5">
+        <!-- Room-wide AI Task Progress Banner -->
+        <div
+          v-if="roomStore.currentRoom?.aiActiveTask"
+          class="flex items-center justify-between p-2.5 rounded-xl bg-sky-950/90 border border-sky-500/40 shadow-lg text-xs text-sky-200 animate-pulse"
+        >
+          <div class="flex items-center gap-2.5 min-w-0">
+            <div class="p-1 rounded-lg bg-sky-500/20 text-sky-400 shrink-0">
+              <Loader2 class="w-4 h-4 animate-spin text-sky-400" />
+            </div>
+            <div class="min-w-0">
+              <p class="font-semibold text-sky-200 truncate">
+                AI Mentor is responding to {{ roomStore.currentRoom.aiActiveTask.callerName }}...
+              </p>
+              <p class="text-slate-400 text-[11px] truncate">
+                {{ roomStore.currentRoom.aiActiveTask.type }}: "{{ roomStore.currentRoom.aiActiveTask.prompt }}"
+              </p>
+            </div>
+          </div>
+          <button
+            v-if="roomStore.currentRoom.aiActiveTask.callerUid === authStore.uid || roomStore.isHost"
+            @click="roomStore.abortCurrentAiGeneration()"
+            class="ml-2 px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 hover:text-white text-[11px] font-medium transition cursor-pointer flex items-center gap-1 shrink-0"
+            title="Stop AI Generation"
+          >
+            <X class="w-3 h-3" /> Stop
+          </button>
+        </div>
+
+        <!-- Replying To Quote Banner -->
+        <div
+          v-if="replyingToMessage"
+          class="flex items-center justify-between p-2 rounded-xl bg-slate-950/90 border border-slate-700/80 text-xs text-slate-300"
+        >
+          <div class="flex items-center gap-2 min-w-0">
+            <CornerUpLeft class="w-3.5 h-3.5 text-sky-400 shrink-0" />
+            <span class="text-sky-300 font-medium shrink-0">Replying to {{ replyingToMessage.senderName }}:</span>
+            <span class="truncate opacity-80">{{ replyingToMessage.content.slice(0, 75) }}</span>
+          </div>
+          <button
+            @click="replyingToMessage = null"
+            class="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition shrink-0 cursor-pointer"
+            title="Cancel reply"
+          >
+            <X class="w-3.5 h-3.5" />
+          </button>
+        </div>
+
         <!-- Quick Action Badges -->
         <div class="flex items-center gap-1.5 overflow-x-auto pb-0.5 text-[11px] text-slate-400">
           <button
@@ -1486,10 +1713,35 @@ onUnmounted(() => {
           <X class="w-4 h-4" />
         </button>
       </div>
+      <!-- Public vs Personal Assets Tabs -->
+      <div class="px-4 pt-3 pb-1 bg-slate-950/60 border-b border-slate-800">
+        <div class="flex items-center gap-1.5 p-1 bg-slate-900 rounded-xl border border-slate-800">
+          <button
+            @click="activeAssetTab = 'public'"
+            class="flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold transition cursor-pointer text-center"
+            :class="activeAssetTab === 'public' ? 'bg-sky-600 text-white shadow-xs' : 'text-slate-400 hover:text-slate-200'"
+          >
+            Public ({{ publicAlbumItems.length }})
+          </button>
+          <button
+            @click="activeAssetTab = 'personal'"
+            class="flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold transition cursor-pointer text-center"
+            :class="activeAssetTab === 'personal' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-400 hover:text-slate-200'"
+          >
+            Personal ({{ personalAlbumItems.length }})
+          </button>
+        </div>
+      </div>
+
       <div class="flex-1 overflow-y-auto p-4 space-y-4">
         <!-- Render 3D Models & Images in a grid -->
-        <div v-if="!albumItems.length" class="text-center text-sm text-slate-500 py-10">
-          No generated assets or images yet.
+        <div v-if="!albumItems.length" class="text-center text-xs text-slate-500 py-10 px-4">
+          <template v-if="activeAssetTab === 'personal'">
+            No personal private whiteboards yet. When you save a board as private, it will appear here only for you.
+          </template>
+          <template v-else>
+            No public media assets or shared whiteboards in this room yet.
+          </template>
         </div>
         <div class="grid grid-cols-3 gap-2">
           <template v-for="msg in albumItems" :key="msg.id">

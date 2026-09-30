@@ -52,6 +52,11 @@ export interface MessageItem {
   content: string;
   timestamp: number;
   status?: 'sending' | 'delivered' | 'failed';
+  replyTo?: {
+    id: string;
+    senderName: string;
+    text: string;
+  };
   fileData?: {
     name: string;
     size: number;
@@ -82,6 +87,13 @@ export interface RoomData {
   whiteboardState?: string;
   whiteboardThumbnail?: string;
   whiteboardMemories?: Array<{ timestamp: number; timeFormatted: string; summary: string; assetId?: string }>;
+  aiActiveTask?: {
+    callerName: string;
+    callerUid: string;
+    type: string;
+    prompt: string;
+    startedAt: number;
+  } | null;
   sharedApiKeys?: {
     geminiApiKey?: string;
     tripoApiKey?: string;
@@ -99,6 +111,14 @@ export interface CursorData {
   x: number;
   y: number;
   updatedAt: number;
+  liveDrag?: {
+    targetId: string;
+    left: number;
+    top: number;
+    scaleX?: number;
+    scaleY?: number;
+    angle?: number;
+  } | null;
   liveStroke?: {
     points: { x: number; y: number }[];
     color: string;

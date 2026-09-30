@@ -46,6 +46,7 @@ let controls: OrbitControls | null = null;
 let modelGroup: THREE.Group | null = null;
 let animationFrameId: number | null = null;
 let resizeObserver: ResizeObserver | null = null;
+let resizeRafId: number | null = null;
 
 const recommendedFilename = computed(() => {
   let baseName = (props.assetData?.title || 'AI_3D_Model')
@@ -136,16 +137,28 @@ const initThreeScene = () => {
   };
   animate();
 
-  // Resize Observer
+  // Resize Observer with RAF Throttling and threshold check
+  let lastRenderWidth = width;
+  let lastRenderHeight = height;
+
   resizeObserver = new ResizeObserver(() => {
     if (!container || !camera || !renderer) return;
-    const newWidth = container.clientWidth;
-    const newHeight = container.clientHeight;
-    if (newWidth > 0 && newHeight > 0) {
-      camera.aspect = newWidth / newHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(newWidth, newHeight);
-    }
+    if (resizeRafId !== null) cancelAnimationFrame(resizeRafId);
+    resizeRafId = requestAnimationFrame(() => {
+      resizeRafId = null;
+      if (!container || !camera || !renderer) return;
+      const newWidth = container.clientWidth;
+      const newHeight = container.clientHeight;
+      if (newWidth > 0 && newHeight > 0) {
+        if (Math.abs(newWidth - lastRenderWidth) > 3 || Math.abs(newHeight - lastRenderHeight) > 3) {
+          lastRenderWidth = newWidth;
+          lastRenderHeight = newHeight;
+          camera.aspect = newWidth / newHeight;
+          camera.updateProjectionMatrix();
+          renderer.setSize(newWidth, newHeight, false);
+        }
+      }
+    });
   });
   resizeObserver.observe(container);
 };
@@ -436,6 +449,9 @@ watch(
 onUnmounted(() => {
   if (animationFrameId !== null) {
     cancelAnimationFrame(animationFrameId);
+  }
+  if (resizeRafId !== null) {
+    cancelAnimationFrame(resizeRafId);
   }
   if (resizeObserver) {
     resizeObserver.disconnect();

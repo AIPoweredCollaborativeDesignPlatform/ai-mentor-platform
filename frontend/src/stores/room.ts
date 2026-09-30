@@ -68,12 +68,13 @@ export const useRoomStore = defineStore('room', () => {
     isAnalyzing.value = false;
     isGenerating3D.value = false;
     aiStatus.value = 'idle';
-    aiStatusDetail.value = `Ready (${mentorStore.config.modelTier === 'pro' ? 'Pro' : 'Flash'})`;
+    aiStatusDetail.value = 'Ready';
     generating3DStatus.value = '';
     typingUsers.value = typingUsers.value.filter(u => u.uid !== 'ai_mentor' && u.uid !== 'ai_mentor_3d');
     if (db && currentRoom.value) {
       deleteDoc(doc(db, 'rooms', currentRoom.value.roomId, 'typing', 'ai_mentor')).catch(() => {});
       deleteDoc(doc(db, 'rooms', currentRoom.value.roomId, 'typing', 'ai_mentor_3d')).catch(() => {});
+      updateDoc(doc(db, 'rooms', currentRoom.value.roomId), { aiActiveTask: null }).catch(() => {});
     }
     pushToast('AI Stopped', 'AI Mentor generation has been stopped.', 'info');
   };
@@ -224,6 +225,7 @@ export const useRoomStore = defineStore('room', () => {
           currentRoom.value.whiteboardState = data.whiteboardState || undefined;
           currentRoom.value.whiteboardThumbnail = data.whiteboardThumbnail || undefined;
           currentRoom.value.sharedApiKeys = data.sharedApiKeys || undefined;
+          currentRoom.value.aiActiveTask = data.aiActiveTask ?? null;
         }
         if (data.sharedApiKeys) {
           (window as any).__SHARED_HOST_GEMINI_KEY__ = data.sharedApiKeys.geminiApiKey || '';
@@ -646,7 +648,7 @@ export const useRoomStore = defineStore('room', () => {
   };
 
   // Send Message (Optimistic UI - immediate local rendering)
-  const sendMessage = async (text: string) => {
+  const sendMessage = async (text: string, replyTo?: { id: string; senderName: string; text: string }) => {
     if (!currentRoom.value || !text.trim()) return;
 
     await setMyTyping(false);
@@ -659,7 +661,8 @@ export const useRoomStore = defineStore('room', () => {
       type: 'text',
       content: text.trim(),
       timestamp: Date.now(),
-      status: 'sending'
+      status: 'sending',
+      ...(replyTo ? { replyTo } : {})
     };
 
     // 1. Immediately render in local stream
@@ -1036,6 +1039,15 @@ export const useRoomStore = defineStore('room', () => {
       aiStatusDetail.value = `Analyzing with Gemini ${tierName}...`;
     }
 
+    let taskType = 'AI Brainstorming';
+    const lowerText = latestText.toLowerCase();
+    if (lowerText.includes('/3d')) taskType = '3D Model Generation';
+    else if (lowerText.includes('/moodboard')) taskType = 'Moodboard Synthesis';
+    else if (lowerText.includes('/fact') || lowerText.includes('/retrieve')) taskType = 'Fact Retrieval';
+    else if (lowerText.includes('/summary')) taskType = 'Meeting Summary';
+
+    const cleanPrompt = latestText.replace(/@mentor/gi, '').replace(/\/(3d|moodboard|fact|retrieve|summary)/gi, '').trim().slice(0, 100);
+
     if (db && currentRoom.value) {
       setDoc(doc(db, 'rooms', currentRoom.value.roomId, 'typing', 'ai_mentor'), {
         uid: 'ai_mentor',
@@ -1043,6 +1055,16 @@ export const useRoomStore = defineStore('room', () => {
         avatar: '✨',
         statusDetail: `Brainstorming with Gemini ${tierName}...`,
         timestamp: Date.now()
+      }).catch(() => {});
+
+      updateDoc(doc(db, 'rooms', currentRoom.value.roomId), {
+        aiActiveTask: {
+          callerName: authStore.displayName || 'Participant',
+          callerUid: authStore.uid,
+          type: taskType,
+          prompt: cleanPrompt || latestText.slice(0, 80),
+          startedAt: Date.now()
+        }
       }).catch(() => {});
     }
 
@@ -1086,6 +1108,17 @@ export const useRoomStore = defineStore('room', () => {
             
             isGenerating3D.value = true;
             generating3DStatus.value = 'Initializing 3D generation...';
+            if (db && currentRoom.value) {
+              updateDoc(doc(db, 'rooms', currentRoom.value.roomId), {
+                aiActiveTask: {
+                  callerName: authStore.displayName || 'Participant',
+                  callerUid: authStore.uid,
+                  type: '3D Neural Mesh Generation',
+                  prompt: prompt3D.slice(0, 100),
+                  startedAt: Date.now()
+                }
+              }).catch(() => {});
+            }
             
             let heartbeatInterval = setInterval(() => {
               if (db && currentRoom.value && isGenerating3D.value) {
@@ -1218,6 +1251,9 @@ export const useRoomStore = defineStore('room', () => {
               generating3DStatus.value = '';
               if (db && currentRoom.value) {
                 deleteDoc(doc(db, 'rooms', currentRoom.value.roomId, 'typing', 'ai_mentor_3d')).catch(() => {});
+                updateDoc(doc(db, 'rooms', currentRoom.value.roomId), {
+                  aiActiveTask: null
+                }).catch(() => {});
               }
             }
           };
@@ -1238,10 +1274,10 @@ export const useRoomStore = defineStore('room', () => {
           await addAiMessage(response.aiMessage || '', null);
         }
         aiStatus.value = 'idle';
-        aiStatusDetail.value = `Ready (${tierName})`;
+        aiStatusDetail.value = 'Ready';
       } else {
         aiStatus.value = 'idle';
-        aiStatusDetail.value = `Ready (${tierName})`;
+        aiStatusDetail.value = 'Ready';
       }
     } catch (e: any) {
       console.error('[AI] Agent error:', e);
@@ -1261,6 +1297,11 @@ export const useRoomStore = defineStore('room', () => {
       if (db && currentRoom.value) {
         deleteDoc(doc(db, 'rooms', currentRoom.value.roomId, 'typing', 'ai_mentor')).catch(() => {});
         deleteDoc(doc(db, 'rooms', currentRoom.value.roomId, 'typing', 'ai_mentor_3d')).catch(() => {});
+        if (!isGenerating3D.value) {
+          updateDoc(doc(db, 'rooms', currentRoom.value.roomId), {
+            aiActiveTask: null
+          }).catch(() => {});
+        }
       }
 
       clearInterval(cooldownTimer);
@@ -1269,7 +1310,7 @@ export const useRoomStore = defineStore('room', () => {
         if (aiCooldownRemaining.value <= 0) {
           clearInterval(cooldownTimer);
           aiStatus.value = 'idle';
-          aiStatusDetail.value = `Ready (${mentorStore.config.modelTier === 'pro' ? 'Pro' : 'Flash'})`;
+          aiStatusDetail.value = 'Ready';
         } else {
           aiStatusDetail.value = `Cooling down (${aiCooldownRemaining.value}s)`;
         }

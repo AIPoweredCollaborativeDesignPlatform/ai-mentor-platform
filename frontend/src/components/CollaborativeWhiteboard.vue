@@ -864,8 +864,8 @@ const isObjectHitByRect = (canvasObj: fabric.Canvas, obj: any, rect: { left: num
   return false;
 };
 
-// Snapshot helper: guarantees a light background (#f8fafc) and dot grid for JPEG exports
-const getCanvasSnapshot = (quality = 0.7): string => {
+// Snapshot helper: clips strictly to workspace bounds (eliminating dark borders) and supports high-res exports
+const getCanvasSnapshot = (quality = 0.7, highRes = false): string => {
   if (!canvas) return '';
   // Deselect active object temporarily so nodes and handles are never in the exported picture
   const activeObj = canvas.getActiveObject();
@@ -874,12 +874,47 @@ const getCanvasSnapshot = (quality = 0.7): string => {
     canvas.renderAll();
   }
 
-  const width = canvas.getWidth();
-  const height = canvas.getHeight();
+  const screenW = canvas.getWidth();
+  const screenH = canvas.getHeight();
+  const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
+  const zoom = canvas.getZoom();
+
+  // Workspace bounds in screen coordinates
+  const wsScreenLeft = vpt[4];
+  const wsScreenTop = vpt[5];
+  const wsScreenRight = WORKSPACE_WIDTH * zoom + vpt[4];
+  const wsScreenBottom = WORKSPACE_HEIGHT * zoom + vpt[5];
+
+  // Intersection between visible viewport and actual workspace
+  const cropLeft = Math.max(0, wsScreenLeft);
+  const cropTop = Math.max(0, wsScreenTop);
+  const cropRight = Math.min(screenW, wsScreenRight);
+  const cropBottom = Math.min(screenH, wsScreenBottom);
+
+  const cropW = cropRight - cropLeft;
+  const cropH = cropBottom - cropTop;
+
+  // Fallback if user is panned completely away
+  const isOutOfView = cropW <= 10 || cropH <= 10;
+  const finalCropLeft = isOutOfView ? 0 : cropLeft;
+  const finalCropTop = isOutOfView ? 0 : cropTop;
+  const finalCropW = isOutOfView ? screenW : cropW;
+  const finalCropH = isOutOfView ? screenH : cropH;
+
+  // High-res output dimensions (min 1600px width for chat viewports)
+  let outW = finalCropW;
+  let outH = finalCropH;
+  if (highRes || quality >= 0.8) {
+    outW = Math.max(Math.round(finalCropW * 2), 1600);
+    outH = Math.round(outW * (finalCropH / finalCropW));
+  } else if (quality <= 0.4) {
+    outW = Math.min(Math.round(finalCropW), 400);
+    outH = Math.max(1, Math.round(outW * (finalCropH / finalCropW)));
+  }
 
   const offscreen = document.createElement('canvas');
-  offscreen.width = width;
-  offscreen.height = height;
+  offscreen.width = outW;
+  offscreen.height = outH;
   const ctx = offscreen.getContext('2d');
   if (!ctx) {
     if (activeObj) {
@@ -889,25 +924,22 @@ const getCanvasSnapshot = (quality = 0.7): string => {
     return canvas.toDataURL({ format: 'jpeg', quality, multiplier: 1 });
   }
 
-  // 1. Fill light background
+  // 1. Fill clean light background
   ctx.fillStyle = '#f8fafc';
-  ctx.fillRect(0, 0, width, height);
+  ctx.fillRect(0, 0, outW, outH);
 
-  // 2. Draw dot grid matching the canvas view
-  const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
-  const zoom = canvas.getZoom();
-  const panX = vpt[4];
-  const panY = vpt[5];
+  // 2. Draw dot grid matching the canvas view within cropped area
+  const scaleOut = outW / finalCropW;
   const baseSpacing = 28;
-  const screenSpacing = baseSpacing * zoom;
+  const screenSpacing = baseSpacing * zoom * scaleOut;
 
   if (screenSpacing >= 8) {
     ctx.fillStyle = '#cbd5e1';
-    const dotRadius = Math.max(0.75, Math.min(2.0, 1.1 * Math.sqrt(zoom)));
-    const startX = ((panX % screenSpacing) + screenSpacing) % screenSpacing;
-    const startY = ((panY % screenSpacing) + screenSpacing) % screenSpacing;
-    for (let x = startX; x < width; x += screenSpacing) {
-      for (let y = startY; y < height; y += screenSpacing) {
+    const dotRadius = Math.max(1.0, Math.min(2.5, 1.1 * Math.sqrt(zoom * scaleOut)));
+    const startX = (((vpt[4] - finalCropLeft) * scaleOut % screenSpacing) + screenSpacing) % screenSpacing;
+    const startY = (((vpt[5] - finalCropTop) * scaleOut % screenSpacing) + screenSpacing) % screenSpacing;
+    for (let x = startX; x < outW; x += screenSpacing) {
+      for (let y = startY; y < outH; y += screenSpacing) {
         ctx.beginPath();
         ctx.arc(x, y, dotRadius, 0, Math.PI * 2);
         ctx.fill();
@@ -915,10 +947,15 @@ const getCanvasSnapshot = (quality = 0.7): string => {
     }
   }
 
-  // 3. Draw fabric lower canvas elements with precise Retina / high-DPI scaling
+  // 3. Draw fabric lower canvas elements clipped strictly to workspace intersection
   const lowerCanvas = canvas.lowerCanvasEl;
   if (lowerCanvas) {
-    ctx.drawImage(lowerCanvas, 0, 0, lowerCanvas.width, lowerCanvas.height, 0, 0, width, height);
+    const dpr = lowerCanvas.width / screenW;
+    const sx = finalCropLeft * dpr;
+    const sy = finalCropTop * dpr;
+    const sw = finalCropW * dpr;
+    const sh = finalCropH * dpr;
+    ctx.drawImage(lowerCanvas, sx, sy, sw, sh, 0, 0, outW, outH);
   }
 
   // Restore selection
@@ -980,6 +1017,30 @@ let unsubCursors: Unsubscribe | null = null;
 let lastCursorBroadcast = 0;
 let lastCursorPos = { x: -9999, y: -9999 };
 let cursorLerpRafId: number | null = null;
+const currentLiveDrag = ref<{
+  targetId: string;
+  left: number;
+  top: number;
+  scaleX?: number;
+  scaleY?: number;
+  angle?: number;
+} | null>(null);
+
+const updateLiveDrag = (opt: any) => {
+  const target = opt?.target as any;
+  if (!target || target.isLocked || !canvas) return;
+  const id = target.id || target.arrowId;
+  if (!id) return;
+  currentLiveDrag.value = {
+    targetId: id,
+    left: Math.round(target.left || 0),
+    top: Math.round(target.top || 0),
+    scaleX: Number((target.scaleX || 1).toFixed(3)),
+    scaleY: Number((target.scaleY || 1).toFixed(3)),
+    angle: Number((target.angle || 0).toFixed(1))
+  };
+  broadcastMyCursor(opt);
+};
 
 const CURSOR_COLORS = [
   '#6366f1', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6',
@@ -1002,8 +1063,8 @@ const startCursorLerpLoop = () => {
       const dx = c.targetX - c.currentX;
       const dy = c.targetY - c.currentY;
       if (Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1) {
-        c.currentX += dx * 0.28;
-        c.currentY += dy * 0.28;
+        c.currentX += dx * 0.35;
+        c.currentY += dy * 0.35;
       } else {
         c.currentX = c.targetX;
         c.currentY = c.targetY;
@@ -1032,13 +1093,13 @@ const pointsToSvgPath = (points: { x: number; y: number }[]) => {
 const broadcastMyCursor = (opt: any) => {
   if (!db || !authStore.uid || !roomStore.currentRoom) return;
   const now = Date.now();
-  if (now - lastCursorBroadcast < 70) return; // 70ms throttle
+  if (now - lastCursorBroadcast < 35) return; // 35ms throttle (~30Hz update)
 
   if (!canvas) return;
   const pointer = (canvas as any).getScenePoint ? (canvas as any).getScenePoint(opt.e || opt) : ((canvas as any).getPointer?.(opt.e || opt) || { x: 0, y: 0 });
   const dx = Math.abs(pointer.x - lastCursorPos.x);
   const dy = Math.abs(pointer.y - lastCursorPos.y);
-  if (dx < 2 && dy < 2 && !isMouseDown) return;
+  if (dx < 2 && dy < 2 && !isMouseDown && !currentLiveDrag.value) return;
 
   lastCursorBroadcast = now;
   lastCursorPos = { x: pointer.x, y: pointer.y };
@@ -1064,7 +1125,8 @@ const broadcastMyCursor = (opt: any) => {
     x: Math.round(pointer.x),
     y: Math.round(pointer.y),
     updatedAt: now,
-    liveStroke: liveStrokePayload
+    liveStroke: liveStrokePayload,
+    liveDrag: currentLiveDrag.value
   }).catch(() => {});
 };
 
@@ -1109,6 +1171,23 @@ const startCursorListener = () => {
             targetY: data.y,
             liveStroke: data.liveStroke
           };
+        }
+
+        // Apply liveDrag smoothly from remote peer
+        if (data.liveDrag && canvas) {
+          const live = data.liveDrag;
+          const targetObj = canvas.getObjects().find((o: any) => (o.id === live.targetId || o.arrowId === live.targetId));
+          if (targetObj && canvas.getActiveObject() !== targetObj) {
+            targetObj.set({
+              left: live.left,
+              top: live.top,
+              ...(live.scaleX !== undefined ? { scaleX: live.scaleX } : {}),
+              ...(live.scaleY !== undefined ? { scaleY: live.scaleY } : {}),
+              ...(live.angle !== undefined ? { angle: live.angle } : {})
+            });
+            targetObj.setCoords();
+            canvas.requestRenderAll();
+          }
         }
       }
     });
@@ -2481,7 +2560,10 @@ const initFabric = () => {
     }
     canvas.selection = currentTool.value === 'select';
 
-    // Broadcast cursor without liveStroke to clear live stroke overlay for other participants
+    // Broadcast cursor without liveStroke and clear liveDrag for other participants
+    if (currentLiveDrag.value) {
+      currentLiveDrag.value = null;
+    }
     broadcastMyCursor(opt);
 
     // Flush any deferred canvas resizing that arrived during drawing or dragging
@@ -2782,6 +2864,7 @@ const initFabric = () => {
       }
       obj.setCoords();
     }
+    updateLiveDrag(e);
     updateStickyToolbar();
     updateArrowToolbar();
   });
@@ -2822,6 +2905,7 @@ const initFabric = () => {
       }
       canvas?.requestRenderAll();
     }
+    updateLiveDrag(e);
     updateStickyToolbar();
     updateArrowToolbar();
   });
@@ -2837,7 +2921,8 @@ const initFabric = () => {
       updateArrowToolbar();
     }
   });
-  canvas.on('object:rotating', () => {
+  canvas.on('object:rotating', (e: any) => {
+    updateLiveDrag(e);
     updateStickyToolbar();
     updateArrowToolbar();
   });
@@ -3157,9 +3242,38 @@ const syncToFirebase = () => {
 const loadFromFirebase = async (json: string) => {
   if (!canvas || !json) return;
   isInternalChange = true;
+
+  // Anti-amnesia: preserve local user's own objects that might not be synced to Firestore yet
+  const localOwnObjects: any[] = [];
+  if (authStore.uid) {
+    canvas.getObjects().forEach((o: any) => {
+      if (o.authorUid === authStore.uid) {
+        localOwnObjects.push(o);
+      }
+    });
+  }
+
   await canvas.loadFromJSON(json);
   rehydrateCanvasObjects();
   syncNodeEditingStateAfterReload();
+
+  // Check if any of our own local objects were missing in the remote snapshot
+  if (localOwnObjects.length > 0) {
+    const existingIds = new Set(canvas.getObjects().map((o: any) => o.id || o.arrowId).filter(Boolean));
+    let hasMerged = false;
+    for (const obj of localOwnObjects) {
+      const id = obj.id || obj.arrowId;
+      if (id && !existingIds.has(id)) {
+        canvas.add(obj);
+        hasMerged = true;
+      }
+    }
+    if (hasMerged) {
+      canvas.requestRenderAll();
+      syncToFirebase();
+    }
+  }
+
   canvas.getObjects().forEach(o => o.setCoords());
   canvas.renderAll();
   viewportVersion.value++;
@@ -3170,7 +3284,6 @@ const loadFromFirebase = async (json: string) => {
     historyStack.value.push(json);
     if (historyStack.value.length > 50) historyStack.value.shift();
   }
-  redoStack.value = [];
 
   isInternalChange = false;
 };
@@ -4172,7 +4285,7 @@ const applyColorToSelected = (color: string) => {
 
 const handleSendToChat = async () => {
   if (!canvas) return;
-  const dataUrl = getCanvasSnapshot(0.85);
+  const dataUrl = getCanvasSnapshot(0.9, true);
   const res = await fetch(dataUrl);
   const blob = await res.blob();
   const file = new File([blob], `Whiteboard_${Date.now()}.jpg`, { type: 'image/jpeg' });
@@ -4247,12 +4360,25 @@ const handleKeydown = (e: KeyboardEvent) => {
     return;
   }
 
+  // Check if keystroke target is outside the whiteboard container (e.g. Chat input, message list)
+  const isInsideWhiteboard = rootRef.value ? rootRef.value.contains(e.target as Node) : true;
+  if (!isInsideWhiteboard) {
+    // Keystroke originated in chat, sidebar, or other page elements — DO NOT intercept
+    return;
+  }
+
   const activeObj = canvas?.getActiveObject() as any;
   const targetTag = (e.target as HTMLElement)?.tagName?.toLowerCase();
   const isInputTarget = targetTag === 'input' || (targetTag === 'textarea' && !(e.target as HTMLElement)?.classList.contains('fabric-canvas-textarea'));
 
   // If focused in external app input elements (e.g. AI prompt), ignore canvas shortcuts
   if (isInputTarget) return;
+
+  // If user has highlighted text on screen, let system copy naturally
+  const hasSelectedText = !!window.getSelection()?.toString()?.trim();
+  if (hasSelectedText && (e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
+    return;
+  }
 
   // 1. ESC: Exit sticky/text editing, Arrow Node Editing, or Group Isolation Mode
   if (e.key === 'Escape') {
@@ -4470,9 +4596,25 @@ const generateAIObject = async () => {
     }
 
     const center = canvas.getVpCenter();
+    const objW = (bound.width || 200) * targetScale;
+    const objH = (bound.height || 200) * targetScale;
+    const margin = 50;
+
+    let targetX = center.x;
+    let targetY = center.y;
+
+    // Strict clamping within the 3200x2000 workspace boundary
+    const minX = objW / 2 + margin;
+    const maxX = Math.max(minX, WORKSPACE_WIDTH - objW / 2 - margin);
+    const minY = objH / 2 + margin;
+    const maxY = Math.max(minY, WORKSPACE_HEIGHT - objH / 2 - margin);
+
+    targetX = Math.max(minX, Math.min(maxX, targetX));
+    targetY = Math.max(minY, Math.min(maxY, targetY));
+
     obj.set({
-      left: center.x,
-      top: center.y,
+      left: targetX,
+      top: targetY,
       originX: 'center',
       originY: 'center',
       scaleX: targetScale,
@@ -4481,6 +4623,17 @@ const generateAIObject = async () => {
     });
     canvas.add(obj);
     canvas.setActiveObject(obj);
+
+    // If center was outside workspace or object is offscreen, re-center viewport cleanly
+    if (center.x < minX || center.x > maxX || center.y < minY || center.y > maxY) {
+      const vpt = canvas.viewportTransform;
+      if (vpt && wrapperRef.value) {
+        const zoom = canvas.getZoom();
+        vpt[4] = (wrapperRef.value.clientWidth / 2) - (targetX * zoom);
+        vpt[5] = (wrapperRef.value.clientHeight / 2) - (targetY * zoom);
+        clampViewportPan();
+      }
+    }
     saveHistoryState();
     syncToFirebase();
     updateSelectionState();

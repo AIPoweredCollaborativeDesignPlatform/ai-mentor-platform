@@ -36,17 +36,45 @@ const getImageUrl = (img: any, index: number) => {
   return `https://image.pollinations.ai/prompt/${prompt}?width=600&height=450&nologo=true&seed=${index * 137 + 42}`;
 };
 
-const handleImgError = (e: Event, index: number) => {
+const getCategoryFallback = (img: any) => {
+  const cat = (img?.category || '').toLowerCase();
+  const text = `${img?.title || ''} ${img?.caption || ''} ${img?.prompt || ''}`.toLowerCase();
+
+  if (cat.includes('material') || cat.includes('texture') || text.includes('metal') || text.includes('surface') || text.includes('texture') || text.includes('finish') || text.includes('fuselage') || text.includes('steel') || text.includes('carbon')) {
+    return 'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?auto=format&fit=crop&w=600&h=450&q=80'; // Industrial textured weathered metal surface
+  }
+  if (cat.includes('activity') || cat.includes('lifestyle') || text.includes('engineer') || text.includes('nomad') || text.includes('work') || text.includes('field') || text.includes('task') || text.includes('repair') || text.includes('build')) {
+    return 'https://images.unsplash.com/photo-1581092921461-eab62e97a780?auto=format&fit=crop&w=600&h=450&q=80'; // Engineers / hardware workspace / nomad lifestyle
+  }
+  if (cat.includes('persona') || cat.includes('context') || text.includes('person') || text.includes('user') || text.includes('portrait')) {
+    return 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=600&h=450&q=80'; // User persona
+  }
+  if (cat.includes('color') || cat.includes('lighting') || text.includes('light') || text.includes('glow') || text.includes('atmosphere')) {
+    return 'https://images.unsplash.com/photo-1550684848-fac1c5b4e853?auto=format&fit=crop&w=600&h=450&q=80'; // Lighting & color ambiance
+  }
+  return 'https://images.unsplash.com/photo-1581291518857-4e27b48ff24e?auto=format&fit=crop&w=600&h=450&q=80'; // Engineering & industrial design
+};
+
+const handleImgError = (e: Event, img: any) => {
   const target = e.target as HTMLImageElement;
   if (!target) return;
-  // Multidisciplinary design research fallbacks (product, persona, material, lighting)
-  const fallbacks = [
-    'https://images.unsplash.com/photo-1581291518857-4e27b48ff24e?auto=format&fit=crop&w=600&h=450&q=80', // Product engineering / hardware
-    'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=600&h=450&q=80', // User persona / lifestyle
-    'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=600&h=450&q=80', // Material & generative texture
-    'https://images.unsplash.com/photo-1550684848-fac1c5b4e853?auto=format&fit=crop&w=600&h=450&q=80'  // Lighting & color atmosphere
-  ];
-  target.src = fallbacks[index % fallbacks.length];
+  target.src = getCategoryFallback(img);
+};
+
+const getSourceUrl = (img: any) => {
+  if (img?.sourceUrl) return img.sourceUrl;
+  const q = encodeURIComponent(img?.title || img?.caption || props.assetData?.title || 'design concept');
+  return `https://unsplash.com/s/photos/${q}`;
+};
+
+const getSourceHost = (img: any) => {
+  try {
+    const url = getSourceUrl(img);
+    const host = new URL(url).hostname.replace('www.', '');
+    return host;
+  } catch {
+    return 'unsplash.com';
+  }
 };
 
 const openPreview = (e: MouseEvent) => {
@@ -70,7 +98,7 @@ const closePreview = () => {
         <h4 class="font-semibold text-slate-100 text-sm tracking-wide">
           {{ assetData?.title || 'Visual Mood Board' }}
         </h4>
-        <span class="text-[10px] bg-amber-500/20 text-amber-300 font-mono px-2 py-0.5 rounded-full border border-amber-500/30">
+        <span class="text-[10px] bg-amber-500/20 text-amber-300 font-mono px-2 py-0.5 rounded-full border border-amber-500/30 whitespace-nowrap shrink-0">
           AI Generated
         </span>
       </div>
@@ -102,13 +130,25 @@ const closePreview = () => {
           <img
             :src="getImageUrl(img, i)"
             :alt="img?.title || img?.caption || 'Concept'"
-            @error="handleImgError($event, i)"
+            @error="handleImgError($event, img)"
             class="w-full h-full object-cover group-hover:scale-105 transition duration-300"
             loading="lazy"
           />
-          <!-- Category Badge -->
-          <div v-if="img?.category" class="absolute top-1.5 left-1.5 bg-black/65 backdrop-blur-xs text-amber-300 px-1.5 py-0.5 rounded text-[8px] font-semibold border border-amber-500/30 shadow-xs z-10">
-            {{ img.category }}
+          <!-- Category & Source Badge -->
+          <div class="absolute top-1.5 left-1.5 right-1.5 flex items-center justify-between pointer-events-none z-10 gap-1">
+            <span v-if="img?.category" class="bg-black/70 backdrop-blur-xs text-amber-300 px-1.5 py-0.5 rounded text-[8px] font-semibold border border-amber-500/30 shadow-xs truncate">
+              {{ img.category }}
+            </span>
+            <a
+              :href="getSourceUrl(img)"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="pointer-events-auto bg-black/70 backdrop-blur-xs text-slate-300 hover:text-amber-200 px-1.5 py-0.5 rounded text-[8px] font-medium border border-slate-700/80 shadow-xs truncate max-w-[110px] flex items-center gap-1 transition"
+              @click.stop
+              :title="'Source reference: ' + getSourceUrl(img)"
+            >
+              <span class="truncate">src: {{ getSourceHost(img) }}</span>
+            </a>
           </div>
           <div class="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent flex items-end p-2 opacity-90">
             <p class="text-[11px] text-slate-200 font-medium truncate">{{ img?.title || img?.caption || 'Concept Reference' }}</p>

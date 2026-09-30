@@ -165,8 +165,9 @@ Role & Capabilities:
        d) Materials & Surface Textures (tactile finishes, engineered composites, textiles, matte/gloss textures)
        e) Visual Style & Brand Culture (typography, graphics, aesthetic ethos, cultural references)
      - Provide keywords, color palette (hex + name), materials (name + feature), and 3-4 diverse concept images covering these distinct facets.
+     - Image prompts MUST be concrete, vivid English visual descriptions specifically matching the category and title (e.g., if title is "Battle-worn Fuselage", prompt must strictly describe "scratched battle-worn aircraft metal fuselage plates, weathered rivets, industrial macro texture", NEVER a human face; if title is "Nomadic Engineer", prompt must describe "hardware engineer working on laptop at portable field workbench with tools", NEVER abstract bubbles).
      - Each image must include:
-       { "title": string, "category": "Persona / Context" | "Activity / Lifestyle" | "Material & Texture" | "Color & Lighting", "prompt": string, "url": "https://image.pollinations.ai/prompt/" + encodeURIComponent(prompt) + "?width=600&height=400&nologo=true" }
+       { "title": string, "category": "Persona / Context" | "Activity / Lifestyle" | "Material & Texture" | "Color & Lighting", "prompt": string, "sourceUrl": string, "url": "https://image.pollinations.ai/prompt/" + encodeURIComponent(prompt) + "?width=600&height=400&nologo=true" }
 
 Return ONLY a valid JSON object matching this schema:
 {

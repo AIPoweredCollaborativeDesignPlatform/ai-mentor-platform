@@ -2204,32 +2204,29 @@ const initFabric = () => {
     if (obj && (obj.isStickyNote || obj.stickyColorConfig)) {
       const sx = Math.abs(obj.scaleX || 1);
       const sy = Math.abs(obj.scaleY || 1);
-      if (sx !== 1 || sy !== 1) {
-        const transform = (e as any).transform || (canvas as any)?._currentTransform;
-        const originX = transform?.originX || 'left';
-        const originY = transform?.originY || 'top';
-        const fixedPoint = (obj as any).getPositionByOrigin ? (obj as any).getPositionByOrigin(originX, originY) : null;
-
+      if (Math.abs(sx - 1) > 1e-4 || Math.abs(sy - 1) > 1e-4) {
+        // Enforce uniform proportional scale factor in 2D
+        const s = Math.max(sx, sy);
+        const center = obj.getCenterPoint();
         const curW = obj.width || 180;
         const curMinH = (obj as any).minHeight !== undefined ? (obj as any).minHeight : (obj.height || 180);
 
-        let targetW = Math.max(80, Math.round(curW * sx));
-        let targetH = Math.max(80, Math.round(curMinH * sy));
-
-        // Proportional font size scaling for sticky note
+        const targetW = Math.max(80, Math.round(curW * s));
+        const targetH = Math.max(80, Math.round(curMinH * s));
         const curFontSize = obj.fontSize || 18;
-        const newFontSize = Math.max(10, Math.min(120, Math.round(curFontSize * sx)));
+        const newFontSize = Math.max(10, Math.min(120, Math.round(curFontSize * s)));
 
         (obj as any).minHeight = targetH;
         obj.set({
           width: targetW,
+          height: targetH,
           fontSize: newFontSize,
           scaleX: 1,
           scaleY: 1
         });
         obj.initDimensions();
-        if (fixedPoint && (obj as any).setPositionByOrigin) {
-          (obj as any).setPositionByOrigin(fixedPoint, originX, originY);
+        if (obj.setPositionByOrigin) {
+          obj.setPositionByOrigin(center, 'center', 'center');
         }
         obj.setCoords();
       }
@@ -3520,23 +3517,6 @@ const initFabric = () => {
     updateArrowToolbar();
   });
   canvas.on('object:modified', (e: any) => {
-    const obj = e?.target;
-    if (!obj) return;
-    if (obj.isStickyNote || obj.stickyColorConfig) {
-      const s = Math.max(obj.scaleX || 1, obj.scaleY || 1);
-      obj.set({ scaleX: s, scaleY: s });
-      obj.setCoords();
-    } else if (obj.type === 'activeselection' || obj.type === 'group') {
-      const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
-      targets.forEach((c: any) => {
-        if (c.isStickyNote || c.stickyColorConfig) {
-          const s = Math.max(c.scaleX || 1, c.scaleY || 1);
-          c.set({ scaleX: s, scaleY: s });
-          c.setCoords();
-        }
-      });
-      obj.setCoords();
-    }
     updateStickyToolbar();
     updateArrowToolbar();
   });
@@ -3664,34 +3644,11 @@ const changeStickyHeight = (eventData: any, transform: any, x: number, y: number
 const setupStickyControls = (note: any) => {
   const defaultControls = fabric.controlsUtils?.createObjectDefaultControls?.() || {};
 
-  const makeStickyCornerControl = (baseControl: any) => {
-    if (!baseControl) return baseControl;
-    const origHandler = baseControl.actionHandler;
-    return new (fabric as any).Control({
-      ...baseControl,
-      actionHandler: (eventData: any, transform: any, x: number, y: number) => {
-        // Enforce proportional uniform scaling by forcing shiftKey / uniScaleKey on the event
-        const forcedEvent = {
-          ...eventData,
-          shiftKey: true,
-          [transform.target?.canvas?.uniScaleKey || 'shiftKey']: true
-        };
-        const res = origHandler ? origHandler(forcedEvent, transform, x, y) : false;
-        if (transform.target) {
-          const s = Math.max(Math.abs(transform.target.scaleX || 1), Math.abs(transform.target.scaleY || 1));
-          transform.target.scaleX = (transform.target.scaleX < 0 ? -1 : 1) * s;
-          transform.target.scaleY = (transform.target.scaleY < 0 ? -1 : 1) * s;
-        }
-        return res;
-      }
-    });
-  };
-
   note.controls = {
-    tl: makeStickyCornerControl(defaultControls.tl),
-    tr: makeStickyCornerControl(defaultControls.tr),
-    bl: makeStickyCornerControl(defaultControls.bl),
-    br: makeStickyCornerControl(defaultControls.br)
+    tl: defaultControls.tl,
+    tr: defaultControls.tr,
+    bl: defaultControls.bl,
+    br: defaultControls.br
   };
   note.setControlsVisibility({
     tl: true,

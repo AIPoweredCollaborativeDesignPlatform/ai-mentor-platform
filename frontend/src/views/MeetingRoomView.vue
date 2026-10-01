@@ -2033,14 +2033,14 @@ onUnmounted(() => {
             class="flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold transition cursor-pointer text-center"
             :class="activeAssetTab === 'public' ? 'bg-sky-600 text-white shadow-xs' : 'text-slate-400 hover:text-slate-200'"
           >
-            Public Assets ({{ allPublicAlbumItems.length }})
+            Public Assets ({{ isManagingAssets ? allPublicAlbumItems.length : allPublicAlbumItems.filter(m => !m.metadata?.isHidden).length }})
           </button>
           <button
             @click="activeAssetTab = 'personal'"
             class="flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold transition cursor-pointer text-center"
             :class="activeAssetTab === 'personal' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-400 hover:text-slate-200'"
           >
-            Personal Drafts ({{ allPersonalAlbumItems.length }})
+            Personal Drafts ({{ isManagingAssets ? allPersonalAlbumItems.length : allPersonalAlbumItems.filter(m => !m.metadata?.isHidden).length }})
           </button>
         </div>
       </div>
@@ -2178,8 +2178,8 @@ onUnmounted(() => {
           </template>
         </div>
 
-        <!-- Spatial Partition Divider for Hidden Items (Moved to bottom, chronological timestamp preserved) -->
-        <div v-if="hiddenAlbumItems.length" class="pt-4 border-t border-slate-800/80">
+        <!-- Spatial Partition Divider for Hidden Items (Shown only in Manage mode, chronological timestamp preserved) -->
+        <div v-if="isManagingAssets && hiddenAlbumItems.length" class="pt-4 border-t border-slate-800/80">
           <div class="flex items-center justify-between mb-2.5 px-1 select-none">
             <div class="flex items-center gap-1.5 text-xs font-semibold text-slate-400">
               <EyeOff class="w-3.5 h-3.5 text-amber-400/80" />

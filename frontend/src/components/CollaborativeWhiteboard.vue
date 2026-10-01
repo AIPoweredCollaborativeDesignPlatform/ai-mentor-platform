@@ -863,6 +863,7 @@ const updateSelectionState = () => {
     const targets = active.getObjects ? active.getObjects() : active._objects || [];
     const allLocked = targets.length > 0 && targets.every((o: any) => o.isLocked === true);
     const anyLocked = targets.some((o: any) => o.isLocked === true);
+    const hasSticky = targets.some((o: any) => o.isStickyNote || o.stickyColorConfig);
     isObjectLocked.value = anyLocked;
     active.set({
       lockMovementX: allLocked,
@@ -870,12 +871,14 @@ const updateSelectionState = () => {
       lockRotation: allLocked,
       lockScalingX: allLocked,
       lockScalingY: allLocked,
-      hasControls: !allLocked
+      hasControls: !allLocked,
+      lockUniScaling: hasSticky
     });
   } else if (active && (active.type?.toLowerCase() === 'group' || active instanceof fabric.Group) && !active.isStickyNote && !(active as any).isArrow) {
     const targets = active.getObjects ? active.getObjects() : active._objects || [];
     const allLocked = targets.length > 0 && targets.every((o: any) => o.isLocked === true);
     const anyLocked = targets.some((o: any) => o.isLocked === true);
+    const hasSticky = targets.some((o: any) => o.isStickyNote || o.stickyColorConfig);
     isObjectLocked.value = !!active.isLocked || anyLocked;
     const shouldFreeze = !!active.isLocked || allLocked;
     active.set({
@@ -884,8 +887,12 @@ const updateSelectionState = () => {
       lockRotation: shouldFreeze,
       lockScalingX: shouldFreeze,
       lockScalingY: shouldFreeze,
-      hasControls: !shouldFreeze
+      hasControls: !shouldFreeze,
+      lockUniScaling: hasSticky
     });
+  } else if (active && (active.isStickyNote || active.stickyColorConfig)) {
+    active.set({ lockUniScaling: true });
+    isObjectLocked.value = !!(active && active.isLocked === true);
   } else {
     isObjectLocked.value = !!(active && active.isLocked === true);
   }
@@ -2498,13 +2505,47 @@ const initFabric = () => {
     }
   });
 
+  // Refine canvas.collectObjects to ensure groups are only collected if at least one actual child is touched or enclosed
+  const origCollectObjects = (canvas as any).collectObjects.bind(canvas);
+  (canvas as any).collectObjects = function(bbox: any, options?: any) {
+    const collected = origCollectObjects(bbox, options);
+    const boxLeft = bbox.left;
+    const boxTop = bbox.top;
+    const boxRight = bbox.left + bbox.width;
+    const boxBottom = bbox.top + bbox.height;
+
+    return collected.filter((obj: any) => {
+      if ((obj.type === 'group' || obj instanceof fabric.Group) && !obj.isStickyNote && !(obj as any).isArrow) {
+        const children = obj.getObjects ? obj.getObjects() : obj._objects || [];
+        const gMatrix = obj.calcTransformMatrix();
+        const hasChildInRect = children.some((child: any) => {
+          const { tl: cTl, tr: cTr, br: cBr, bl: cBl } = child.calcACoords();
+          const sceneCorners = [cTl, cTr, cBr, cBl].map(pt => fabric.util.transformPoint(pt, gMatrix));
+          const childMinX = Math.min(...sceneCorners.map(p => p.x));
+          const childMaxX = Math.max(...sceneCorners.map(p => p.x));
+          const childMinY = Math.min(...sceneCorners.map(p => p.y));
+          const childMaxY = Math.max(...sceneCorners.map(p => p.y));
+          const centerX = (childMinX + childMaxX) / 2;
+          const centerY = (childMinY + childMaxY) / 2;
+
+          const isCenterInside = centerX >= boxLeft && centerX <= boxRight && centerY >= boxTop && centerY <= boxBottom;
+          const isEnclosed = childMinX >= boxLeft && childMaxX <= boxRight && childMinY >= boxTop && childMaxY <= boxBottom;
+          const isIntersecting = boxRight >= childMinX && boxLeft <= childMaxX && boxBottom >= childMinY && boxTop <= childMaxY;
+
+          return isCenterInside || isEnclosed || isIntersecting;
+        });
+        return hasChildInRect;
+      }
+      return true;
+    });
+  };
+
   // Ctrl+Click & Ctrl+Marquee Group Sub-object Isolation State
   let isCtrlInteracting = false;
   let ctrlMouseDownPoint: { x: number; y: number } | null = null;
   let ctrlHitGroup: fabric.Group | null = null;
   let ctrlHitChild: any = null;
   let isCtrlMarqueeDragging = false;
-  let ctrlMarqueeRect: fabric.Rect | null = null;
 
   // Unified Mouse Down
   canvas.on('mouse:down', (opt) => {
@@ -2594,6 +2635,11 @@ const initFabric = () => {
               break;
             }
           }
+        }
+
+        // If clicked on empty space of group bounding box without hitting any child, don't treat as group click
+        if (!hitChild) {
+          group = null;
         }
       }
 
@@ -2791,37 +2837,12 @@ const initFabric = () => {
       }
     }
 
-    // Ctrl+Marquee Dragging
+    // Ctrl+Marquee Dragging state tracking (Fabric's native selection marquee renders the visual box cleanly)
     if (isCtrlInteracting && ctrlMouseDownPoint) {
       const curScene = canvas.getScenePoint(e);
       const dist = Math.hypot(curScene.x - ctrlMouseDownPoint.x, curScene.y - ctrlMouseDownPoint.y);
       if (dist > 5) {
         isCtrlMarqueeDragging = true;
-        const left = Math.min(ctrlMouseDownPoint.x, curScene.x);
-        const top = Math.min(ctrlMouseDownPoint.y, curScene.y);
-        const width = Math.abs(curScene.x - ctrlMouseDownPoint.x);
-        const height = Math.abs(curScene.y - ctrlMouseDownPoint.y);
-
-        if (!ctrlMarqueeRect) {
-          ctrlMarqueeRect = new fabric.Rect({
-            left,
-            top,
-            width,
-            height,
-            fill: 'rgba(14, 165, 233, 0.15)',
-            stroke: '#0ea5e9',
-            strokeWidth: 1,
-            strokeDashArray: [4, 4],
-            selectable: false,
-            evented: false,
-            excludeFromExport: true
-          } as any);
-          canvas.add(ctrlMarqueeRect);
-        } else {
-          ctrlMarqueeRect.set({ left, top, width, height });
-        }
-        canvas.requestRenderAll();
-        return;
       }
     }
 
@@ -3052,11 +3073,6 @@ const initFabric = () => {
     const e = opt.e as MouseEvent;
     isMouseDown = false;
 
-    if (ctrlMarqueeRect) {
-      canvas.remove(ctrlMarqueeRect);
-      ctrlMarqueeRect = null;
-    }
-
     if (isCtrlInteracting) {
       const startPt = ctrlMouseDownPoint;
       const wasMarquee = isCtrlMarqueeDragging && startPt;
@@ -3083,12 +3099,22 @@ const initFabric = () => {
           ) as fabric.Group[];
           for (let i = groups.length - 1; i >= 0; i--) {
             const g = groups[i];
-            const gCoords = g.getCoords();
-            const gMinX = Math.min(...gCoords.map(p => p.x));
-            const gMaxX = Math.max(...gCoords.map(p => p.x));
-            const gMinY = Math.min(...gCoords.map(p => p.y));
-            const gMaxY = Math.max(...gCoords.map(p => p.y));
-            if (boxRight >= gMinX && boxLeft <= gMaxX && boxBottom >= gMinY && boxTop <= gMaxY) {
+            const children = g.getObjects ? g.getObjects() : (g as any)._objects || [];
+            const gMatrix = g.calcTransformMatrix();
+            const hasChild = children.some((child: any) => {
+              const { tl, tr, br, bl } = child.calcACoords();
+              const sceneCorners = [tl, tr, br, bl].map(pt => fabric.util.transformPoint(pt, gMatrix));
+              const childMinX = Math.min(...sceneCorners.map(p => p.x));
+              const childMaxX = Math.max(...sceneCorners.map(p => p.x));
+              const childMinY = Math.min(...sceneCorners.map(p => p.y));
+              const childMaxY = Math.max(...sceneCorners.map(p => p.y));
+              const centerX = (childMinX + childMaxX) / 2;
+              const centerY = (childMinY + childMaxY) / 2;
+              const isCenterInside = centerX >= boxLeft && centerX <= boxRight && centerY >= boxTop && centerY <= boxBottom;
+              const isEnclosed = childMinX >= boxLeft && childMaxX <= boxRight && childMinY >= boxTop && childMaxY <= boxBottom;
+              return isCenterInside || isEnclosed;
+            });
+            if (hasChild) {
               groupToIsolate = g;
               break;
             }
@@ -3112,9 +3138,10 @@ const initFabric = () => {
             const centerY = (childMinY + childMaxY) / 2;
 
             const isCenterInside = centerX >= boxLeft && centerX <= boxRight && centerY >= boxTop && centerY <= boxBottom;
-            const isIntersecting = boxRight >= childMinX && boxLeft <= childMaxX && boxBottom >= childMinY && boxTop <= childMaxY;
+            const isEnclosed = childMinX >= boxLeft && childMaxX <= boxRight && childMinY >= boxTop && childMaxY <= boxBottom;
 
-            if (isCenterInside || isIntersecting) {
+            // Only select if the child's center is inside the box or it is completely enclosed
+            if (isCenterInside || isEnclosed) {
               matchedChildren.push(child);
             }
           });
@@ -3467,6 +3494,14 @@ const initFabric = () => {
     if (obj) {
       // Alt modifier: scale from center
       obj.centeredScaling = !!(e.e?.altKey);
+      if (obj.isStickyNote || obj.stickyColorConfig) {
+        obj.lockUniScaling = true;
+      } else if (obj.type === 'activeselection' || obj.type === 'group') {
+        const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
+        if (targets.some((c: any) => c.isStickyNote || c.stickyColorConfig)) {
+          obj.lockUniScaling = true;
+        }
+      }
     }
   });
 
@@ -3481,6 +3516,27 @@ const initFabric = () => {
       canvas?.requestRenderAll();
     }
     // Scaling frames are not broadcast live to peers; sync on mouseup (user requirement)
+    updateStickyToolbar();
+    updateArrowToolbar();
+  });
+  canvas.on('object:modified', (e: any) => {
+    const obj = e?.target;
+    if (!obj) return;
+    if (obj.isStickyNote || obj.stickyColorConfig) {
+      const s = Math.max(obj.scaleX || 1, obj.scaleY || 1);
+      obj.set({ scaleX: s, scaleY: s });
+      obj.setCoords();
+    } else if (obj.type === 'activeselection' || obj.type === 'group') {
+      const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
+      targets.forEach((c: any) => {
+        if (c.isStickyNote || c.stickyColorConfig) {
+          const s = Math.max(c.scaleX || 1, c.scaleY || 1);
+          c.set({ scaleX: s, scaleY: s });
+          c.setCoords();
+        }
+      });
+      obj.setCoords();
+    }
     updateStickyToolbar();
     updateArrowToolbar();
   });
@@ -5470,8 +5526,14 @@ const saveStatus = ref<SaveStatus>('idle');
 let autoSaveDebounceTimer: any = null;
 let saveStatusResetTimer: any = null;
 
+const isBlankCanvasWithoutHistory = (): boolean => {
+  if (!canvas) return true;
+  const nonSystemObjects = canvas.getObjects().filter((o: any) => o !== (canvas as any).clipPath && !o.excludeFromExport);
+  return nonSystemObjects.length === 0 && historyStack.value.length <= 1 && !props.initialJson;
+};
+
 async function triggerAutoSaveAsAsset() {
-  if (!canvas) return '';
+  if (!canvas || isBlankCanvasWithoutHistory()) return '';
   const json = getSerializedCanvasJson();
   const dataUrl = getCanvasSnapshot(0.7);
   emit('save-state', json, dataUrl, currentAssetId.value, !isCollabActive.value);
@@ -5480,7 +5542,11 @@ async function triggerAutoSaveAsAsset() {
 }
 
 function triggerDebouncedAutoSave(delay = 800) {
-  if (!canvas) return;
+  if (!canvas || isBlankCanvasWithoutHistory()) {
+    saveStatus.value = 'idle';
+    hasUnsavedChanges.value = false;
+    return;
+  }
   const activeObj = canvas.getActiveObject() as any;
   if (activeObj?.isEditing) {
     // Defer auto-save while typing/editing in a note or textbox
@@ -5512,6 +5578,7 @@ function triggerDebouncedAutoSave(delay = 800) {
 }
 
 const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+  if (isBlankCanvasWithoutHistory()) return;
   if (roomStore.currentRoom?.whiteboardActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid) {
     triggerAutoSaveAsAsset();
     return;

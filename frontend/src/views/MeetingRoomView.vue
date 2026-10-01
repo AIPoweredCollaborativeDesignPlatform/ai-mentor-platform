@@ -178,7 +178,8 @@ const handleToggleHideAsset = async (msg: any) => {
 const handleSaveWhiteboardState = async (json: string, previewUrl: string, explicitAssetId?: string | null, isPrivateParam?: boolean) => {
   let targetAssetId = explicitAssetId || activeWhiteboardAssetId.value;
   // Check if whiteboard is in shared session or personal session
-  const isShared = !!roomStore.currentRoom?.whiteboardActive;
+  const isCurrentBoardShared = isJoiningSharedBoard.value || (isLocalWhiteboardPublisher.value && !activeWhiteboardAssetId.value);
+  const isShared = isCurrentBoardShared && !!roomStore.currentRoom?.whiteboardActive;
   const isPrivate = isPrivateParam !== undefined ? isPrivateParam : !isShared;
 
   const hostUid = roomStore.currentRoom?.whiteboardHostUid || authStore.uid;
@@ -235,7 +236,7 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string, expli
       senderName: isShared ? hostName : (authStore.displayName || 'Participant'),
       senderAvatar: isShared ? (roomStore.currentRoom?.participants[hostUid]?.avatar || '🎨') : (authStore.avatar || '🎨'),
       type: 'whiteboard_state',
-      content: isPrivate ? 'Whiteboard saved (Personal Draft)' : 'Shared Whiteboard saved to Assets Library',
+      content: isPrivate ? 'Personal Draft' : 'Shared Whiteboard saved to Assets Library',
       fileData: {
         type: 'image',
         url: previewUrl,
@@ -274,11 +275,12 @@ const openWhiteboardState = (msg: any) => {
     roomStore.pushToast('Access Restricted', 'This whiteboard is private or the shared session has ended.', 'warning');
     return;
   }
-  if (roomStore.currentRoom?.whiteboardActive) {
+  if (roomStore.currentRoom?.whiteboardActive && !msg.metadata?.isPrivate) {
     handleJoinSharedWhiteboard();
     return;
   }
   // Open locally with asset JSON; DO NOT involuntarily trigger broadcast session!
+  isJoiningSharedBoard.value = false;
   activeWhiteboardAssetId.value = msg.id;
   currentWhiteboardJson.value = msg.metadata?.whiteboardJson || null;
   isWhiteboardOpen.value = true;
@@ -286,8 +288,8 @@ const openWhiteboardState = (msg: any) => {
 
 const activeAssetTab = ref<'public' | 'personal'>('public');
 
-// Public Album Items (Shared whiteboards, 3D models, images, moodboards)
-const publicAlbumItems = computed(() => {
+// All Public Album Items (Shared whiteboards, 3D models, images, moodboards)
+const allPublicAlbumItems = computed(() => {
   if (!roomStore.currentRoom?.messages) return [];
   const items = roomStore.currentRoom.messages.filter(m => {
     if (m.type === 'whiteboard_state') {
@@ -295,16 +297,13 @@ const publicAlbumItems = computed(() => {
     } else if (m.type !== 'ai_asset' && !(m.type === 'file' && m.fileData?.type === 'image')) {
       return false;
     }
-    if (!isManagingAssets.value && m.metadata?.isHidden) {
-      return false;
-    }
     return true;
   });
   return [...items].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 });
 
-// Personal Drafts (Current user's own private saved whiteboards)
-const personalAlbumItems = computed(() => {
+// All Personal Drafts (Current user's own private saved whiteboards)
+const allPersonalAlbumItems = computed(() => {
   if (!roomStore.currentRoom?.messages) return [];
   const items = roomStore.currentRoom.messages.filter(m => {
     if (m.type === 'whiteboard_state') {
@@ -312,9 +311,6 @@ const personalAlbumItems = computed(() => {
       if (!isMine) return false;
       // Must be private draft! If it's shared/public, it lives strictly in Public Assets
       if (!m.metadata?.isPrivate) return false;
-      if (!isManagingAssets.value && m.metadata?.isHidden) {
-        return false;
-      }
       return true;
     }
     return false;
@@ -322,8 +318,25 @@ const personalAlbumItems = computed(() => {
   return [...items].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 });
 
+const currentTabAllItems = computed(() => {
+  return activeAssetTab.value === 'public' ? allPublicAlbumItems.value : allPersonalAlbumItems.value;
+});
+
+// Spatial partitioning: visible items in the top grid, hidden items in the bottom section
+// Preserves original chronological timestamp ordering
+const visibleAlbumItems = computed(() => {
+  return currentTabAllItems.value.filter(m => !m.metadata?.isHidden);
+});
+
+const hiddenAlbumItems = computed(() => {
+  return currentTabAllItems.value.filter(m => !!m.metadata?.isHidden);
+});
+
+const publicAlbumItems = computed(() => allPublicAlbumItems.value);
+const personalAlbumItems = computed(() => allPersonalAlbumItems.value);
+
 const albumItems = computed(() => {
-  return activeAssetTab.value === 'public' ? publicAlbumItems.value : personalAlbumItems.value;
+  return visibleAlbumItems.value;
 });
 
 const pageEnteredAt = ref(Date.now());
@@ -360,9 +373,12 @@ const visibleChatMessages = computed(() => {
       }
     }
 
-    // Filter out routine auto-save whiteboard capsules from chat, keep only deliberate share posts
+    // Filter out routine auto-save whiteboard capsules and private drafts from chat, keep only deliberate share posts
     if (m.type === 'whiteboard_state') {
       if (m.metadata?.isPrivate && !m.metadata?.isSharedPost) {
+        return false;
+      }
+      if (m.content?.includes('Personal Draft')) {
         return false;
       }
       if (m.metadata?.isAutoSave && !m.metadata?.isSharedPost) {
@@ -1533,8 +1549,8 @@ onUnmounted(() => {
               >
                 <div class="relative w-full aspect-[4/3] bg-slate-950 flex items-center justify-center overflow-hidden">
                   <img
-                    v-if="msg.fileData?.url || (roomStore.currentRoom?.whiteboardActive && roomStore.currentRoom?.whiteboardThumbnail)"
-                    :src="msg.fileData?.url || roomStore.currentRoom?.whiteboardThumbnail"
+                    v-if="msg.fileData?.url"
+                    :src="msg.fileData.url"
                     class="w-full h-full object-cover transition duration-300"
                     :class="[
                       (!roomStore.currentRoom?.whiteboardActive || msg.metadata?.isPrivate) && msg.senderUid !== authStore.uid && msg.metadata?.creatorUid !== authStore.uid
@@ -1973,7 +1989,7 @@ onUnmounted(() => {
           ref="whiteboardRef"
           :initialJson="currentWhiteboardJson"
           :activeAssetId="activeWhiteboardAssetId"
-          :isSharedSession="isJoiningSharedBoard || roomStore.currentRoom?.whiteboardHostUid === authStore.uid"
+          :isSharedSession="isJoiningSharedBoard || (!activeWhiteboardAssetId && isLocalWhiteboardPublisher)"
           @close="isWhiteboardOpen = false; isJoiningSharedBoard = false; activeWhiteboardAssetId = null; currentWhiteboardJson = undefined;"
           @share="handleShareWhiteboard"
           @save-state="handleSaveWhiteboardState"
@@ -2017,21 +2033,21 @@ onUnmounted(() => {
             class="flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold transition cursor-pointer text-center"
             :class="activeAssetTab === 'public' ? 'bg-sky-600 text-white shadow-xs' : 'text-slate-400 hover:text-slate-200'"
           >
-            Public Assets ({{ publicAlbumItems.length }})
+            Public Assets ({{ allPublicAlbumItems.length }})
           </button>
           <button
             @click="activeAssetTab = 'personal'"
             class="flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold transition cursor-pointer text-center"
             :class="activeAssetTab === 'personal' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-400 hover:text-slate-200'"
           >
-            Personal Drafts ({{ personalAlbumItems.length }})
+            Personal Drafts ({{ allPersonalAlbumItems.length }})
           </button>
         </div>
       </div>
 
       <div class="flex-1 overflow-y-auto p-4 space-y-4">
-        <!-- Render 3D Models & Images in a grid -->
-        <div v-if="!albumItems.length" class="text-center text-xs text-slate-500 py-10 px-4">
+        <!-- Empty State -->
+        <div v-if="!visibleAlbumItems.length && !hiddenAlbumItems.length" class="text-center text-xs text-slate-500 py-10 px-4">
           <template v-if="activeAssetTab === 'personal'">
             No personal drafts yet. When you save a board as private, it will appear here only for you.
           </template>
@@ -2039,15 +2055,14 @@ onUnmounted(() => {
             No public media assets or shared whiteboards in this room yet.
           </template>
         </div>
-        <div class="grid grid-cols-3 gap-2">
-          <template v-for="msg in albumItems" :key="msg.id">
+
+        <!-- Upper Visible Assets Grid -->
+        <div v-if="visibleAlbumItems.length" class="grid grid-cols-3 gap-2">
+          <template v-for="msg in visibleAlbumItems" :key="msg.id">
             <!-- Whiteboard States (Editable) -->
             <div
               v-if="msg.type === 'whiteboard_state'"
-              class="aspect-square rounded-xl bg-slate-950 border-2 overflow-hidden cursor-pointer transition group relative shadow-md"
-              :class="[
-                msg.metadata?.isHidden ? 'opacity-55 border-amber-500/50' : 'border-indigo-500/40 hover:border-indigo-400'
-              ]"
+              class="aspect-square rounded-xl bg-slate-950 border-2 overflow-hidden cursor-pointer transition group relative shadow-md border-indigo-500/40 hover:border-indigo-400"
               @click="!isManagingAssets && (openWhiteboardState(msg), isAssetsDrawerOpen = false)"
               title="Click to edit whiteboard"
             >
@@ -2061,12 +2076,11 @@ onUnmounted(() => {
               <button
                 v-if="isManagingAssets"
                 @click.stop="handleToggleHideAsset(msg)"
-                class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-white text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5"
-                :class="msg.metadata?.isHidden ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-rose-600 hover:bg-rose-500'"
-                :title="msg.metadata?.isHidden ? 'Unhide this asset' : 'Hide this asset'"
+                class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-white text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5 bg-rose-600 hover:bg-rose-500"
+                title="Hide this asset"
               >
-                <component :is="msg.metadata?.isHidden ? Eye : EyeOff" class="w-2.5 h-2.5" />
-                <span>{{ msg.metadata?.isHidden ? 'Unhide' : 'Hide' }}</span>
+                <EyeOff class="w-2.5 h-2.5" />
+                <span>Hide</span>
               </button>
               <!-- Creator Name Pill (Bottom) -->
               <div class="absolute bottom-1 left-1 right-1 bg-slate-950/85 px-1.5 py-0.5 rounded text-[8px] text-slate-300 font-medium truncate backdrop-blur-xs z-10 flex items-center gap-1">
@@ -2084,10 +2098,7 @@ onUnmounted(() => {
             <!-- Static Image Attachments -->
             <div
               v-else-if="msg.type === 'file' && msg.fileData?.type === 'image'"
-              class="aspect-square rounded-xl bg-slate-950 border overflow-hidden cursor-pointer transition group relative"
-              :class="[
-                msg.metadata?.isHidden ? 'opacity-55 border-amber-500/50' : 'border-slate-800 hover:border-sky-500/50'
-              ]"
+              class="aspect-square rounded-xl bg-slate-950 border overflow-hidden cursor-pointer transition group relative border-slate-800 hover:border-sky-500/50"
               @click="!isManagingAssets && scrollToMessage(msg.id)"
               title="View image in chat"
             >
@@ -2097,16 +2108,15 @@ onUnmounted(() => {
                 <ImageIcon class="w-2.5 h-2.5 text-sky-400" />
                 <span>Image</span>
               </div>
-              <!-- Hide/Unhide Button in Manage Mode -->
+              <!-- Hide Button in Manage Mode -->
               <button
                 v-if="isManagingAssets"
                 @click.stop="handleToggleHideAsset(msg)"
-                class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-white text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5"
-                :class="msg.metadata?.isHidden ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-rose-600 hover:bg-rose-500'"
-                :title="msg.metadata?.isHidden ? 'Unhide this asset' : 'Hide this asset'"
+                class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-white text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5 bg-rose-600 hover:bg-rose-500"
+                title="Hide this asset"
               >
-                <component :is="msg.metadata?.isHidden ? Eye : EyeOff" class="w-2.5 h-2.5" />
-                <span>{{ msg.metadata?.isHidden ? 'Unhide' : 'Hide' }}</span>
+                <EyeOff class="w-2.5 h-2.5" />
+                <span>Hide</span>
               </button>
               <!-- Hover Overlay -->
               <div v-if="!isManagingAssets" class="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
@@ -2119,10 +2129,7 @@ onUnmounted(() => {
             <!-- 3D Assets -->
             <div
               v-else-if="msg.type === 'ai_asset' && msg.assetType === 'mesh_3d'"
-              class="aspect-square rounded-xl bg-sky-950/30 border flex flex-col items-center justify-center text-center p-2 cursor-pointer transition relative group"
-              :class="[
-                msg.metadata?.isHidden ? 'opacity-55 border-amber-500/50' : 'border-sky-500/30 hover:bg-sky-900/50'
-              ]"
+              class="aspect-square rounded-xl bg-sky-950/30 border flex flex-col items-center justify-center text-center p-2 cursor-pointer transition relative group border-sky-500/30 hover:bg-sky-900/50"
               @click="!isManagingAssets && scrollToMessage(msg.id)"
               title="View 3D Model in chat"
             >
@@ -2130,16 +2137,15 @@ onUnmounted(() => {
                 <Box class="w-2.5 h-2.5 text-sky-400" />
                 <span>3D</span>
               </div>
-              <!-- Hide/Unhide Button in Manage Mode -->
+              <!-- Hide Button in Manage Mode -->
               <button
                 v-if="isManagingAssets"
                 @click.stop="handleToggleHideAsset(msg)"
-                class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-white text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5"
-                :class="msg.metadata?.isHidden ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-rose-600 hover:bg-rose-500'"
-                :title="msg.metadata?.isHidden ? 'Unhide this asset' : 'Hide this asset'"
+                class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-white text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5 bg-rose-600 hover:bg-rose-500"
+                title="Hide this asset"
               >
-                <component :is="msg.metadata?.isHidden ? Eye : EyeOff" class="w-2.5 h-2.5" />
-                <span>{{ msg.metadata?.isHidden ? 'Unhide' : 'Hide' }}</span>
+                <EyeOff class="w-2.5 h-2.5" />
+                <span>Hide</span>
               </button>
               <Box class="w-6 h-6 text-sky-400 mb-1 mt-2" />
               <span class="text-[9px] text-sky-300 font-medium truncate w-full px-1">{{ msg.assetPayload?.title || '3D Model' }}</span>
@@ -2148,10 +2154,7 @@ onUnmounted(() => {
             <!-- Moodboards -->
             <div
               v-else-if="msg.type === 'ai_asset' && msg.assetType === 'moodboard'"
-              class="aspect-square rounded-xl bg-amber-950/30 border flex flex-col items-center justify-center text-center p-2 cursor-pointer transition relative group"
-              :class="[
-                msg.metadata?.isHidden ? 'opacity-55 border-amber-500/50' : 'border-amber-500/30 hover:bg-amber-900/50'
-              ]"
+              class="aspect-square rounded-xl bg-amber-950/30 border flex flex-col items-center justify-center text-center p-2 cursor-pointer transition relative group border-amber-500/30 hover:bg-amber-900/50"
               @click="!isManagingAssets && scrollToMessage(msg.id)"
               title="View Moodboard in chat"
             >
@@ -2159,21 +2162,139 @@ onUnmounted(() => {
                 <Palette class="w-2.5 h-2.5 text-amber-400" />
                 <span>Moodboard</span>
               </div>
-              <!-- Hide/Unhide Button in Manage Mode -->
+              <!-- Hide Button in Manage Mode -->
               <button
                 v-if="isManagingAssets"
                 @click.stop="handleToggleHideAsset(msg)"
-                class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-white text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5"
-                :class="msg.metadata?.isHidden ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-rose-600 hover:bg-rose-500'"
-                :title="msg.metadata?.isHidden ? 'Unhide this asset' : 'Hide this asset'"
+                class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-white text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5 bg-rose-600 hover:bg-rose-500"
+                title="Hide this asset"
               >
-                <component :is="msg.metadata?.isHidden ? Eye : EyeOff" class="w-2.5 h-2.5" />
-                <span>{{ msg.metadata?.isHidden ? 'Unhide' : 'Hide' }}</span>
+                <EyeOff class="w-2.5 h-2.5" />
+                <span>Hide</span>
               </button>
               <Palette class="w-6 h-6 text-amber-400 mb-1 mt-2" />
               <span class="text-[9px] text-amber-300 font-medium truncate w-full px-1">{{ msg.assetPayload?.title || 'Moodboard' }}</span>
             </div>
           </template>
+        </div>
+
+        <!-- Spatial Partition Divider for Hidden Items (Moved to bottom, chronological timestamp preserved) -->
+        <div v-if="hiddenAlbumItems.length" class="pt-4 border-t border-slate-800/80">
+          <div class="flex items-center justify-between mb-2.5 px-1 select-none">
+            <div class="flex items-center gap-1.5 text-xs font-semibold text-slate-400">
+              <EyeOff class="w-3.5 h-3.5 text-amber-400/80" />
+              <span>Hidden Items ({{ hiddenAlbumItems.length }})</span>
+            </div>
+            <span class="text-[10px] text-slate-500">Chronological Partition</span>
+          </div>
+          <div class="grid grid-cols-3 gap-2 opacity-65 hover:opacity-100 transition-opacity">
+            <template v-for="msg in hiddenAlbumItems" :key="msg.id">
+              <!-- Hidden Whiteboard States -->
+              <div
+                v-if="msg.type === 'whiteboard_state'"
+                class="aspect-square rounded-xl bg-slate-950 border-2 overflow-hidden cursor-pointer transition group relative shadow-md border-amber-500/40 hover:border-amber-400"
+                @click="!isManagingAssets && (openWhiteboardState(msg), isAssetsDrawerOpen = false)"
+                title="Click to edit hidden whiteboard"
+              >
+                <img :src="msg.fileData?.url" class="w-full h-full object-cover group-hover:scale-105 transition duration-300 opacity-70" />
+                <!-- Badge -->
+                <div class="absolute top-1 left-1 bg-slate-950/90 text-amber-300 px-1.5 py-0.5 rounded text-[8px] font-bold border border-amber-500/50 backdrop-blur-sm flex items-center gap-1 z-10 shadow">
+                  <Palette class="w-2.5 h-2.5 text-amber-400" />
+                  <span>Hidden</span>
+                </div>
+                <!-- Unhide Button in Manage Mode -->
+                <button
+                  v-if="isManagingAssets"
+                  @click.stop="handleToggleHideAsset(msg)"
+                  class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-white text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5 bg-emerald-600 hover:bg-emerald-500"
+                  title="Unhide this asset"
+                >
+                  <Eye class="w-2.5 h-2.5" />
+                  <span>Unhide</span>
+                </button>
+                <!-- Creator Name Pill (Bottom) -->
+                <div class="absolute bottom-1 left-1 right-1 bg-slate-950/85 px-1.5 py-0.5 rounded text-[8px] text-slate-300 font-medium truncate backdrop-blur-xs z-10 flex items-center gap-1">
+                  <span class="text-[9px]">{{ msg.metadata?.creatorAvatar || msg.senderAvatar || '🎨' }}</span>
+                  <span class="truncate">{{ msg.metadata?.creatorName || msg.senderName || 'Member' }}</span>
+                </div>
+              </div>
+
+              <!-- Hidden Static Image Attachments -->
+              <div
+                v-else-if="msg.type === 'file' && msg.fileData?.type === 'image'"
+                class="aspect-square rounded-xl bg-slate-950 border overflow-hidden cursor-pointer transition group relative border-amber-500/40 hover:border-amber-400"
+                @click="!isManagingAssets && scrollToMessage(msg.id)"
+                title="View hidden image in chat"
+              >
+                <img :src="msg.fileData.url" class="w-full h-full object-cover group-hover:scale-105 transition duration-300 opacity-70" />
+                <!-- Badge -->
+                <div class="absolute top-1 left-1 bg-slate-950/90 text-amber-300 px-1.5 py-0.5 rounded text-[8px] font-medium border border-amber-500/50 backdrop-blur-sm flex items-center gap-1 z-10 shadow">
+                  <ImageIcon class="w-2.5 h-2.5 text-amber-400" />
+                  <span>Hidden</span>
+                </div>
+                <!-- Unhide Button in Manage Mode -->
+                <button
+                  v-if="isManagingAssets"
+                  @click.stop="handleToggleHideAsset(msg)"
+                  class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-white text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5 bg-emerald-600 hover:bg-emerald-500"
+                  title="Unhide this asset"
+                >
+                  <Eye class="w-2.5 h-2.5" />
+                  <span>Unhide</span>
+                </button>
+              </div>
+
+              <!-- Hidden 3D Assets -->
+              <div
+                v-else-if="msg.type === 'ai_asset' && msg.assetType === 'mesh_3d'"
+                class="aspect-square rounded-xl bg-slate-950 border flex flex-col items-center justify-center text-center p-2 cursor-pointer transition relative group border-amber-500/40 hover:border-amber-400"
+                @click="!isManagingAssets && scrollToMessage(msg.id)"
+                title="View hidden 3D Model in chat"
+              >
+                <div class="absolute top-1 left-1 bg-slate-950/90 text-amber-300 px-1.5 py-0.5 rounded text-[8px] font-bold border border-amber-500/50 backdrop-blur-sm flex items-center gap-1">
+                  <Box class="w-2.5 h-2.5 text-amber-400" />
+                  <span>Hidden</span>
+                </div>
+                <!-- Unhide Button in Manage Mode -->
+                <button
+                  v-if="isManagingAssets"
+                  @click.stop="handleToggleHideAsset(msg)"
+                  class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-white text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5 bg-emerald-600 hover:bg-emerald-500"
+                  title="Unhide this asset"
+                >
+                  <Eye class="w-2.5 h-2.5" />
+                  <span>Unhide</span>
+                </button>
+                <Box class="w-6 h-6 text-amber-400 mb-1 mt-2 opacity-70" />
+                <span class="text-[9px] text-amber-300 font-medium truncate w-full px-1">{{ msg.assetPayload?.title || '3D Model' }}</span>
+              </div>
+
+              <!-- Hidden Moodboards -->
+              <div
+                v-else-if="msg.type === 'ai_asset' && msg.assetType === 'moodboard'"
+                class="aspect-square rounded-xl bg-slate-950 border flex flex-col items-center justify-center text-center p-2 cursor-pointer transition relative group border-amber-500/40 hover:border-amber-400"
+                @click="!isManagingAssets && scrollToMessage(msg.id)"
+                title="View hidden Moodboard in chat"
+              >
+                <div class="absolute top-1 left-1 bg-slate-950/90 text-amber-300 px-1.5 py-0.5 rounded text-[8px] font-bold border border-amber-500/50 backdrop-blur-sm flex items-center gap-1">
+                  <Palette class="w-2.5 h-2.5 text-amber-400" />
+                  <span>Hidden</span>
+                </div>
+                <!-- Unhide Button in Manage Mode -->
+                <button
+                  v-if="isManagingAssets"
+                  @click.stop="handleToggleHideAsset(msg)"
+                  class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-white text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5 bg-emerald-600 hover:bg-emerald-500"
+                  title="Unhide this asset"
+                >
+                  <Eye class="w-2.5 h-2.5" />
+                  <span>Unhide</span>
+                </button>
+                <Palette class="w-6 h-6 text-amber-400 mb-1 mt-2 opacity-70" />
+                <span class="text-[9px] text-amber-300 font-medium truncate w-full px-1">{{ msg.assetPayload?.title || 'Moodboard' }}</span>
+              </div>
+            </template>
+          </div>
         </div>
       </div>
     </div>

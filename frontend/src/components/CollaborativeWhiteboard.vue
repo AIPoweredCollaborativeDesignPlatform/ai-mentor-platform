@@ -69,7 +69,8 @@ const CUSTOM_PROPS = [
   'padding',
   'authorUid',
   'id',
-  'fontSize'
+  'fontSize',
+  '_origEndpointCorners'
 ];
 
 const hasUnsavedChanges = ref(false);
@@ -203,9 +204,15 @@ const isMultiSelection = ref(false);
 const isGroupSelected = ref(false);
 const isObjectLocked = ref(false);
 
-// Group Isolation Mode (Illustrator style)
+// Group Isolation Mode (Illustrator style, supports nested stack)
+interface IsolationLevel {
+  group: any;
+  items: any[];
+  savedProps: Array<{ obj: any; opacity: number; selectable: boolean; evented: boolean }>;
+}
 const isIsolationMode = ref(false);
-let isolatedGroup: fabric.Group | null = null;
+const isolationStack = ref<IsolationLevel[]>([]);
+let isolatedGroup: any = null;
 let isolatedItems: any[] = [];
 
 // Hover highlight & toast & cheatsheet
@@ -387,18 +394,33 @@ const liveNodeArrowSvg = computed(() => {
     shaftSampled[shaftSampled.length - 1] = { x: s0.x, y: s0.y };
     let pathD = `M ${s0.x.toFixed(1)} ${s0.y.toFixed(1)}`;
     const m = shaftSampled.length - 1;
+    const effCorners = new Set(editingArrowCorners.value);
+    const startSharp = effCorners.has(0);
+    const endSharp = effCorners.has(m);
+    if (startSharp !== endSharp) {
+      effCorners.delete(0);
+      effCorners.delete(m);
+    }
+
     for (let i = 0; i < m; i++) {
-      const pPrev = i === 0 ? shaftSampled[m - 1] : shaftSampled[i - 1];
-      const pCur = shaftSampled[i];
-      const pNext = shaftSampled[i + 1];
-      const pAfter = i + 1 === m ? shaftSampled[1] : shaftSampled[i + 2];
+      const isCurCorner = effCorners.has(i);
+      const isNextCorner = effCorners.has(i + 1);
 
-      const cp1x = pCur.x + (pNext.x - pPrev.x) / 6;
-      const cp1y = pCur.y + (pNext.y - pPrev.y) / 6;
-      const cp2x = pNext.x - (pAfter.x - pCur.x) / 6;
-      const cp2y = pNext.y - (pAfter.y - pCur.y) / 6;
+      if (isCurCorner || isNextCorner) {
+        pathD += ` L ${shaftSampled[i + 1].x.toFixed(1)} ${shaftSampled[i + 1].y.toFixed(1)}`;
+      } else {
+        const pPrev = i === 0 ? shaftSampled[m - 1] : shaftSampled[i - 1];
+        const pCur = shaftSampled[i];
+        const pNext = shaftSampled[i + 1];
+        const pAfter = i + 1 === m ? shaftSampled[1] : shaftSampled[i + 2];
 
-      pathD += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${pNext.x.toFixed(1)} ${pNext.y.toFixed(1)}`;
+        const cp1x = pCur.x + (pNext.x - pPrev.x) / 6;
+        const cp1y = pCur.y + (pNext.y - pPrev.y) / 6;
+        const cp2x = pNext.x - (pAfter.x - pCur.x) / 6;
+        const cp2y = pNext.y - (pAfter.y - pCur.y) / 6;
+
+        pathD += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${pNext.x.toFixed(1)} ${pNext.y.toFixed(1)}`;
+      }
     }
     pathD += ' Z';
     return {
@@ -580,7 +602,8 @@ const commitEditingArrowPoints = () => {
     color,
     width,
     true,
-    editingArrowCorners.value
+    editingArrowCorners.value,
+    (editingArrow.value as any)?._origEndpointCorners
   );
   if (finalArrow) {
     finalArrow.set({
@@ -620,10 +643,22 @@ const commitEditingArrowPoints = () => {
 const toggleNodeCorner = (index: number) => {
   if (editingArrowCorners.value.has(index)) {
     editingArrowCorners.value.delete(index);
-    displayToast(`Node ${index + 1} smoothed`);
   } else {
     editingArrowCorners.value.add(index);
-    displayToast(`Node ${index + 1} sharp corner`);
+  }
+  if ((editingArrow.value as any)?.isClosedLoop) {
+    const lastIdx = editingArrowPoints.value.length - 1;
+    if (index === 0 || index === lastIdx) {
+      const isSharp = editingArrowCorners.value.has(index);
+      if (isSharp) {
+        editingArrowCorners.value.add(0);
+        editingArrowCorners.value.add(lastIdx);
+      } else {
+        editingArrowCorners.value.delete(0);
+        editingArrowCorners.value.delete(lastIdx);
+      }
+      (editingArrow.value as any)._origEndpointCorners = null;
+    }
   }
   commitEditingArrowPoints();
 };
@@ -730,6 +765,53 @@ const insertNodeOnArrowStroke = (e: MouseEvent) => {
   displayToast('Node added to stroke');
 };
 
+const onStrokePointerDown = (e: PointerEvent) => {
+  if (e.button !== 0) return; // only primary left button
+  if (!isArrowNodeEditing.value || !editingArrow.value || !canvas) return;
+
+  const startClientX = e.clientX;
+  const startClientY = e.clientY;
+  const initPoints = editingArrowPoints.value.map(pt => ({ ...pt }));
+  let hasMoved = false;
+
+  const onPointerMove = (ev: PointerEvent) => {
+    const dx = ev.clientX - startClientX;
+    const dy = ev.clientY - startClientY;
+    if (!hasMoved && Math.hypot(dx, dy) < 4) {
+      return;
+    }
+    if (!hasMoved) {
+      hasMoved = true;
+      isDraggingNode.value = true;
+      if (editingArrow.value) {
+        editingArrow.value.visible = false;
+        canvas?.requestRenderAll();
+      }
+    }
+
+    const vpt = canvas?.viewportTransform || [1, 0, 0, 1, 0, 0];
+    const sceneDx = dx / vpt[0];
+    const sceneDy = dy / vpt[3];
+
+    editingArrowPoints.value = initPoints.map(pt => ({
+      x: pt.x + sceneDx,
+      y: pt.y + sceneDy
+    }));
+  };
+
+  const onPointerUp = () => {
+    window.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup', onPointerUp);
+    if (hasMoved) {
+      isDraggingNode.value = false;
+      commitEditingArrowPoints();
+    }
+  };
+
+  window.addEventListener('pointermove', onPointerMove);
+  window.addEventListener('pointerup', onPointerUp);
+};
+
 const onNodePointerDown = (index: number, e: PointerEvent) => {
   e.preventDefault();
   e.stopPropagation();
@@ -798,6 +880,41 @@ const onNodePointerDown = (index: number, e: PointerEvent) => {
       cancelAnimationFrame(animFrameId);
       animFrameId = null;
     }
+
+    const pts = editingArrowPoints.value;
+    if (pts.length >= 3 && editingArrow.value) {
+      const p0 = pts[0];
+      const pn = pts[pts.length - 1];
+      const endpointDist = Math.hypot(pn.x - p0.x, pn.y - p0.y);
+      let totalArcLen = 0;
+      for (let i = 1; i < pts.length; i++) {
+        totalArcLen += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+      }
+      const isLoop = totalArcLen >= 30 && endpointDist < 30;
+      const arrowObj = editingArrow.value as any;
+      if (isLoop) {
+        const startSharp = editingArrowCorners.value.has(0);
+        const endSharp = editingArrowCorners.value.has(pts.length - 1);
+        if (startSharp !== endSharp) {
+          if (!arrowObj._origEndpointCorners) {
+            arrowObj._origEndpointCorners = { start: startSharp, end: endSharp };
+          }
+          editingArrowCorners.value.delete(0);
+          editingArrowCorners.value.delete(pts.length - 1);
+        }
+        arrowObj.isClosedLoop = true;
+      } else {
+        arrowObj.isClosedLoop = false;
+        if (arrowObj._origEndpointCorners) {
+          if (arrowObj._origEndpointCorners.start) editingArrowCorners.value.add(0);
+          else editingArrowCorners.value.delete(0);
+          if (arrowObj._origEndpointCorners.end) editingArrowCorners.value.add(pts.length - 1);
+          else editingArrowCorners.value.delete(pts.length - 1);
+          arrowObj._origEndpointCorners = null;
+        }
+      }
+    }
+
     editingNodeIndex.value = null;
     isDraggingNode.value = false;
     commitEditingArrowPoints();
@@ -1078,6 +1195,17 @@ const updateSelectionState = () => {
       hasControls: !allLocked,
       lockUniScaling: hasSticky
     });
+    if (hasSticky) {
+      active.setControlsVisibility({
+        tl: true, tr: true, bl: true, br: true,
+        ml: false, mr: false, mt: false, mb: false, mtr: true
+      });
+    } else {
+      active.setControlsVisibility({
+        tl: true, tr: true, bl: true, br: true,
+        ml: true, mr: true, mt: true, mb: true, mtr: true
+      });
+    }
   } else if (active && (active.type?.toLowerCase() === 'group' || active instanceof fabric.Group) && !active.isStickyNote && !(active as any).isArrow) {
     const targets = active.getObjects ? active.getObjects() : active._objects || [];
     const allLocked = targets.length > 0 && targets.every((o: any) => o.isLocked === true);
@@ -1634,7 +1762,8 @@ const createArrowFromPoints = (
   customColor?: string,
   customWidth?: number,
   isExactNodes = false,
-  cornerIndices?: Set<number> | number[]
+  cornerIndices?: Set<number> | number[],
+  origCorners?: { start: boolean; end: boolean } | null
 ) => {
   if (pts.length < 2) return null;
   const p0 = pts[0];
@@ -1662,7 +1791,26 @@ const createArrowFromPoints = (
   let shaft: any;
   let tangentAngle = Math.atan2(pn.y - p0.y, pn.x - p0.x);
 
-  const cornersSet = cornerIndices instanceof Set ? cornerIndices : new Set(cornerIndices || []);
+  const cornersSet = cornerIndices instanceof Set ? new Set(cornerIndices) : new Set(cornerIndices || []);
+  let origEndpointCorners: { start: boolean; end: boolean } | null = origCorners || null;
+
+  if (isClosedLoop) {
+    const startSharp = cornersSet.has(0);
+    const endSharp = cornersSet.has(pts.length - 1);
+    if (startSharp !== endSharp) {
+      if (!origEndpointCorners) {
+        origEndpointCorners = { start: startSharp, end: endSharp };
+      }
+      cornersSet.delete(0);
+      cornersSet.delete(pts.length - 1);
+    }
+  } else if (origEndpointCorners) {
+    if (origEndpointCorners.start) cornersSet.add(0);
+    else cornersSet.delete(0);
+    if (origEndpointCorners.end) cornersSet.add(pts.length - 1);
+    else cornersSet.delete(pts.length - 1);
+    origEndpointCorners = null;
+  }
 
   if (isStraight) {
     // For straight 2-point line: tangent is chord angle
@@ -1846,6 +1994,7 @@ const createArrowFromPoints = (
   (arrow as any).arrowId = Math.random().toString(36).substring(2, 9);
   (arrow as any).arrowCornerIndices = Array.from(cornersSet);
   (arrow as any).initialMatrix = arrow.calcTransformMatrix();
+  (arrow as any)._origEndpointCorners = origEndpointCorners;
   return arrow;
 };
 
@@ -2384,8 +2533,8 @@ const initFabric = () => {
         const curW = obj.width || 180;
         const curMinH = (obj as any).minHeight !== undefined ? (obj as any).minHeight : (obj.height || 180);
 
-        const targetW = Math.max(80, Math.round(curW * s));
-        const targetH = Math.max(80, Math.round(curMinH * s));
+        const targetW = Math.max(80, Math.min(600, Math.round(curW * s)));
+        const targetH = Math.max(80, Math.min(600, Math.round(curMinH * s)));
         const curFontSize = obj.fontSize || 18;
         const newFontSize = Math.max(10, Math.min(120, Math.round(curFontSize * s)));
 
@@ -2401,6 +2550,39 @@ const initFabric = () => {
         if (obj.setPositionByOrigin) {
           obj.setPositionByOrigin(center, 'center', 'center');
         }
+        obj.setCoords();
+      }
+    } else if (obj && (obj.type === 'activeselection' || obj.type === 'activeSelection')) {
+      const children = obj.getObjects ? obj.getObjects() : (obj._objects || []);
+      let hasSticky = false;
+      children.forEach((c: any) => {
+        if (c.isStickyNote || c.stickyColorConfig) {
+          hasSticky = true;
+          const sx = Math.abs(c.scaleX || 1);
+          const sy = Math.abs(c.scaleY || 1);
+          if (Math.abs(sx - 1) > 1e-4 || Math.abs(sy - 1) > 1e-4) {
+            const s = Math.max(sx, sy);
+            const curW = c.width || 180;
+            const curMinH = (c as any).minHeight !== undefined ? (c as any).minHeight : (c.height || 180);
+            const targetW = Math.max(80, Math.min(600, Math.round(curW * s)));
+            const targetH = Math.max(80, Math.min(600, Math.round(curMinH * s)));
+            const curFontSize = c.fontSize || 18;
+            const newFontSize = Math.max(10, Math.min(120, Math.round(curFontSize * s)));
+
+            (c as any).minHeight = targetH;
+            c.set({
+              width: targetW,
+              height: targetH,
+              fontSize: newFontSize,
+              scaleX: 1,
+              scaleY: 1
+            });
+            c.initDimensions?.();
+            c.setCoords();
+          }
+        }
+      });
+      if (hasSticky) {
         obj.setCoords();
       }
     }
@@ -3283,11 +3465,8 @@ const initFabric = () => {
               const childMaxX = Math.max(...sceneCorners.map(p => p.x));
               const childMinY = Math.min(...sceneCorners.map(p => p.y));
               const childMaxY = Math.max(...sceneCorners.map(p => p.y));
-              const centerX = (childMinX + childMaxX) / 2;
-              const centerY = (childMinY + childMaxY) / 2;
-              const isCenterInside = centerX >= boxLeft && centerX <= boxRight && centerY >= boxTop && centerY <= boxBottom;
-              const isEnclosed = childMinX >= boxLeft && childMaxX <= boxRight && childMinY >= boxTop && childMaxY <= boxBottom;
-              return isCenterInside || isEnclosed;
+              // Intersects if marquee box touches any part of the child's bounding box
+              return !(childMaxX < boxLeft || childMinX > boxRight || childMaxY < boxTop || childMinY > boxBottom);
             });
             if (hasChild) {
               groupToIsolate = g;
@@ -3309,14 +3488,9 @@ const initFabric = () => {
             const childMinY = Math.min(...sceneCorners.map(p => p.y));
             const childMaxY = Math.max(...sceneCorners.map(p => p.y));
 
-            const centerX = (childMinX + childMaxX) / 2;
-            const centerY = (childMinY + childMaxY) / 2;
-
-            const isCenterInside = centerX >= boxLeft && centerX <= boxRight && centerY >= boxTop && centerY <= boxBottom;
-            const isEnclosed = childMinX >= boxLeft && childMaxX <= boxRight && childMinY >= boxTop && childMaxY <= boxBottom;
-
-            // Only select if the child's center is inside the box or it is completely enclosed
-            if (isCenterInside || isEnclosed) {
+            // Select if marquee box touches any part (even corner) of the child's bounding box
+            const intersects = !(childMaxX < boxLeft || childMinX > boxRight || childMaxY < boxTop || childMinY > boxBottom);
+            if (intersects) {
               matchedChildren.push(child);
             }
           });
@@ -3545,7 +3719,7 @@ const initFabric = () => {
       enterArrowNodeEditing(target);
       return;
     }
-    if (target.type === 'group' && !target.isStickyNote && !(target as any).isArrow && !isIsolationMode.value) {
+    if (target.type === 'group' && !target.isStickyNote && !(target as any).isArrow) {
       enterGroupIsolation(target as fabric.Group);
     }
   });
@@ -3691,10 +3865,17 @@ const initFabric = () => {
         const minScale = 80 / baseW;
         const maxScale = 600 / baseW;
         const clampedScale = Math.max(minScale, Math.min(maxScale, uniformScale));
-        obj.set({
-          scaleX: (obj.scaleX < 0 ? -1 : 1) * clampedScale,
-          scaleY: (obj.scaleY < 0 ? -1 : 1) * clampedScale
-        });
+        if (Math.abs(clampedScale - Math.abs(obj.scaleX || 1)) > 1e-4 || Math.abs(clampedScale - Math.abs(obj.scaleY || 1)) > 1e-4) {
+          const transform = (canvas as any)._currentTransform;
+          const originX = transform?.originX || 'center';
+          const originY = transform?.originY || 'center';
+          const anchorPoint = obj.getPointByOrigin(originX, originY);
+          obj.set({
+            scaleX: (obj.scaleX < 0 ? -1 : 1) * clampedScale,
+            scaleY: (obj.scaleY < 0 ? -1 : 1) * clampedScale
+          });
+          obj.setPositionByOrigin(anchorPoint, originX, originY);
+        }
       } else if (obj.type === 'activeselection' || obj.type === 'activeSelection') {
         // 2. Multi-selection containing sticky note(s):
         // Enforce sticky children don't shrink below 80px or expand beyond 600px,
@@ -3704,8 +3885,7 @@ const initFabric = () => {
         if (hasStickyChild) {
           const selScaleX = Math.abs(obj.scaleX || 1);
           const selScaleY = Math.abs(obj.scaleY || 1);
-          // If non-uniform scaling on the selection, balance it or use uniform scale for the selection
-          const uniformSelScale = Math.max(selScaleX, selScaleY);
+          let uniformSelScale = Math.max(selScaleX, selScaleY);
 
           targets.forEach((c: any) => {
             if (c.isStickyNote || c.stickyColorConfig) {
@@ -3714,16 +3894,22 @@ const initFabric = () => {
               const minNet = 80 / baseW;
               const maxNet = 600 / baseW;
               if (netScale < minNet) {
-                const requiredSelScale = minNet / Math.abs(c.scaleX || 1);
-                obj.scaleX = (obj.scaleX < 0 ? -1 : 1) * requiredSelScale;
-                obj.scaleY = (obj.scaleY < 0 ? -1 : 1) * requiredSelScale;
+                uniformSelScale = minNet / Math.abs(c.scaleX || 1);
               } else if (netScale > maxNet) {
-                const requiredSelScale = maxNet / Math.abs(c.scaleX || 1);
-                obj.scaleX = (obj.scaleX < 0 ? -1 : 1) * requiredSelScale;
-                obj.scaleY = (obj.scaleY < 0 ? -1 : 1) * requiredSelScale;
+                uniformSelScale = maxNet / Math.abs(c.scaleX || 1);
               }
             }
           });
+
+          if (Math.abs(uniformSelScale - selScaleX) > 1e-4 || Math.abs(uniformSelScale - selScaleY) > 1e-4) {
+            const transform = (canvas as any)._currentTransform;
+            const originX = transform?.originX || 'center';
+            const originY = transform?.originY || 'center';
+            const anchorPoint = obj.getPointByOrigin(originX, originY);
+            obj.scaleX = (obj.scaleX < 0 ? -1 : 1) * uniformSelScale;
+            obj.scaleY = (obj.scaleY < 0 ? -1 : 1) * uniformSelScale;
+            obj.setPositionByOrigin(anchorPoint, originX, originY);
+          }
         }
       }
 
@@ -4557,13 +4743,36 @@ const duplicateStickyNote = async (note: any) => {
   displayToast('Duplicated');
 };
 
-// Group Isolation Mode Actions
+// Group Isolation Mode Actions (supports nested group isolation stack)
 const enterGroupIsolation = (group: fabric.Group, targetChild?: any) => {
-  if (!canvas || isIsolationMode.value) return;
-  isIsolationMode.value = true;
+  if (!canvas) return;
+
+  // Snapshot the current canvas state for this isolation level
+  const savedProps: Array<{ obj: any; opacity: number; selectable: boolean; evented: boolean }> = [];
+  canvas.getObjects().forEach((o: any) => {
+    savedProps.push({
+      obj: o,
+      opacity: o.opacity ?? 1,
+      selectable: o.selectable ?? true,
+      evented: o.evented ?? true
+    });
+  });
+
+  if (isIsolationMode.value && isolatedGroup) {
+    // Nested group isolation: push current level onto stack
+    isolationStack.value.push({
+      group: isolatedGroup,
+      items: isolatedItems,
+      savedProps
+    });
+  } else {
+    isIsolationMode.value = true;
+    isolationStack.value = [];
+  }
+
   isolatedGroup = group;
 
-  // Dim all other canvas objects
+  // Dim all other canvas objects except this group
   canvas.getObjects().forEach((o: any) => {
     if (o !== group) {
       o._origOpacity = o.opacity ?? 1;
@@ -4578,6 +4787,7 @@ const enterGroupIsolation = (group: fabric.Group, targetChild?: any) => {
   canvas.remove(group);
   isolatedItems.forEach(item => {
     item.set({
+      opacity: 1,
       selectable: true,
       evented: true,
       perPixelTargetFind: true,
@@ -4609,21 +4819,11 @@ const enterGroupIsolation = (group: fabric.Group, targetChild?: any) => {
 const exitGroupIsolation = () => {
   if (!canvas || !isIsolationMode.value) return;
 
-  // Restore opacity and interaction for non-isolated objects
-  canvas.getObjects().forEach((o: any) => {
-    if (!isolatedItems.includes(o)) {
-      o.set({
-        opacity: o._origOpacity ?? 1,
-        selectable: o._origSelectable ?? true,
-        evented: o._origEvented ?? true
-      });
-    }
-  });
-
   // Re-bundle ONLY remaining isolated items back into group (ignoring deleted items!)
   const remainingItems = isolatedItems.filter(item => canvas?.getObjects().includes(item));
   remainingItems.forEach(item => canvas?.remove(item));
 
+  let bundledGroup: any = null;
   if (remainingItems.length > 1) {
     const newGroup = new fabric.Group(remainingItems, {
       canvas,
@@ -4646,17 +4846,64 @@ const exitGroupIsolation = () => {
     }
     canvas.add(newGroup);
     canvas.setActiveObject(newGroup);
+    bundledGroup = newGroup;
   } else if (remainingItems.length === 1) {
     // Only 1 item left, leave it as an ungrouped object
     canvas.add(remainingItems[0]);
     canvas.setActiveObject(remainingItems[0]);
+    bundledGroup = remainingItems[0];
   }
 
-  canvas.requestRenderAll();
+  // If there are parent levels on the stack, step back to the previous level!
+  if (isolationStack.value.length > 0) {
+    const parentLevel = isolationStack.value.pop()!;
+    isolatedGroup = parentLevel.group;
+    // Keep items from parent level that are still on canvas, and include the newly bundled group
+    isolatedItems = parentLevel.items.filter(item => canvas?.getObjects().includes(item));
+    if (bundledGroup && !isolatedItems.includes(bundledGroup)) {
+      isolatedItems.push(bundledGroup);
+    }
+
+    // Restore interaction / opacity for parent level's objects
+    parentLevel.savedProps.forEach(sp => {
+      if (canvas?.getObjects().includes(sp.obj)) {
+        sp.obj.set({
+          opacity: sp.opacity,
+          selectable: sp.selectable,
+          evented: sp.evented
+        });
+      }
+    });
+
+    // Ensure all items belonging to this restored level are interactive and opaque
+    isolatedItems.forEach(item => {
+      item.set({
+        opacity: 1,
+        selectable: true,
+        evented: true,
+        hasControls: !(item as any).isLocked
+      });
+    });
+
+    canvas.requestRenderAll();
+    updateSelectionState();
+    return;
+  }
+
+  // Fully exit all isolation levels
+  canvas.getObjects().forEach((o: any) => {
+    o.set({
+      opacity: o._origOpacity ?? 1,
+      selectable: o._origSelectable ?? true,
+      evented: o._origEvented ?? true
+    });
+  });
 
   isIsolationMode.value = false;
   isolatedGroup = null;
   isolatedItems = [];
+  isolationStack.value = [];
+  canvas.requestRenderAll();
   saveHistoryState();
   syncToFirebase();
   updateSelectionState();
@@ -5088,12 +5335,6 @@ const ungroupObjects = () => {
 const undo = async () => {
   if (!canvas) return;
 
-  if (isIsolationMode.value) {
-    isIsolationMode.value = false;
-    isolatedGroup = null;
-    isolatedItems = [];
-  }
-
   // 1. Personal mode: Deterministic chronological snapshot undo
   if (!isCollabActive.value) {
     if (historyStack.value.length > 1) {
@@ -5105,6 +5346,19 @@ const undo = async () => {
         await canvas.loadFromJSON(previousState);
         rehydrateCanvasObjects();
         syncNodeEditingStateAfterReload();
+
+        if (isIsolationMode.value) {
+          const allObjs = canvas.getObjects();
+          if (isolatedGroup && allObjs.includes(isolatedGroup)) {
+            isIsolationMode.value = false;
+            isolatedGroup = null;
+            isolatedItems = [];
+            isolationStack.value = [];
+          } else {
+            isolatedItems = isolatedItems.filter(item => allObjs.includes(item));
+          }
+        }
+
         canvas.requestRenderAll();
         updateSelectionState();
         displayToast('Undo (Ctrl+Z)');
@@ -5198,12 +5452,6 @@ const undo = async () => {
 const redo = async () => {
   if (!canvas) return;
 
-  if (isIsolationMode.value) {
-    isIsolationMode.value = false;
-    isolatedGroup = null;
-    isolatedItems = [];
-  }
-
   // 1. Personal mode: Deterministic chronological snapshot redo
   if (!isCollabActive.value) {
     if (redoStack.value.length > 0) {
@@ -5214,6 +5462,19 @@ const redo = async () => {
         await canvas.loadFromJSON(nextState);
         rehydrateCanvasObjects();
         syncNodeEditingStateAfterReload();
+
+        if (isIsolationMode.value) {
+          const allObjs = canvas.getObjects();
+          if (isolatedGroup && allObjs.includes(isolatedGroup)) {
+            isIsolationMode.value = false;
+            isolatedGroup = null;
+            isolatedItems = [];
+            isolationStack.value = [];
+          } else {
+            isolatedItems = isolatedItems.filter(item => allObjs.includes(item));
+          }
+        }
+
         canvas.requestRenderAll();
         updateSelectionState();
         displayToast('Redo (Ctrl+Y)');
@@ -6112,159 +6373,183 @@ onUnmounted(() => {
 
 <template>
   <div ref="rootRef" class="h-full w-full flex flex-col relative bg-slate-900 overflow-hidden" @contextmenu.prevent>
-    <!-- Header Left: Status Badge -->
-    <div
-      class="absolute top-4 left-4 z-10 flex items-center gap-2 transition-opacity duration-200 select-none"
-      :class="{ 'opacity-15': isHoveringSend }"
-    >
-      <!-- Shared Canvas Badge -->
+    <!-- Unified Top Header Container (Guarantees center banners never overlap right buttons) -->
+    <div class="absolute top-4 left-4 right-4 z-30 flex items-center justify-between gap-2 pointer-events-none select-none">
+      <!-- Top Left: Status Badge -->
       <div
-        v-if="isCollabActive"
-        class="h-8 px-2.5 rounded-xl bg-emerald-600/90 shadow-sm border border-emerald-400 flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-white shrink-0"
-        title="Shared Canvas (Team Collaboration Active)"
+        class="flex items-center gap-2 transition-opacity duration-200 pointer-events-auto shrink-0"
+        :class="{ 'opacity-15': isHoveringSend }"
       >
-        <Users class="w-3.5 h-3.5 text-emerald-200 shrink-0" />
-        <span class="w-2 h-2 rounded-full bg-emerald-300 animate-pulse shrink-0"></span>
-        <span v-if="whiteboardContainerWidth >= 640" class="truncate max-w-[140px]">{{ roomStore.currentRoom?.whiteboardHostName }} Shared Canvas</span>
+        <!-- Shared Canvas Badge -->
+        <div
+          v-if="isCollabActive"
+          class="h-8 px-2.5 rounded-xl bg-emerald-600/90 shadow-sm border border-emerald-400 flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-white shrink-0"
+          title="Shared Canvas (Team Collaboration Active)"
+        >
+          <Users class="w-3.5 h-3.5 text-emerald-200 shrink-0" />
+          <span class="w-2 h-2 rounded-full bg-emerald-300 animate-pulse shrink-0"></span>
+          <span v-if="whiteboardContainerWidth >= 640" class="truncate max-w-[140px]">{{ roomStore.currentRoom?.whiteboardHostName }} Shared Canvas</span>
+        </div>
+
+        <!-- Personal Board Badge -->
+        <div
+          v-else
+          class="h-8 px-2.5 rounded-xl bg-white/95 shadow-sm border border-slate-200 flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-slate-700 shrink-0"
+          title="Personal Board (Private Draft)"
+        >
+          <User class="w-3.5 h-3.5 text-sky-500 shrink-0" />
+          <span v-if="whiteboardContainerWidth >= 640">Personal Board</span>
+        </div>
       </div>
 
-      <!-- Personal Board Badge -->
+      <!-- Top Center: Floating Banners (Isolation / Node Edit / View-Only) -->
+      <div class="flex-1 min-w-0 flex items-center justify-center px-1 sm:px-2 pointer-events-none">
+        <!-- View-Only Banner for Muted Users -->
+        <div
+          v-if="isCurrentUserMuted"
+          class="pointer-events-auto px-3.5 py-1.5 rounded-2xl bg-rose-950/90 border border-rose-500/50 text-rose-300 text-xs font-semibold shadow-2xl backdrop-blur-md flex items-center gap-2 truncate"
+        >
+          <MicOff class="w-4 h-4 text-rose-400 shrink-0" />
+          <span class="truncate">View-Only: Muted by host</span>
+        </div>
+
+        <!-- Group Isolation Mode Top Floating Banner (hidden while in arrow node edit mode) -->
+        <div
+          v-else-if="isIsolationMode && !isArrowNodeEditing"
+          class="pointer-events-auto flex items-center gap-1.5 sm:gap-2.5 px-2.5 sm:px-3.5 py-1 sm:py-1.5 bg-slate-900/95 border border-indigo-500/80 rounded-2xl shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 whitespace-nowrap select-none shrink-0"
+        >
+          <div class="flex items-center gap-1 sm:gap-1.5 text-indigo-300 font-medium text-xs whitespace-nowrap shrink-0">
+            <Group class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-indigo-400 shrink-0" />
+            <span>{{ isolationStack.length > 0 ? `Group Isolation (L${isolationStack.length + 1})` : 'Group Isolation' }}</span>
+            <span v-if="whiteboardContainerWidth >= 768" class="text-slate-400 font-normal text-[11px]">(ESC to exit)</span>
+          </div>
+          <button
+            @click="exitGroupIsolation"
+            class="px-2 py-0.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-[11px] sm:text-xs transition cursor-pointer whitespace-nowrap shrink-0 shadow-sm"
+          >
+            {{ isolationStack.length > 0 ? 'Back' : (whiteboardContainerWidth >= 640 ? 'Exit Isolation' : 'Exit') }}
+          </button>
+        </div>
+
+        <!-- Arrow & Line Node Editing Mode Top Floating Banner -->
+        <div
+          v-else-if="isArrowNodeEditing"
+          class="pointer-events-auto flex items-center gap-1.5 sm:gap-2.5 px-2.5 sm:px-3.5 py-1 sm:py-1.5 bg-slate-900/95 border border-indigo-500/80 rounded-2xl shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 whitespace-nowrap select-none shrink-0"
+        >
+          <div class="flex items-center gap-1.5 sm:gap-2 text-indigo-300 font-medium text-xs whitespace-nowrap shrink-0">
+            <Waypoints class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-indigo-400 shrink-0" />
+            <span>Node Edit</span>
+
+            <!-- Compact ? Help Button with high-contrast card tooltip -->
+            <div class="relative group/tooltip inline-flex items-center">
+              <button
+                type="button"
+                class="w-4 h-4 rounded-full bg-indigo-500/20 hover:bg-indigo-500/40 text-indigo-300 text-[10px] font-bold flex items-center justify-center transition cursor-help border border-indigo-400/40"
+                aria-label="Node editing guide"
+              >
+                ?
+              </button>
+              <div class="absolute top-full left-1/2 -translate-x-1/2 mt-2 hidden group-hover/tooltip:block group-focus-within/tooltip:block z-50 w-64 p-2.5 bg-slate-950/95 border border-indigo-500/60 rounded-xl text-slate-200 text-xs shadow-2xl backdrop-blur-md pointer-events-none transition select-none">
+                <p class="font-semibold text-indigo-300 mb-1">Node Editing Tips:</p>
+                <ul class="space-y-1 text-[11px] text-slate-300 leading-snug list-disc pl-4">
+                  <li>Double-click line: add node</li>
+                  <li>Double-click node: toggle corner / smooth</li>
+                  <li>Drag stroke line: move whole arrow</li>
+                  <li>Drag box on background: marquee nodes</li>
+                  <li>Del / Backspace: delete selected nodes</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-1 shrink-0">
+            <button
+              v-if="selectedNodeIndices.size > 0"
+              @click="deleteSelectedArrowNodes"
+              class="px-2 py-0.5 rounded-lg bg-rose-600/80 hover:bg-rose-500 text-white font-medium text-[11px] sm:text-xs transition cursor-pointer whitespace-nowrap shrink-0"
+              title="Delete selected nodes (Del/Backspace)"
+            >
+              Delete ({{ selectedNodeIndices.size }})
+            </button>
+            <button
+              @click="exitArrowNodeEditing"
+              class="px-2.5 py-0.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-[11px] sm:text-xs transition cursor-pointer whitespace-nowrap shrink-0 shadow-sm"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Top Right: Action Buttons -->
       <div
-        v-else
-        class="h-8 px-2.5 rounded-xl bg-white/95 shadow-sm border border-slate-200 flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-slate-700 shrink-0"
-        title="Personal Board (Private Draft)"
+        class="flex items-center gap-1 sm:gap-2 transition-opacity duration-200 pointer-events-auto shrink-0"
+        :class="{ 'opacity-15': isHoveringSend }"
       >
-        <User class="w-3.5 h-3.5 text-sky-500 shrink-0" />
-        <span v-if="whiteboardContainerWidth >= 640">Personal Board</span>
-      </div>
-    </div>
-
-    <!-- View-Only Banner for Muted Users -->
-    <div
-      v-if="isCurrentUserMuted"
-      class="absolute top-4 left-1/2 -translate-x-1/2 z-40 px-3.5 py-1.5 sm:px-4 sm:py-2 rounded-2xl bg-rose-950/90 border border-rose-500/50 text-rose-300 text-xs font-semibold shadow-2xl backdrop-blur-md flex items-center gap-2 select-none"
-    >
-      <MicOff class="w-4 h-4 text-rose-400 shrink-0" />
-      <span>View-Only: You have been muted by the host and cannot edit the whiteboard.</span>
-    </div>
-
-    <!-- Group Isolation Mode Top Floating Banner -->
-    <div
-      v-if="isIsolationMode"
-      class="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 sm:gap-2.5 px-2.5 sm:px-3.5 py-1 sm:py-1.5 bg-slate-900/95 border border-indigo-500/80 rounded-2xl shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 whitespace-nowrap select-none shrink-0 pointer-events-auto transition-all max-w-[calc(100vw-180px)] sm:max-w-none overflow-hidden"
-    >
-      <div class="flex items-center gap-1 sm:gap-1.5 text-indigo-300 font-medium text-xs whitespace-nowrap shrink-0">
-        <Group class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-indigo-400 shrink-0" />
-        <span v-if="whiteboardContainerWidth >= 640">Group Isolation</span>
-        <span v-else>Isolation</span>
-        <span v-if="whiteboardContainerWidth >= 768" class="text-slate-400 font-normal text-[11px]">(ESC to exit)</span>
-      </div>
-      <button
-        @click="exitGroupIsolation"
-        class="px-2 py-0.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-[11px] sm:text-xs transition cursor-pointer whitespace-nowrap shrink-0 shadow-sm"
-      >
-        <span v-if="whiteboardContainerWidth >= 640">Exit Isolation</span>
-        <span v-else>Exit</span>
-      </button>
-    </div>
-
-    <!-- Arrow & Line Node Editing Mode Top Floating Banner -->
-    <div
-      v-if="isArrowNodeEditing"
-      class="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 sm:gap-2.5 px-2.5 sm:px-3.5 py-1 sm:py-1.5 bg-slate-900/95 border border-indigo-500/80 rounded-2xl shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 whitespace-nowrap select-none shrink-0 pointer-events-auto transition-all max-w-[calc(100vw-180px)] sm:max-w-none overflow-hidden"
-    >
-      <div class="flex items-center gap-1 sm:gap-1.5 text-indigo-300 font-medium text-xs whitespace-nowrap shrink-0">
-        <Waypoints class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-indigo-400 shrink-0" />
-        <span v-if="whiteboardContainerWidth >= 500" class="whitespace-nowrap">Node Edit</span>
-        <span v-else class="whitespace-nowrap">Edit</span>
-        <span v-if="whiteboardContainerWidth >= 800" class="text-slate-400 font-normal text-[11px]">(Double-click node: sharp corner | Double-click line: add node | Del: remove)</span>
-      </div>
-      <div class="flex items-center gap-1 shrink-0">
+        <!-- Explicit Save Button with Animated Auto-Save Status (Saving, Saved, Offline, Save Board) -->
         <button
-          v-if="selectedNodeIndices.size > 0"
-          @click="deleteSelectedArrowNodes"
-          class="px-2 py-0.5 rounded-lg bg-rose-600/80 hover:bg-rose-500 text-white font-medium text-[11px] sm:text-xs transition cursor-pointer whitespace-nowrap shrink-0"
-          title="Delete selected nodes (Del/Backspace)"
-        >
-          Delete ({{ selectedNodeIndices.size }})
-        </button>
-        <button
-          @click="exitArrowNodeEditing"
-          class="px-2.5 py-0.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-[11px] sm:text-xs transition cursor-pointer whitespace-nowrap shrink-0 shadow-sm"
-        >
-          Done
-        </button>
-      </div>
-    </div>
-    
-    <!-- Header Right: Action Buttons -->
-    <div
-      class="absolute top-4 right-4 z-10 flex items-center gap-1 sm:gap-2 transition-opacity duration-200"
-      :class="{ 'opacity-15': isHoveringSend }"
-    >
-      <!-- Explicit Save Button with Animated Auto-Save Status (Saving, Saved, Offline, Save Board) -->
-      <button
-        @click="handleQuickSave"
-        class="h-8 px-2.5 sm:px-3 rounded-xl transition-all duration-200 text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-sm border"
-        :class="[
-          saveStatus === 'saved' || isRecentlySaved
-            ? 'bg-emerald-50 text-emerald-700 border-emerald-400'
-            : saveStatus === 'saving'
-              ? 'bg-indigo-50 text-indigo-700 border-indigo-300'
-              : saveStatus === 'offline'
-                ? 'bg-amber-50 text-amber-700 border-amber-300'
-                : 'bg-white/95 hover:bg-white text-slate-700 hover:text-indigo-600 border-slate-200'
-        ]"
-        title="Save whiteboard to Room Album (Ctrl+S)"
-      >
-        <Loader2 v-if="saveStatus === 'saving'" class="w-3.5 h-3.5 text-indigo-600 animate-spin shrink-0" />
-        <Check v-else-if="saveStatus === 'saved' || isRecentlySaved" class="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-        <CloudOff v-else-if="saveStatus === 'offline'" class="w-3.5 h-3.5 text-amber-600 shrink-0" />
-        <Save v-else class="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-        <span v-if="whiteboardContainerWidth >= 680">
-          {{
-            saveStatus === 'saving'
-              ? 'Saving...'
-              : saveStatus === 'saved' || isRecentlySaved
-                ? 'Saved'
+          @click="handleQuickSave"
+          class="h-8 px-2.5 sm:px-3 rounded-xl transition-all duration-200 text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-sm border"
+          :class="[
+            saveStatus === 'saved' || isRecentlySaved
+              ? 'bg-emerald-50 text-emerald-700 border-emerald-400'
+              : saveStatus === 'saving'
+                ? 'bg-indigo-50 text-indigo-700 border-indigo-300'
                 : saveStatus === 'offline'
-                  ? 'Saved offline'
-                  : 'Save Board'
-          }}
-        </span>
-      </button>
+                  ? 'bg-amber-50 text-amber-700 border-amber-300'
+                  : 'bg-white/95 hover:bg-white text-slate-700 hover:text-indigo-600 border-slate-200'
+          ]"
+          title="Save whiteboard to Room Album (Ctrl+S)"
+        >
+          <Loader2 v-if="saveStatus === 'saving'" class="w-3.5 h-3.5 text-indigo-600 animate-spin shrink-0" />
+          <Check v-else-if="saveStatus === 'saved' || isRecentlySaved" class="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+          <CloudOff v-else-if="saveStatus === 'offline'" class="w-3.5 h-3.5 text-amber-600 shrink-0" />
+          <Save v-else class="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+          <span v-if="whiteboardContainerWidth >= 680">
+            {{
+              saveStatus === 'saving'
+                ? 'Saving...'
+                : saveStatus === 'saved' || isRecentlySaved
+                  ? 'Saved'
+                  : saveStatus === 'offline'
+                    ? 'Saved offline'
+                    : 'Save Board'
+            }}
+          </span>
+        </button>
 
-      <!-- Toggle: Make Private (if Shared & Host) OR Share Board (if Personal) directly next to Save -->
-      <button
-        v-if="isCollabActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid"
-        @click="showPrivateConfirmModal = true"
-        class="h-8 px-2.5 sm:px-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white shadow-sm border border-rose-500 transition text-xs font-semibold flex items-center gap-1.5 cursor-pointer shrink-0"
-        title="Convert to Private Board (Stop Team Collaboration)"
-      >
-        <Lock class="w-3.5 h-3.5 shrink-0" />
-        <span v-if="whiteboardContainerWidth >= 680">Make Private</span>
-      </button>
+        <!-- Toggle: Make Private (if Shared & Host) OR Share Board (if Personal) directly next to Save -->
+        <button
+          v-if="isCollabActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid"
+          @click="showPrivateConfirmModal = true"
+          class="h-8 px-2.5 sm:px-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white shadow-sm border border-rose-500 transition text-xs font-semibold flex items-center gap-1.5 cursor-pointer shrink-0"
+          title="Convert to Private Board (Stop Team Collaboration)"
+        >
+          <Lock class="w-3.5 h-3.5 shrink-0" />
+          <span v-if="whiteboardContainerWidth >= 680">Make Private</span>
+        </button>
 
-      <button
-        v-else-if="!isCollabActive"
-        @click="handlePublish"
-        :disabled="isCurrentUserMuted"
-        class="h-8 px-2.5 sm:px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm border border-indigo-500 transition text-xs font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0"
-        title="Publish as shared canvas for team collaboration"
-      >
-        <Globe class="w-3.5 h-3.5 shrink-0" />
-        <span v-if="whiteboardContainerWidth >= 680">Share Board</span>
-      </button>
+        <button
+          v-else-if="!isCollabActive"
+          @click="handlePublish"
+          :disabled="isCurrentUserMuted"
+          class="h-8 px-2.5 sm:px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm border border-indigo-500 transition text-xs font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0"
+          title="Publish as shared canvas for team collaboration"
+        >
+          <Globe class="w-3.5 h-3.5 shrink-0" />
+          <span v-if="whiteboardContainerWidth >= 680">Share Board</span>
+        </button>
 
-      <!-- Shortcuts Cheatsheet -->
-      <button @click="showShortcutsModal = true" class="h-8 w-8 rounded-xl bg-white/95 hover:bg-white text-slate-600 hover:text-indigo-600 shadow-sm border border-slate-200 transition cursor-pointer flex items-center justify-center shrink-0" title="Shortcuts Cheatsheet (?)">
-        <HelpCircle class="w-3.5 h-3.5" />
-      </button>
+        <!-- Shortcuts Cheatsheet -->
+        <button @click="showShortcutsModal = true" class="h-8 w-8 rounded-xl bg-white/95 hover:bg-white text-slate-600 hover:text-indigo-600 shadow-sm border border-slate-200 transition cursor-pointer flex items-center justify-center shrink-0" title="Shortcuts Cheatsheet (?)">
+          <HelpCircle class="w-3.5 h-3.5" />
+        </button>
 
-      <!-- Close Panel -->
-      <button @click="handleCloseRequest" class="h-8 w-8 rounded-xl bg-white/95 hover:bg-white text-slate-500 hover:text-rose-600 shadow-sm border border-slate-200 transition cursor-pointer flex items-center justify-center shrink-0" title="Close Panel">
-        <X class="w-3.5 h-3.5" />
-      </button>
+        <!-- Close Panel -->
+        <button @click="handleCloseRequest" class="h-8 w-8 rounded-xl bg-white/95 hover:bg-white text-slate-500 hover:text-rose-600 shadow-sm border border-slate-200 transition cursor-pointer flex items-center justify-center shrink-0" title="Close Panel">
+          <X class="w-3.5 h-3.5" />
+        </button>
+      </div>
     </div>
 
     <!-- Quick Save & Action Toast Notification -->
@@ -6486,7 +6771,7 @@ onUnmounted(() => {
 
         <!-- Connecting guide lines, stroke double click zone, and live preview between nodes -->
         <svg class="w-full h-full absolute inset-0 pointer-events-none">
-          <!-- Invisible wide hit-testing polyline for double-click node insertion -->
+          <!-- Invisible wide hit-testing polyline: Drag to move whole arrow, double-click to add node -->
           <polyline
             :points="nodeScreenPolyline"
             fill="none"
@@ -6494,8 +6779,9 @@ onUnmounted(() => {
             stroke-width="26"
             stroke-linecap="round"
             stroke-linejoin="round"
-            class="pointer-events-auto cursor-copy"
-            title="Double-click line to add node"
+            class="pointer-events-auto cursor-grab active:cursor-grabbing"
+            title="Drag line to move arrow, double-click to add node"
+            @pointerdown="onStrokePointerDown"
             @dblclick="insertNodeOnArrowStroke"
           />
           <polyline

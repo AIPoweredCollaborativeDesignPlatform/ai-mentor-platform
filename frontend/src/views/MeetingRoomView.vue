@@ -395,6 +395,12 @@ const pin = roomId.value.replace('room_', '');
 
 const isDrawerOpen = ref(false);
 const isAssetsDrawerOpen = ref(false);
+
+watch(isAssetsDrawerOpen, (isOpen) => {
+  if (!isOpen) {
+    isManagingAssets.value = false;
+  }
+});
 const inputMessage = ref('');
 const copiedUrl = ref(false);
 const chatContainerRef = ref<HTMLDivElement | null>(null);

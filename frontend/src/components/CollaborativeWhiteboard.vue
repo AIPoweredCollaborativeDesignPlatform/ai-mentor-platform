@@ -58,6 +58,7 @@ const CUSTOM_PROPS = [
   'isStraightLine',
   'arrowId',
   'initialMatrix',
+  'arrowCornerIndices',
   'lockMovementX',
   'lockMovementY',
   'lockRotation',
@@ -154,6 +155,10 @@ const isArrowNodeEditing = ref(false);
 const editingArrow = shallowRef<any>(null);
 const editingNodeIndex = ref<number | null>(null);
 const editingArrowPoints = ref<Array<{ x: number; y: number }>>([]);
+const editingArrowCorners = ref<Set<number>>(new Set());
+const selectedNodeIndices = ref<Set<number>>(new Set());
+const isNodeMarqueeActive = ref(false);
+const nodeMarqueeRect = ref<{ x1: number; y1: number; x2: number; y2: number }>({ x1: 0, y1: 0, x2: 0, y2: 0 });
 const isDraggingNode = ref(false);
 const viewportVersion = ref(0);
 let liveArrowPreview: any = null;
@@ -433,7 +438,7 @@ const liveNodeArrowSvg = computed(() => {
   const headPoints = `${sn.x.toFixed(1)},${sn.y.toFixed(1)} ${w1x.toFixed(1)},${w1y.toFixed(1)} ${w2x.toFixed(1)},${w2y.toFixed(1)}`;
 
   let pathD = '';
-  if (isStraight || sPts.length < 3) {
+  if (sPts.length < 3) {
     pathD = `M ${s0.x.toFixed(1)} ${s0.y.toFixed(1)} L ${shaftEndX.toFixed(1)} ${shaftEndY.toFixed(1)}`;
   } else {
     const shaftSampled = [...sPts];
@@ -441,17 +446,24 @@ const liveNodeArrowSvg = computed(() => {
     pathD = `M ${shaftSampled[0].x.toFixed(1)} ${shaftSampled[0].y.toFixed(1)}`;
     const m = shaftSampled.length - 1;
     for (let i = 0; i < m; i++) {
-      const pPrev = shaftSampled[Math.max(0, i - 1)];
-      const pCur = shaftSampled[i];
-      const pNext = shaftSampled[i + 1];
-      const pAfter = shaftSampled[Math.min(m, i + 2)];
+      const isCurCorner = editingArrowCorners.value.has(i);
+      const isNextCorner = editingArrowCorners.value.has(i + 1);
 
-      const cp1x = pCur.x + (pNext.x - pPrev.x) / 6;
-      const cp1y = pCur.y + (pNext.y - pPrev.y) / 6;
-      const cp2x = pNext.x - (pAfter.x - pCur.x) / 6;
-      const cp2y = pNext.y - (pAfter.y - pCur.y) / 6;
+      if (isCurCorner || isNextCorner) {
+        pathD += ` L ${shaftSampled[i + 1].x.toFixed(1)} ${shaftSampled[i + 1].y.toFixed(1)}`;
+      } else {
+        const pPrev = shaftSampled[Math.max(0, i - 1)];
+        const pCur = shaftSampled[i];
+        const pNext = shaftSampled[i + 1];
+        const pAfter = shaftSampled[Math.min(m, i + 2)];
 
-      pathD += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${pNext.x.toFixed(1)} ${pNext.y.toFixed(1)}`;
+        const cp1x = pCur.x + (pNext.x - pPrev.x) / 6;
+        const cp1y = pCur.y + (pNext.y - pPrev.y) / 6;
+        const cp2x = pNext.x - (pAfter.x - pCur.x) / 6;
+        const cp2y = pNext.y - (pAfter.y - pCur.y) / 6;
+
+        pathD += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${pNext.x.toFixed(1)} ${pNext.y.toFixed(1)}`;
+      }
     }
   }
 
@@ -466,6 +478,7 @@ const liveNodeArrowSvg = computed(() => {
 const enterArrowNodeEditing = (arrow: any) => {
   if (!arrow || !(arrow as any).isArrow) return;
   isArrowNodeEditing.value = true;
+  selectedNodeIndices.value.clear();
 
   if (Array.isArray(arrow.arrowPoints) && arrow.arrowPoints.length > 0) {
     const M0 = (arrow as any).initialMatrix || arrow.calcTransformMatrix();
@@ -486,7 +499,7 @@ const enterArrowNodeEditing = (arrow: any) => {
         pts = pts.map((pt: any) => fabric.util.transformPoint(pt, M_delta));
 
         // Recreate the arrow at scale=1, angle=0 with the transformed world points
-        const updated = createArrowFromPoints(pts, (arrow as any).arrowColor, (arrow as any).arrowStrokeWidth, true);
+        const updated = createArrowFromPoints(pts, (arrow as any).arrowColor, (arrow as any).arrowStrokeWidth, true, (arrow as any).arrowCornerIndices);
         if (updated && canvas) {
           (updated as any).arrowId = (arrow as any).arrowId;
           (updated as any).isLocked = (arrow as any).isLocked;
@@ -507,6 +520,8 @@ const enterArrowNodeEditing = (arrow: any) => {
 
     editingArrow.value = arrow;
     editingArrowPoints.value = pts;
+    const existingCorners = Array.isArray((arrow as any).arrowCornerIndices) ? (arrow as any).arrowCornerIndices : [];
+    editingArrowCorners.value = new Set(existingCorners);
     (arrow as any).arrowPoints = pts.map((p: any) => ({ ...p }));
     (arrow as any).initialMatrix = arrow.calcTransformMatrix();
   } else {
@@ -531,7 +546,9 @@ const exitArrowNodeEditing = () => {
   isArrowNodeEditing.value = false;
   editingArrow.value = null;
   editingNodeIndex.value = null;
+  selectedNodeIndices.value.clear();
   isDraggingNode.value = false;
+  isNodeMarqueeActive.value = false;
 
   if (arrow && canvas) {
     arrow.set({
@@ -549,9 +566,188 @@ const exitArrowNodeEditing = () => {
   updateSelectionState();
 };
 
+const commitEditingArrowPoints = () => {
+  if (!editingArrow.value || !canvas) return;
+  const color = (editingArrow.value as any).arrowColor || activeColor.value;
+  const width = (editingArrow.value as any).arrowStrokeWidth || strokeWidth.value;
+  const isLocked = !!(editingArrow.value as any).isLocked;
+  const arrowId = (editingArrow.value as any).arrowId;
+  const authorUid = (editingArrow.value as any).authorUid;
+  const authorName = (editingArrow.value as any).authorName;
+
+  const finalArrow = createArrowFromPoints(
+    editingArrowPoints.value,
+    color,
+    width,
+    true,
+    editingArrowCorners.value
+  );
+  if (finalArrow) {
+    finalArrow.set({
+      hasControls: false,
+      selectable: true,
+      evented: true,
+      visible: true
+    });
+    (finalArrow as any).isLocked = isLocked;
+    (finalArrow as any).arrowId = arrowId;
+    (finalArrow as any).authorUid = authorUid;
+    (finalArrow as any).authorName = authorName;
+
+    const rawOld = toRaw(editingArrow.value);
+    const allObjs = canvas.getObjects();
+    const curIdx = allObjs.indexOf(rawOld);
+    if (curIdx !== -1) {
+      canvas.remove(rawOld);
+      canvas.insertAt(curIdx, finalArrow);
+    } else {
+      canvas.remove(rawOld);
+      canvas.add(finalArrow);
+    }
+    editingArrow.value = finalArrow;
+    if (Array.isArray((finalArrow as any).arrowPoints)) {
+      editingArrowPoints.value = (finalArrow as any).arrowPoints.map((p: any) => ({ x: p.x, y: p.y }));
+    }
+    finalArrow.setCoords();
+  } else {
+    editingArrow.value.visible = true;
+  }
+  canvas.requestRenderAll();
+  saveHistoryState();
+  syncToFirebase();
+};
+
+const toggleNodeCorner = (index: number) => {
+  if (editingArrowCorners.value.has(index)) {
+    editingArrowCorners.value.delete(index);
+    displayToast(`Node ${index + 1} smoothed`);
+  } else {
+    editingArrowCorners.value.add(index);
+    displayToast(`Node ${index + 1} sharp corner`);
+  }
+  commitEditingArrowPoints();
+};
+
+const deleteSelectedArrowNodes = () => {
+  if (!isArrowNodeEditing.value || !editingArrow.value) return;
+  if (selectedNodeIndices.value.size === 0) return;
+
+  const pts = [...editingArrowPoints.value];
+  if (pts.length <= 2) {
+    displayToast('Cannot delete: arrow requires at least 2 endpoints');
+    return;
+  }
+
+  // Filter out selected nodes, but never allow deleting endpoints unless closed loop with >= 3 pts
+  const indicesToDelete = new Set(selectedNodeIndices.value);
+  // Keep start and end nodes if open curve
+  const isClosed = !!(editingArrow.value as any)?.isClosedLoop;
+  if (!isClosed) {
+    indicesToDelete.delete(0);
+    indicesToDelete.delete(pts.length - 1);
+  }
+
+  if (indicesToDelete.size === 0) {
+    displayToast('Cannot delete start or end node of arrow');
+    return;
+  }
+
+  if (pts.length - indicesToDelete.size < 2) {
+    displayToast('Cannot delete: arrow requires at least 2 nodes');
+    return;
+  }
+
+  const newPts: Array<{ x: number; y: number }> = [];
+  const newCorners = new Set<number>();
+
+  for (let i = 0; i < pts.length; i++) {
+    if (!indicesToDelete.has(i)) {
+      const newIdx = newPts.length;
+      newPts.push(pts[i]);
+      if (editingArrowCorners.value.has(i)) {
+        newCorners.add(newIdx);
+      }
+    }
+  }
+
+  editingArrowPoints.value = newPts;
+  editingArrowCorners.value = newCorners;
+  selectedNodeIndices.value.clear();
+  commitEditingArrowPoints();
+  displayToast('Selected node(s) deleted');
+};
+
+const insertNodeOnArrowStroke = (e: MouseEvent) => {
+  if (!isArrowNodeEditing.value || !editingArrow.value || !wrapperRef.value || !canvas) return;
+  const rect = wrapperRef.value.getBoundingClientRect();
+  const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
+  const clickX = (e.clientX - rect.left - vpt[4]) / vpt[0];
+  const clickY = (e.clientY - rect.top - vpt[5]) / vpt[3];
+
+  const pts = editingArrowPoints.value;
+  if (pts.length < 2) return;
+
+  // Find the closest projection segment on the polyline
+  let bestDistSq = Infinity;
+  let bestInsertIndex = 1;
+  let bestPoint = { x: clickX, y: clickY };
+
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i];
+    const b = pts[i + 1];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const lenSq = dx * dx + dy * dy;
+    if (lenSq < 1e-6) continue;
+
+    const t = Math.max(0, Math.min(1, ((clickX - a.x) * dx + (clickY - a.y) * dy) / lenSq));
+    const projX = a.x + t * dx;
+    const projY = a.y + t * dy;
+    const distSq = (clickX - projX) * (clickX - projX) + (clickY - projY) * (clickY - projY);
+
+    if (distSq < bestDistSq) {
+      bestDistSq = distSq;
+      bestInsertIndex = i + 1;
+      bestPoint = { x: projX, y: projY };
+    }
+  }
+
+  // Insert the new node
+  const newPts = [...pts];
+  newPts.splice(bestInsertIndex, 0, bestPoint);
+
+  // Shift existing corner indices >= bestInsertIndex
+  const newCorners = new Set<number>();
+  editingArrowCorners.value.forEach(idx => {
+    if (idx >= bestInsertIndex) newCorners.add(idx + 1);
+    else newCorners.add(idx);
+  });
+
+  editingArrowPoints.value = newPts;
+  editingArrowCorners.value = newCorners;
+  selectedNodeIndices.value = new Set([bestInsertIndex]);
+  commitEditingArrowPoints();
+  displayToast('Node added to stroke');
+};
+
 const onNodePointerDown = (index: number, e: PointerEvent) => {
   e.preventDefault();
   e.stopPropagation();
+
+  // Multi-selection management with Shift key or regular click
+  if (e.shiftKey) {
+    if (selectedNodeIndices.value.has(index)) {
+      selectedNodeIndices.value.delete(index);
+    } else {
+      selectedNodeIndices.value.add(index);
+    }
+  } else {
+    if (!selectedNodeIndices.value.has(index)) {
+      selectedNodeIndices.value.clear();
+      selectedNodeIndices.value.add(index);
+    }
+  }
+
   editingNodeIndex.value = index;
   isDraggingNode.value = true;
 
@@ -561,28 +757,36 @@ const onNodePointerDown = (index: number, e: PointerEvent) => {
   }
 
   let animFrameId: number | null = null;
-  let latestScenePt: { x: number; y: number } | null = null;
+  const initialClientX = e.clientX;
+  const initialClientY = e.clientY;
+  const initialPointsMap = new Map<number, { x: number; y: number }>();
+  selectedNodeIndices.value.forEach(idx => {
+    if (editingArrowPoints.value[idx]) {
+      initialPointsMap.set(idx, { ...editingArrowPoints.value[idx] });
+    }
+  });
 
   const onPointerMove = (ev: PointerEvent) => {
     if (!canvas || !wrapperRef.value || !editingArrow.value) return;
-    const rect = wrapperRef.value.getBoundingClientRect();
     const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
-    const clientX = ev.clientX;
-    const clientY = ev.clientY;
+    const deltaSceneX = (ev.clientX - initialClientX) / vpt[0];
+    const deltaSceneY = (ev.clientY - initialClientY) / vpt[3];
 
-    const sceneX = (clientX - rect.left - vpt[4]) / vpt[0];
-    const sceneY = (clientY - rect.top - vpt[5]) / vpt[3];
-
-    latestScenePt = { x: sceneX, y: sceneY };
     if (!animFrameId) {
       animFrameId = requestAnimationFrame(() => {
         animFrameId = null;
-        if (latestScenePt) {
-          editingArrowPoints.value[index] = { ...latestScenePt };
-          if ((editingArrow.value as any)?.isClosedLoop && index === 0) {
-            editingArrowPoints.value[editingArrowPoints.value.length - 1] = { ...latestScenePt };
+        initialPointsMap.forEach((initPt, idx) => {
+          editingArrowPoints.value[idx] = {
+            x: initPt.x + deltaSceneX,
+            y: initPt.y + deltaSceneY
+          };
+          if ((editingArrow.value as any)?.isClosedLoop && idx === 0) {
+            editingArrowPoints.value[editingArrowPoints.value.length - 1] = {
+              x: initPt.x + deltaSceneX,
+              y: initPt.y + deltaSceneY
+            };
           }
-        }
+        });
       });
     }
   };
@@ -594,58 +798,58 @@ const onNodePointerDown = (index: number, e: PointerEvent) => {
       cancelAnimationFrame(animFrameId);
       animFrameId = null;
     }
-    if (latestScenePt) {
-      editingArrowPoints.value[index] = { ...latestScenePt };
-      if ((editingArrow.value as any)?.isClosedLoop && index === 0) {
-        editingArrowPoints.value[editingArrowPoints.value.length - 1] = { ...latestScenePt };
-      }
-    }
     editingNodeIndex.value = null;
     isDraggingNode.value = false;
-
-    if (editingArrow.value && canvas) {
-      const color = (editingArrow.value as any).arrowColor || activeColor.value;
-      const width = (editingArrow.value as any).arrowStrokeWidth || strokeWidth.value;
-      const isLocked = !!(editingArrow.value as any).isLocked;
-      const arrowId = (editingArrow.value as any).arrowId;
-
-      const finalArrow = createArrowFromPoints(editingArrowPoints.value, color, width, true);
-      if (finalArrow) {
-        finalArrow.set({
-          hasControls: false,
-          selectable: true,
-          evented: true,
-          visible: true
-        });
-        (finalArrow as any).isLocked = isLocked;
-        (finalArrow as any).arrowId = arrowId;
-
-        const rawOld = toRaw(editingArrow.value);
-        const allObjs = canvas.getObjects();
-        const curIdx = allObjs.indexOf(rawOld);
-        if (curIdx !== -1) {
-          canvas.remove(rawOld);
-          canvas.insertAt(curIdx, finalArrow);
-        } else {
-          canvas.remove(rawOld);
-          canvas.add(finalArrow);
-        }
-        editingArrow.value = finalArrow;
-        if (Array.isArray((finalArrow as any).arrowPoints)) {
-          editingArrowPoints.value = (finalArrow as any).arrowPoints.map((p: any) => ({ x: p.x, y: p.y }));
-        }
-        finalArrow.setCoords();
-      } else {
-        editingArrow.value.visible = true;
-      }
-      canvas.requestRenderAll();
-      saveHistoryState();
-      syncToFirebase();
-    }
+    commitEditingArrowPoints();
   };
 
   window.addEventListener('pointermove', onPointerMove);
   window.addEventListener('pointerup', onPointerUp);
+};
+
+const startNodeMarquee = (e: MouseEvent) => {
+  if (!isArrowNodeEditing.value || !wrapperRef.value) return;
+  const rect = wrapperRef.value.getBoundingClientRect();
+  const startX = e.clientX - rect.left;
+  const startY = e.clientY - rect.top;
+
+  isNodeMarqueeActive.value = true;
+  nodeMarqueeRect.value = { x1: startX, y1: startY, x2: startX, y2: startY };
+
+  if (!e.shiftKey) {
+    selectedNodeIndices.value.clear();
+  }
+
+  const onMarqueeMove = (ev: MouseEvent) => {
+    const curX = ev.clientX - rect.left;
+    const curY = ev.clientY - rect.top;
+    nodeMarqueeRect.value = {
+      x1: Math.min(startX, curX),
+      y1: Math.min(startY, curY),
+      x2: Math.max(startX, curX),
+      y2: Math.max(startY, curY)
+    };
+
+    // Calculate which node screen positions lie inside this marquee
+    const r = nodeMarqueeRect.value;
+    editingArrowPoints.value.forEach((pt, idx) => {
+      const scr = getNodeScreenPos(pt);
+      if (scr.x >= r.x1 && scr.x <= r.x2 && scr.y >= r.y1 && scr.y <= r.y2) {
+        selectedNodeIndices.value.add(idx);
+      } else if (!e.shiftKey) {
+        selectedNodeIndices.value.delete(idx);
+      }
+    });
+  };
+
+  const onMarqueeUp = () => {
+    window.removeEventListener('mousemove', onMarqueeMove);
+    window.removeEventListener('mouseup', onMarqueeUp);
+    isNodeMarqueeActive.value = false;
+  };
+
+  window.addEventListener('mousemove', onMarqueeMove);
+  window.addEventListener('mouseup', onMarqueeUp);
 };
 
 const straightenEditingArrow = () => {
@@ -1425,12 +1629,12 @@ const rdp = (points: Array<{ x: number; y: number }>, epsilon: number): Array<{ 
   }
 };
 
-// Generates an Arrow object with shaft and arrowhead oriented precisely with end tangent
 const createArrowFromPoints = (
   pts: Array<{ x: number; y: number }>,
   customColor?: string,
   customWidth?: number,
-  isExactNodes = false
+  isExactNodes = false,
+  cornerIndices?: Set<number> | number[]
 ) => {
   if (pts.length < 2) return null;
   const p0 = pts[0];
@@ -1448,14 +1652,9 @@ const createArrowFromPoints = (
   const color = customColor || activeColor.value;
   const width = customWidth || strokeWidth.value;
 
-  // 1. Straight line check: perpendicular deviation from chord p0 -> pn
-  let maxDev = 0;
-  if (!isClosedLoop && lineLen > 0) {
-    for (const pt of pts) {
-      const dist = Math.abs((pn.y - p0.y) * pt.x - (pn.x - p0.x) * pt.y + pn.x * p0.y - pn.y * p0.x) / lineLen;
-      if (dist > maxDev) maxDev = dist;
-    }
-  }
+  // 1. Straight line check: ONLY when creating fresh arrow with 2 points, never squash curved/multinode strokes
+  const isStraight = !isClosedLoop && !isExactNodes && pts.length === 2;
+  let finalPts: Array<{ x: number; y: number }>;
 
   const headLen = Math.max(14, width * 3.6);
   const headAngle = Math.PI / 6; // 30 degrees
@@ -1463,45 +1662,18 @@ const createArrowFromPoints = (
   let shaft: any;
   let tangentAngle = Math.atan2(pn.y - p0.y, pn.x - p0.x);
 
-  const isStraight = !isClosedLoop && (maxDev < Math.max(16, lineLen * 0.12) || pts.length <= 3);
-  let finalPts: Array<{ x: number; y: number }>;
+  const cornersSet = cornerIndices instanceof Set ? cornerIndices : new Set(cornerIndices || []);
 
   if (isStraight) {
-    // For straight line: tangent is purely the chord angle (start to end)
+    // For straight 2-point line: tangent is chord angle
     tangentAngle = Math.atan2(pn.y - p0.y, pn.x - p0.x);
-
-    if (isExactNodes) {
-      // In node edit mode: project existing nodes onto the straight line segment
-      const dx = pn.x - p0.x;
-      const dy = pn.y - p0.y;
-      const lenSq = dx * dx + dy * dy;
-      if (lenSq > 1e-4 && pts.length > 2) {
-        const tArr: number[] = [];
-        for (let i = 0; i < pts.length; i++) {
-          if (i === 0) tArr.push(0);
-          else if (i === pts.length - 1) tArr.push(1);
-          else {
-            const t = ((pts[i].x - p0.x) * dx + (pts[i].y - p0.y) * dy) / lenSq;
-            tArr.push(Math.max(0.001, Math.min(0.999, t)));
-          }
-        }
-        const intermediate = tArr.slice(1, -1).sort((a, b) => a - b);
-        const sortedT = [0, ...intermediate, 1];
-        finalPts = sortedT.map(t => ({ x: p0.x + t * dx, y: p0.y + t * dy }));
-      } else {
-        finalPts = [{ x: p0.x, y: p0.y }, { x: pn.x, y: pn.y }];
-      }
-    } else {
-      // Straight arrow: evenly distributed nodes at ~50px intervals
-      const numSegments = Math.max(1, Math.round(lineLen / 50));
-      finalPts = [];
-      for (let i = 0; i <= numSegments; i++) {
-        const t = i / numSegments;
-        finalPts.push({ x: p0.x + t * (pn.x - p0.x), y: p0.y + t * (pn.y - p0.y) });
-      }
+    const numSegments = Math.max(1, Math.round(lineLen / 50));
+    finalPts = [];
+    for (let i = 0; i <= numSegments; i++) {
+      const t = i / numSegments;
+      finalPts.push({ x: p0.x + t * (pn.x - p0.x), y: p0.y + t * (pn.y - p0.y) });
     }
 
-    // Terminate shaft slightly inside the arrowhead body so rounded stroke cap does not poke out past the tip
     const shaftCut = headLen * 0.55;
     const shaftEndX = pn.x - shaftCut * Math.cos(tangentAngle);
     const shaftEndY = pn.y - shaftCut * Math.sin(tangentAngle);
@@ -1521,8 +1693,6 @@ const createArrowFromPoints = (
       sampled = pts.map(p => ({ x: p.x, y: p.y }));
     } else {
       // Illustrator-style incremental forward anchor placement (~50px per anchor)
-      // Anchors placed earlier remain permanently fixed at their spatial coordinates.
-      // Drawing forward only appends new movement to the tip without shifting existing nodes.
       const step = 50;
       sampled = [{ x: simplifiedPts[0].x, y: simplifiedPts[0].y }];
       let lastAnchor = simplifiedPts[0];
@@ -1541,7 +1711,6 @@ const createArrowFromPoints = (
       // Final point (current mouse position)
       const distToTip = Math.hypot(pn.x - lastAnchor.x, pn.y - lastAnchor.y);
       if (distToTip < 25 && sampled.length > 1) {
-        // If the tip is very close to the last dropped anchor, merge to prevent a cramped stub at the head
         sampled[sampled.length - 1] = { x: pn.x, y: pn.y };
       } else {
         sampled.push({ x: pn.x, y: pn.y });
@@ -1549,12 +1718,10 @@ const createArrowFromPoints = (
     }
 
     if (isClosedLoop) {
-      // Snap end point to start point to form seamless closed loop
       sampled[sampled.length - 1] = { x: p0.x, y: p0.y };
     }
     finalPts = sampled.map(p => ({ x: p.x, y: p.y }));
 
-    // Direct terminal tangent looking back ~28px to eliminate tip micro-jitter
     let pBack = sampled[Math.max(0, sampled.length - 2)];
     if (simplifiedPts.length >= 2) {
       let backDist = 0;
@@ -1569,12 +1736,10 @@ const createArrowFromPoints = (
     }
     tangentAngle = Math.atan2(pn.y - pBack.y, pn.x - pBack.x);
 
-    // Shorten end of shaft by cutting the last segment so rounded cap does not poke out past tip
     const shaftCut = headLen * 0.55;
     const shaftEndX = pn.x - shaftCut * Math.cos(tangentAngle);
     const shaftEndY = pn.y - shaftCut * Math.sin(tangentAngle);
 
-    // Replace final point in sampled with the cut shaftEnd
     const shaftSampled = [...sampled];
     if (!isClosedLoop) {
       shaftSampled[shaftSampled.length - 1] = { x: shaftEndX, y: shaftEndY };
@@ -1594,17 +1759,24 @@ const createArrowFromPoints = (
       let pathD = `M ${shaftSampled[0].x.toFixed(1)} ${shaftSampled[0].y.toFixed(1)}`;
       const m = shaftSampled.length - 1;
       for (let i = 0; i < m; i++) {
-        const pPrev = (isClosedLoop && i === 0) ? shaftSampled[m - 1] : shaftSampled[Math.max(0, i - 1)];
-        const pCur = shaftSampled[i];
-        const pNext = shaftSampled[i + 1];
-        const pAfter = (isClosedLoop && i + 1 === m) ? shaftSampled[1] : shaftSampled[Math.min(m, i + 2)];
+        const isCurCorner = cornersSet.has(i);
+        const isNextCorner = cornersSet.has(i + 1);
 
-        const cp1x = pCur.x + (pNext.x - pPrev.x) / 6;
-        const cp1y = pCur.y + (pNext.y - pPrev.y) / 6;
-        const cp2x = pNext.x - (pAfter.x - pCur.x) / 6;
-        const cp2y = pNext.y - (pAfter.y - pCur.y) / 6;
+        if (isCurCorner || isNextCorner) {
+          pathD += ` L ${shaftSampled[i + 1].x.toFixed(1)} ${shaftSampled[i + 1].y.toFixed(1)}`;
+        } else {
+          const pPrev = (isClosedLoop && i === 0) ? shaftSampled[m - 1] : shaftSampled[Math.max(0, i - 1)];
+          const pCur = shaftSampled[i];
+          const pNext = shaftSampled[i + 1];
+          const pAfter = (isClosedLoop && i + 1 === m) ? shaftSampled[1] : shaftSampled[Math.min(m, i + 2)];
 
-        pathD += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${pNext.x.toFixed(1)} ${pNext.y.toFixed(1)}`;
+          const cp1x = pCur.x + (pNext.x - pPrev.x) / 6;
+          const cp1y = pCur.y + (pNext.y - pPrev.y) / 6;
+          const cp2x = pNext.x - (pAfter.x - pCur.x) / 6;
+          const cp2y = pNext.y - (pAfter.y - pCur.y) / 6;
+
+          pathD += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${pNext.x.toFixed(1)} ${pNext.y.toFixed(1)}`;
+        }
       }
       if (isClosedLoop) {
         pathD += ' Z';
@@ -1672,6 +1844,7 @@ const createArrowFromPoints = (
   (arrow as any).arrowP0 = { x: p0.x, y: p0.y };
   (arrow as any).arrowPn = isClosedLoop ? { x: p0.x, y: p0.y } : { x: pn.x, y: pn.y };
   (arrow as any).arrowId = Math.random().toString(36).substring(2, 9);
+  (arrow as any).arrowCornerIndices = Array.from(cornersSet);
   (arrow as any).initialMatrix = arrow.calcTransformMatrix();
   return arrow;
 };
@@ -2262,10 +2435,13 @@ const initFabric = () => {
           (arrowObj as any).initialMatrix = M1;
         } else {
           // Scaled or rotated: reconstruct to keep fixed pristine arrowhead
-          const newArrow = createArrowFromPoints(newPts, (arrowObj as any).arrowColor, (arrowObj as any).arrowStrokeWidth, true);
+          const cornerIndices = (arrowObj as any).arrowCornerIndices;
+          const newArrow = createArrowFromPoints(newPts, (arrowObj as any).arrowColor, (arrowObj as any).arrowStrokeWidth, true, cornerIndices);
           if (newArrow) {
             (newArrow as any).isLocked = (arrowObj as any).isLocked;
             (newArrow as any).arrowId = (arrowObj as any).arrowId || Math.random().toString(36).substring(2, 9);
+            (newArrow as any).authorUid = (arrowObj as any).authorUid;
+            (newArrow as any).authorName = (arrowObj as any).authorName;
             if ((arrowObj as any).isLocked) {
               newArrow.set({
                 lockMovementX: true,
@@ -2655,7 +2831,9 @@ const initFabric = () => {
     if (isArrowNodeEditing.value) {
       const hitTarget = opt.target || (canvas.findTarget(e) as any)?.target || null;
       if (!hitTarget || (hitTarget !== editingArrow.value && !editingArrow.value?.contains?.(hitTarget))) {
-        exitArrowNodeEditing();
+        // Start node marquee box without prematurely exiting node edit mode
+        startNodeMarquee(e);
+        return;
       }
     }
 
@@ -3506,6 +3684,49 @@ const initFabric = () => {
     hasObjectTransformed = true;
     const obj = e?.target;
     if (obj) {
+      // 1. Single sticky note: enforce strict 1:1 aspect ratio and min (80px) / max (600px) clamp in real-time
+      if (obj.isStickyNote || obj.stickyColorConfig) {
+        const baseW = obj.width || 120;
+        const uniformScale = Math.max(Math.abs(obj.scaleX || 1), Math.abs(obj.scaleY || 1));
+        const minScale = 80 / baseW;
+        const maxScale = 600 / baseW;
+        const clampedScale = Math.max(minScale, Math.min(maxScale, uniformScale));
+        obj.set({
+          scaleX: (obj.scaleX < 0 ? -1 : 1) * clampedScale,
+          scaleY: (obj.scaleY < 0 ? -1 : 1) * clampedScale
+        });
+      } else if (obj.type === 'activeselection' || obj.type === 'activeSelection') {
+        // 2. Multi-selection containing sticky note(s):
+        // Enforce sticky children don't shrink below 80px or expand beyond 600px,
+        // and maintain 1:1 proportional scaling on sticky notes without flattening.
+        const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
+        const hasStickyChild = targets.some((c: any) => c.isStickyNote || c.stickyColorConfig);
+        if (hasStickyChild) {
+          const selScaleX = Math.abs(obj.scaleX || 1);
+          const selScaleY = Math.abs(obj.scaleY || 1);
+          // If non-uniform scaling on the selection, balance it or use uniform scale for the selection
+          const uniformSelScale = Math.max(selScaleX, selScaleY);
+
+          targets.forEach((c: any) => {
+            if (c.isStickyNote || c.stickyColorConfig) {
+              const baseW = c.width || 120;
+              const netScale = uniformSelScale * Math.abs(c.scaleX || 1);
+              const minNet = 80 / baseW;
+              const maxNet = 600 / baseW;
+              if (netScale < minNet) {
+                const requiredSelScale = minNet / Math.abs(c.scaleX || 1);
+                obj.scaleX = (obj.scaleX < 0 ? -1 : 1) * requiredSelScale;
+                obj.scaleY = (obj.scaleY < 0 ? -1 : 1) * requiredSelScale;
+              } else if (netScale > maxNet) {
+                const requiredSelScale = maxNet / Math.abs(c.scaleX || 1);
+                obj.scaleX = (obj.scaleX < 0 ? -1 : 1) * requiredSelScale;
+                obj.scaleY = (obj.scaleY < 0 ? -1 : 1) * requiredSelScale;
+              }
+            }
+          });
+        }
+      }
+
       obj.setCoords();
       if ((obj.type === 'activeselection' || obj.type === 'activeSelection') && obj.forEachObject) {
         obj.forEachObject((c: any) => c.setCoords());
@@ -3802,13 +4023,19 @@ const syncNodeEditingStateAfterReload = () => {
   const allTargets = canvas.getObjects().filter((o: any) => (o as any).isArrow && (o as any).arrowPoints);
   const match = (currentEditingId ? allTargets.find((o: any) => (o as any).arrowId === currentEditingId) : null) || allTargets[0];
   if (match) {
+    match.visible = true;
     editingArrow.value = match;
     editingArrowPoints.value = (match as any).arrowPoints.map((p: any) => ({ x: p.x, y: p.y }));
+    const existingCorners = Array.isArray((match as any).arrowCornerIndices) ? (match as any).arrowCornerIndices : [];
+    editingArrowCorners.value = new Set(existingCorners);
     match.set({
       hasControls: false,
       selectable: true,
-      evented: true
+      evented: true,
+      visible: true
     });
+    match.setCoords();
+    canvas.requestRenderAll();
     viewportVersion.value++;
   } else {
     exitArrowNodeEditing();
@@ -5396,6 +5623,11 @@ const handleKeydown = (e: KeyboardEvent) => {
 
   // Whiteboard object-level shortcuts (when NOT editing text)
   if (e.key === 'Delete' || e.key === 'Backspace') {
+    if (isArrowNodeEditing.value) {
+      e.preventDefault();
+      deleteSelectedArrowNodes();
+      return;
+    }
     if (activeObj) {
       e.preventDefault();
       deleteSelected();
@@ -5919,19 +6151,17 @@ onUnmounted(() => {
     <!-- Group Isolation Mode Top Floating Banner -->
     <div
       v-if="isIsolationMode"
-      class="absolute left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-1.5 sm:py-2 bg-slate-900/95 border border-indigo-500/80 rounded-2xl shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 whitespace-nowrap select-none shrink-0 pointer-events-auto transition-all"
-      :class="whiteboardContainerWidth < 640 ? 'top-14' : 'top-4'"
+      class="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 sm:gap-2.5 px-2.5 sm:px-3.5 py-1 sm:py-1.5 bg-slate-900/95 border border-indigo-500/80 rounded-2xl shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 whitespace-nowrap select-none shrink-0 pointer-events-auto transition-all max-w-[calc(100vw-180px)] sm:max-w-none overflow-hidden"
     >
-      <div class="flex items-center gap-1.5 sm:gap-2 text-indigo-300 font-semibold text-xs whitespace-nowrap shrink-0">
-        <Group class="w-4 h-4 text-indigo-400 shrink-0" />
-        <span v-if="whiteboardContainerWidth >= 640">Group Isolation Mode</span>
-        <span v-else-if="whiteboardContainerWidth >= 480">Group Isolation</span>
+      <div class="flex items-center gap-1 sm:gap-1.5 text-indigo-300 font-medium text-xs whitespace-nowrap shrink-0">
+        <Group class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-indigo-400 shrink-0" />
+        <span v-if="whiteboardContainerWidth >= 640">Group Isolation</span>
         <span v-else>Isolation</span>
-        <span v-if="whiteboardContainerWidth >= 768" class="text-slate-400 font-normal">(ESC to return)</span>
+        <span v-if="whiteboardContainerWidth >= 768" class="text-slate-400 font-normal text-[11px]">(ESC to exit)</span>
       </div>
       <button
         @click="exitGroupIsolation"
-        class="px-2 sm:px-2.5 py-1 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition cursor-pointer whitespace-nowrap shrink-0 shadow-sm"
+        class="px-2 py-0.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-[11px] sm:text-xs transition cursor-pointer whitespace-nowrap shrink-0 shadow-sm"
       >
         <span v-if="whiteboardContainerWidth >= 640">Exit Isolation</span>
         <span v-else>Exit</span>
@@ -5941,19 +6171,26 @@ onUnmounted(() => {
     <!-- Arrow & Line Node Editing Mode Top Floating Banner -->
     <div
       v-if="isArrowNodeEditing"
-      class="absolute left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-1.5 sm:py-2 bg-slate-900/95 border border-indigo-500/80 rounded-2xl shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 whitespace-nowrap select-none shrink-0 pointer-events-auto transition-all"
-      :class="whiteboardContainerWidth < 640 ? 'top-14' : 'top-4'"
+      class="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 sm:gap-2.5 px-2.5 sm:px-3.5 py-1 sm:py-1.5 bg-slate-900/95 border border-indigo-500/80 rounded-2xl shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 whitespace-nowrap select-none shrink-0 pointer-events-auto transition-all max-w-[calc(100vw-180px)] sm:max-w-none overflow-hidden"
     >
-      <div class="flex items-center gap-1.5 sm:gap-2 text-indigo-300 font-semibold text-xs whitespace-nowrap shrink-0">
-        <Waypoints class="w-4 h-4 text-indigo-400 shrink-0" />
-        <span v-if="whiteboardContainerWidth >= 480" class="whitespace-nowrap font-medium">Node Edit Mode</span>
-        <span v-else class="whitespace-nowrap font-medium">Node Edit</span>
-        <span v-if="whiteboardContainerWidth >= 768" class="text-slate-400 font-normal whitespace-nowrap">(Drag nodes to sculpt curve, ESC to exit)</span>
+      <div class="flex items-center gap-1 sm:gap-1.5 text-indigo-300 font-medium text-xs whitespace-nowrap shrink-0">
+        <Waypoints class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-indigo-400 shrink-0" />
+        <span v-if="whiteboardContainerWidth >= 500" class="whitespace-nowrap">Node Edit</span>
+        <span v-else class="whitespace-nowrap">Edit</span>
+        <span v-if="whiteboardContainerWidth >= 800" class="text-slate-400 font-normal text-[11px]">(Double-click node: sharp corner | Double-click line: add node | Del: remove)</span>
       </div>
-      <div class="flex items-center gap-1.5 shrink-0">
+      <div class="flex items-center gap-1 shrink-0">
+        <button
+          v-if="selectedNodeIndices.size > 0"
+          @click="deleteSelectedArrowNodes"
+          class="px-2 py-0.5 rounded-lg bg-rose-600/80 hover:bg-rose-500 text-white font-medium text-[11px] sm:text-xs transition cursor-pointer whitespace-nowrap shrink-0"
+          title="Delete selected nodes (Del/Backspace)"
+        >
+          Delete ({{ selectedNodeIndices.size }})
+        </button>
         <button
           @click="exitArrowNodeEditing"
-          class="px-3 py-1 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition cursor-pointer whitespace-nowrap shrink-0 shadow-sm"
+          class="px-2.5 py-0.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-[11px] sm:text-xs transition cursor-pointer whitespace-nowrap shrink-0 shadow-sm"
         >
           Done
         </button>
@@ -6235,15 +6472,39 @@ onUnmounted(() => {
         v-if="isArrowNodeEditing && editingArrow"
         class="absolute inset-0 pointer-events-none z-30"
       >
-        <!-- Connecting guide lines and live preview between nodes -->
+        <!-- Marquee Selection Rectangle -->
+        <div
+          v-if="isNodeMarqueeActive"
+          class="absolute border border-indigo-400 bg-indigo-500/15 pointer-events-none z-40 rounded-sm"
+          :style="{
+            left: `${nodeMarqueeRect.x1}px`,
+            top: `${nodeMarqueeRect.y1}px`,
+            width: `${Math.max(0, nodeMarqueeRect.x2 - nodeMarqueeRect.x1)}px`,
+            height: `${Math.max(0, nodeMarqueeRect.y2 - nodeMarqueeRect.y1)}px`
+          }"
+        ></div>
+
+        <!-- Connecting guide lines, stroke double click zone, and live preview between nodes -->
         <svg class="w-full h-full absolute inset-0 pointer-events-none">
+          <!-- Invisible wide hit-testing polyline for double-click node insertion -->
+          <polyline
+            :points="nodeScreenPolyline"
+            fill="none"
+            stroke="transparent"
+            stroke-width="26"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            class="pointer-events-auto cursor-copy"
+            title="Double-click line to add node"
+            @dblclick="insertNodeOnArrowStroke"
+          />
           <polyline
             :points="nodeScreenPolyline"
             fill="none"
             stroke="#6366f1"
             stroke-width="1.5"
             stroke-dasharray="4,4"
-            class="opacity-70"
+            class="opacity-70 pointer-events-none"
           />
           <!-- Live Arrow Shaft Preview during Node Drag -->
           <path
@@ -6271,24 +6532,30 @@ onUnmounted(() => {
           v-for="(pt, idx) in editingArrowPoints"
           :key="idx"
           @pointerdown="onNodePointerDown(idx, $event)"
+          @dblclick.stop.prevent="toggleNodeCorner(idx)"
           class="absolute -translate-x-1/2 -translate-y-1/2 pointer-events-auto cursor-grab active:cursor-grabbing group transition-transform"
           :style="{
             left: `${getNodeScreenPos(pt).x}px`,
             top: `${getNodeScreenPos(pt).y}px`
           }"
-          :title="idx === 0 ? 'Start Node' : idx === editingArrowPoints.length - 1 ? 'End Node' : `Node ${idx}`"
+          :title="idx === 0 ? 'Start Node (Double-click: toggle corner)' : idx === editingArrowPoints.length - 1 ? 'End Node (Double-click: toggle corner)' : `Node ${idx + 1} (Double-click: toggle corner, Del: delete)`"
         >
+          <!-- Corner or Smooth Handle Styling -->
           <div
-            class="w-4 h-4 rounded-full border-2 shadow-lg flex items-center justify-center transition-all group-hover:scale-125"
+            class="w-4 h-4 shadow-lg flex items-center justify-center transition-all group-hover:scale-125"
             :class="[
+              editingArrowCorners.has(idx) ? 'rounded-none rotate-45 border-2' : 'rounded-full border-2',
+              selectedNodeIndices.has(idx) ? 'ring-4 ring-amber-400 border-amber-300 scale-110' : '',
               idx === 0 ? 'bg-emerald-500 border-white text-white ring-2 ring-emerald-400/40' :
               idx === editingArrowPoints.length - 1 ? 'bg-sky-500 border-white text-white ring-2 ring-sky-400/40' :
+              editingArrowCorners.has(idx) ? 'bg-amber-500 border-white text-white' :
               'bg-white border-indigo-600 ring-2 ring-indigo-400/30'
             ]"
           >
             <div
               v-if="idx !== 0 && idx !== editingArrowPoints.length - 1"
-              class="w-1.5 h-1.5 rounded-full bg-indigo-600"
+              class="w-1.5 h-1.5"
+              :class="editingArrowCorners.has(idx) ? 'bg-white rounded-none' : 'rounded-full bg-indigo-600'"
             ></div>
           </div>
         </div>

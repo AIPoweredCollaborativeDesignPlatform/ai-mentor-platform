@@ -148,6 +148,8 @@ const selectedStickyColor = ref<StickyColorConfig>(stickyColors[0]);
 const isStickyMenuOpen = ref(false);
 const activeStickyNote = shallowRef<any>(null);
 const stickyToolbarPosition = ref({ x: 0, y: 0, visible: false });
+const lockToolbarPosition = ref({ x: 0, y: 0, visible: false, hasLocked: false, allLocked: false });
+const hasIsolationChanged = ref(false);
 
 // Arrow Floating Toolbar & Node Editing State
 const activeArrow = shallowRef<any>(null);
@@ -342,6 +344,129 @@ const updateArrowToolbar = () => {
     activeArrow.value = null;
     arrowToolbarPosition.value.visible = false;
   }
+};
+
+const updateLockToolbar = () => {
+  if (!canvas || !isObjectLocked.value || isArrowNodeEditing.value) {
+    lockToolbarPosition.value.visible = false;
+    return;
+  }
+  const active = canvas.getActiveObject() as any;
+  if (!active) {
+    lockToolbarPosition.value.visible = false;
+    return;
+  }
+
+  const isMulti = active.type?.toLowerCase() === 'activeselection' || !!active._objects;
+  const targets: any[] = isMulti && active.getObjects ? active.getObjects() : (active._objects ? active._objects : [active]);
+  const hasLocked = targets.some((o: any) => o.isLocked || (o as any).hasLockedChildren);
+  const allLocked = targets.length > 0 && targets.every((o: any) => o.isLocked);
+
+  if (!hasLocked) {
+    lockToolbarPosition.value.visible = false;
+    return;
+  }
+
+  active.setCoords();
+  const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
+  const coords = active.getCoords ? active.getCoords(true, true) : null;
+  if (coords && coords.length >= 4) {
+    const minSceneX = Math.min(coords[0].x, coords[1].x, coords[2].x, coords[3].x);
+    const maxSceneX = Math.max(coords[0].x, coords[1].x, coords[2].x, coords[3].x);
+    const maxSceneY = Math.max(coords[0].y, coords[1].y, coords[2].y, coords[3].y);
+    const midSceneX = (minSceneX + maxSceneX) / 2;
+
+    const screenX = midSceneX * vpt[0] + vpt[4];
+    const screenY = maxSceneY * vpt[3] + vpt[5];
+
+    lockToolbarPosition.value = {
+      x: screenX,
+      y: screenY + 16,
+      visible: true,
+      hasLocked,
+      allLocked
+    };
+  } else {
+    const bound = active.getBoundingRect(true);
+    const screenX = (bound.left + bound.width / 2) * vpt[0] + vpt[4];
+    const screenY = (bound.top + bound.height) * vpt[3] + vpt[5];
+    lockToolbarPosition.value = {
+      x: screenX,
+      y: screenY + 16,
+      visible: true,
+      hasLocked,
+      allLocked
+    };
+  }
+};
+
+const unlockSelectedObjects = () => {
+  if (!canvas) return;
+  const active = canvas.getActiveObject() as any;
+  if (!active) return;
+
+  if (active.type?.toLowerCase() === 'activeselection' || active instanceof fabric.ActiveSelection) {
+    const targets = active.getObjects ? active.getObjects() : active._objects || [];
+    targets.forEach((o: any) => {
+      o.isLocked = false;
+      o.set({
+        lockMovementX: false,
+        lockMovementY: false,
+        lockRotation: false,
+        lockScalingX: false,
+        lockScalingY: false,
+        hasControls: true
+      });
+    });
+    active.set({
+      lockMovementX: false,
+      lockMovementY: false,
+      lockRotation: false,
+      lockScalingX: false,
+      lockScalingY: false,
+      hasControls: true
+    });
+  } else if ((active.type?.toLowerCase() === 'group' || active instanceof fabric.Group) && !active.isStickyNote && !(active as any).isArrow) {
+    active.isLocked = false;
+    (active as any).hasLockedChildren = false;
+    const children = active.getObjects ? active.getObjects() : active._objects || [];
+    children.forEach((c: any) => {
+      c.isLocked = false;
+      c.set({
+        lockMovementX: false,
+        lockMovementY: false,
+        lockRotation: false,
+        lockScalingX: false,
+        lockScalingY: false,
+        hasControls: true
+      });
+    });
+    active.set({
+      lockMovementX: false,
+      lockMovementY: false,
+      lockRotation: false,
+      lockScalingX: false,
+      lockScalingY: false,
+      hasControls: true
+    });
+  } else {
+    active.isLocked = false;
+    active.set({
+      lockMovementX: false,
+      lockMovementY: false,
+      lockRotation: false,
+      lockScalingX: false,
+      lockScalingY: false,
+      hasControls: true
+    });
+  }
+  isObjectLocked.value = false;
+  lockToolbarPosition.value.visible = false;
+  canvas.requestRenderAll();
+  saveHistoryState();
+  syncToFirebase();
+  updateSelectionState();
+  displayToast('Unlocked');
 };
 
 const getNodeScreenPos = (pt: { x: number; y: number }) => {
@@ -552,8 +677,8 @@ const enterArrowNodeEditing = (arrow: any) => {
 
   arrow.set({
     hasControls: false,
-    selectable: true,
-    evented: true
+    selectable: false,
+    evented: false
   });
   (arrow as any)._nodeDragLastLeft = arrow.left;
   (arrow as any)._nodeDragLastTop = arrow.top;
@@ -1127,7 +1252,9 @@ const duplicateArrow = (arrow: any) => {
   if (arrow.isArrow) {
     const color = (arrow as any).arrowColor || activeColor.value;
     const width = (arrow as any).arrowStrokeWidth || strokeWidth.value;
-    newObj = createArrowFromPoints(newPts, color, width, true);
+    const cornerIndices = (arrow as any).arrowCornerIndices;
+    const origCorners = (arrow as any)._origEndpointCorners;
+    newObj = createArrowFromPoints(newPts, color, width, true, cornerIndices, origCorners);
   } else {
     const color = (arrow as any).stroke || activeColor.value;
     const width = (arrow as any).strokeWidth || strokeWidth.value;
@@ -1163,6 +1290,7 @@ const updateSelectionState = () => {
     activeArrow.value = null;
     stickyToolbarPosition.value.visible = false;
     arrowToolbarPosition.value.visible = false;
+    lockToolbarPosition.value.visible = false;
     return;
   }
   const active = canvas.getActiveObject() as any;
@@ -1187,11 +1315,11 @@ const updateSelectionState = () => {
     const hasSticky = targets.some((o: any) => o.isStickyNote || o.stickyColorConfig);
     isObjectLocked.value = anyLocked;
     active.set({
-      lockMovementX: allLocked,
-      lockMovementY: allLocked,
-      lockRotation: allLocked,
-      lockScalingX: allLocked,
-      lockScalingY: allLocked,
+      lockMovementX: anyLocked,
+      lockMovementY: anyLocked,
+      lockRotation: anyLocked,
+      lockScalingX: anyLocked,
+      lockScalingY: anyLocked,
       hasControls: !allLocked,
       lockUniScaling: hasSticky
     });
@@ -1212,7 +1340,7 @@ const updateSelectionState = () => {
     const anyLocked = targets.some((o: any) => o.isLocked === true);
     const hasSticky = targets.some((o: any) => o.isStickyNote || o.stickyColorConfig);
     isObjectLocked.value = !!active.isLocked || anyLocked;
-    const shouldFreeze = !!active.isLocked || allLocked;
+    const shouldFreeze = !!active.isLocked || anyLocked;
     active.set({
       lockMovementX: shouldFreeze,
       lockMovementY: shouldFreeze,
@@ -1230,6 +1358,7 @@ const updateSelectionState = () => {
   }
   updateStickyToolbar();
   updateArrowToolbar();
+  updateLockToolbar();
 };
 
 // Hit-test helper: ensures selection marquee checks actual stroke/entity, not empty bounding box
@@ -2456,6 +2585,12 @@ const initFabric = () => {
 
       // Tag author and push to user undo stack
       if (!isInternalChange) {
+        if (isIsolationMode.value && target) {
+          if (!isolatedItems.includes(target) && target !== isolatedGroup && target !== liveArrowPreview && target !== drawingObject && !target._isPreview) {
+            isolatedItems.push(target);
+            hasIsolationChanged.value = true;
+          }
+        }
         // Don't push temporary preview objects to undo stack
         if (target !== liveArrowPreview && !target._isPreview && target !== drawingObject) {
           localUserUndoStack.value.push({
@@ -2511,6 +2646,12 @@ const initFabric = () => {
       }
       e.path.authorUid = authStore.uid;
       e.path.set({ perPixelTargetFind: true });
+      if (isIsolationMode.value) {
+        if (!isolatedItems.includes(e.path)) {
+          isolatedItems.push(e.path);
+          hasIsolationChanged.value = true;
+        }
+      }
     }
     if (!isInternalChange) {
       saveHistoryState();
@@ -2522,6 +2663,9 @@ const initFabric = () => {
 
   canvas.on('object:modified', (e: any) => {
     hasObjectTransformed = false;
+    if (isIsolationMode.value) {
+      hasIsolationChanged.value = true;
+    }
     const obj = e?.target;
     if (obj && (obj.isStickyNote || obj.stickyColorConfig)) {
       const sx = Math.abs(obj.scaleX || 1);
@@ -2589,6 +2733,7 @@ const initFabric = () => {
 
     // Reconstruct arrow with fixed pristine arrowhead size, preserved points, and vector crispness
     const syncArrowTransform = (arrowObj: any) => {
+      if (isArrowNodeEditing.value) return;
       if (!arrowObj || !(arrowObj as any).isArrow || !Array.isArray((arrowObj as any).arrowPoints)) return;
       try {
         if (!canvas) return;
@@ -2618,7 +2763,8 @@ const initFabric = () => {
         } else {
           // Scaled or rotated: reconstruct to keep fixed pristine arrowhead
           const cornerIndices = (arrowObj as any).arrowCornerIndices;
-          const newArrow = createArrowFromPoints(newPts, (arrowObj as any).arrowColor, (arrowObj as any).arrowStrokeWidth, true, cornerIndices);
+          const origCorners = (arrowObj as any)._origEndpointCorners;
+          const newArrow = createArrowFromPoints(newPts, (arrowObj as any).arrowColor, (arrowObj as any).arrowStrokeWidth, true, cornerIndices, origCorners);
           if (newArrow) {
             (newArrow as any).isLocked = (arrowObj as any).isLocked;
             (newArrow as any).arrowId = (arrowObj as any).arrowId || Math.random().toString(36).substring(2, 9);
@@ -2955,13 +3101,21 @@ const initFabric = () => {
 
     const scenePoint = canvas.getScenePoint(e);
 
-    // Ctrl+Click / Ctrl+Marquee on group sub-object: directly enter group isolation mode
-    if ((e.ctrlKey || e.metaKey) && !isIsolationMode.value && currentTool.value === 'select') {
+    // Ctrl+Click / Ctrl+Marquee on group sub-object: directly enter group isolation mode (supports nested groups)
+    if ((e.ctrlKey || e.metaKey) && currentTool.value === 'select') {
       const hitTarget = opt.target || (canvas.findTarget(e) as any)?.target || null;
       let group: fabric.Group | null = null;
       let hitChild: any = null;
 
-      if (hitTarget && (hitTarget.type === 'group' || hitTarget instanceof fabric.Group) && !hitTarget.isStickyNote && !(hitTarget as any).isArrow) {
+      const isEligibleGroup = (obj: any) => {
+        if (!obj || (obj.type !== 'group' && !(obj instanceof fabric.Group)) || obj.isStickyNote || (obj as any).isArrow) return false;
+        if (isIsolationMode.value) {
+          return isolatedItems.includes(obj);
+        }
+        return true;
+      };
+
+      if (isEligibleGroup(hitTarget)) {
         group = hitTarget as fabric.Group;
         const children = group.getObjects ? group.getObjects() : (group as any)._objects || [];
         const invGroup = fabric.util.invertTransform(group.calcTransformMatrix());
@@ -2969,26 +3123,14 @@ const initFabric = () => {
 
         for (let i = children.length - 1; i >= 0; i--) {
           const child = children[i];
-          const { tl, tr, br, bl } = child.calcACoords();
-          if (fabric.Intersection.isPointInPolygon(localPoint, [tl, tr, br, bl])) {
+          const cMatrix = child.calcTransformMatrix();
+          const invChild = fabric.util.invertTransform(cMatrix);
+          const ptInChild = fabric.util.transformPoint(localPoint, invChild);
+          const w2 = ((child.width || 0) * (child.scaleX || 1)) / 2 + 6;
+          const h2 = ((child.height || 0) * (child.scaleY || 1)) / 2 + 6;
+          if (Math.abs(ptInChild.x) <= w2 && Math.abs(ptInChild.y) <= h2) {
             hitChild = child;
             break;
-          }
-        }
-
-        // Bounding box tolerance check if polygon hit-test misses thin or boundary strokes
-        if (!hitChild) {
-          for (let i = children.length - 1; i >= 0; i--) {
-            const child = children[i];
-            const { tl, br } = child.calcACoords();
-            const minX = Math.min(tl.x, br.x) - 6;
-            const maxX = Math.max(tl.x, br.x) + 6;
-            const minY = Math.min(tl.y, br.y) - 6;
-            const maxY = Math.max(tl.y, br.y) + 6;
-            if (localPoint.x >= minX && localPoint.x <= maxX && localPoint.y >= minY && localPoint.y <= maxY) {
-              hitChild = child;
-              break;
-            }
           }
         }
 
@@ -3451,7 +3593,8 @@ const initFabric = () => {
 
         let groupToIsolate = targetGroup;
         if (!groupToIsolate) {
-          const groups = canvas.getObjects().filter((o: any) => 
+          const availableObjects = isIsolationMode.value ? isolatedItems : canvas.getObjects();
+          const groups = availableObjects.filter((o: any) => 
             (o.type === 'group' || o instanceof fabric.Group) && !o.isStickyNote && !(o as any).isArrow
           ) as fabric.Group[];
           for (let i = groups.length - 1; i >= 0; i--) {
@@ -3459,14 +3602,21 @@ const initFabric = () => {
             const children = g.getObjects ? g.getObjects() : (g as any)._objects || [];
             const gMatrix = g.calcTransformMatrix();
             const hasChild = children.some((child: any) => {
-              const { tl, tr, br, bl } = child.calcACoords();
-              const sceneCorners = [tl, tr, br, bl].map(pt => fabric.util.transformPoint(pt, gMatrix));
+              const childMatrix = fabric.util.multiplyTransformMatrices(gMatrix, child.calcTransformMatrix());
+              const w2 = ((child.width || 0) * (child.scaleX || 1)) / 2;
+              const h2 = ((child.height || 0) * (child.scaleY || 1)) / 2;
+              const sceneCorners = [
+                fabric.util.transformPoint({ x: -w2, y: -h2 }, childMatrix),
+                fabric.util.transformPoint({ x: w2, y: -h2 }, childMatrix),
+                fabric.util.transformPoint({ x: w2, y: h2 }, childMatrix),
+                fabric.util.transformPoint({ x: -w2, y: h2 }, childMatrix)
+              ];
               const childMinX = Math.min(...sceneCorners.map(p => p.x));
               const childMaxX = Math.max(...sceneCorners.map(p => p.x));
               const childMinY = Math.min(...sceneCorners.map(p => p.y));
               const childMaxY = Math.max(...sceneCorners.map(p => p.y));
-              // Intersects if marquee box touches any part of the child's bounding box
-              return !(childMaxX < boxLeft || childMinX > boxRight || childMaxY < boxTop || childMinY > boxBottom);
+              // Intersects if marquee box touches even a single corner or edge of the child's bounding box
+              return (childMaxX >= boxLeft && childMinX <= boxRight && childMaxY >= boxTop && childMinY <= boxBottom);
             });
             if (hasChild) {
               groupToIsolate = g;
@@ -3481,15 +3631,22 @@ const initFabric = () => {
           const matchedChildren: any[] = [];
 
           children.forEach((child: any) => {
-            const { tl, tr, br, bl } = child.calcACoords();
-            const sceneCorners = [tl, tr, br, bl].map(pt => fabric.util.transformPoint(pt, gMatrix));
+            const childMatrix = fabric.util.multiplyTransformMatrices(gMatrix, child.calcTransformMatrix());
+            const w2 = ((child.width || 0) * (child.scaleX || 1)) / 2;
+            const h2 = ((child.height || 0) * (child.scaleY || 1)) / 2;
+            const sceneCorners = [
+              fabric.util.transformPoint({ x: -w2, y: -h2 }, childMatrix),
+              fabric.util.transformPoint({ x: w2, y: -h2 }, childMatrix),
+              fabric.util.transformPoint({ x: w2, y: h2 }, childMatrix),
+              fabric.util.transformPoint({ x: -w2, y: h2 }, childMatrix)
+            ];
             const childMinX = Math.min(...sceneCorners.map(p => p.x));
             const childMaxX = Math.max(...sceneCorners.map(p => p.x));
             const childMinY = Math.min(...sceneCorners.map(p => p.y));
             const childMaxY = Math.max(...sceneCorners.map(p => p.y));
 
             // Select if marquee box touches any part (even corner) of the child's bounding box
-            const intersects = !(childMaxX < boxLeft || childMinX > boxRight || childMaxY < boxTop || childMinY > boxBottom);
+            const intersects = (childMaxX >= boxLeft && childMinX <= boxRight && childMaxY >= boxTop && childMinY <= boxBottom);
             if (intersects) {
               matchedChildren.push(child);
             }
@@ -3778,56 +3935,35 @@ const initFabric = () => {
       }
     }
 
-    // 1. If group or activeSelection contains locked children, keep locked children strictly stationary in world coordinates
+    // 1. If group or activeSelection contains locked items, prevent accidental movement
     if (obj.type === 'activeselection' || (obj.type === 'group' && !obj.isStickyNote)) {
       const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
-      const lockedChildren = targets.filter((o: any) => o.isLocked);
-      const unlockedChildren = targets.filter((o: any) => !o.isLocked);
-      if (unlockedChildren.length === 0) {
+      const anyLocked = targets.some((o: any) => o.isLocked);
+      if (anyLocked) {
         if (obj._dragStartLeft !== undefined) obj.left = obj._dragStartLeft;
         if (obj._dragStartTop !== undefined) obj.top = obj._dragStartTop;
         obj.setCoords();
         return;
       }
-      if (lockedChildren.length > 0 && obj._dragStartLeft !== undefined && obj._dragStartTop !== undefined) {
-        const deltaX = obj.left - obj._dragStartLeft;
-        const deltaY = obj.top - obj._dragStartTop;
-        lockedChildren.forEach((child: any) => {
-          if (child._dragStartLeft !== undefined && child._dragStartTop !== undefined) {
-            child.left = child._dragStartLeft - deltaX;
-            child.top = child._dragStartTop - deltaY;
-            child.setCoords();
-          }
-        });
-        (obj as any).dirty = true;
-      }
     }
 
-    // 2. Strict boundary clamping: flush coordinates first to obtain true bounding box
+    // 2. Strict boundary clamping: flush coordinates first to obtain true scene bounding box
     obj.setCoords();
-    let bound = obj.getBoundingRect ? obj.getBoundingRect() : null;
+    let bound = obj.getBoundingRect ? obj.getBoundingRect(true) : null;
     if (bound) {
-      if (bound.width >= WORKSPACE_WIDTH) {
-        obj.left = 0;
-      } else {
-        if (bound.left < 0) {
-          obj.left += (0 - bound.left);
-        } else if (bound.left + bound.width > WORKSPACE_WIDTH) {
-          obj.left -= (bound.left + bound.width - WORKSPACE_WIDTH);
-        }
+      if (bound.left < 0) {
+        obj.left += (0 - bound.left);
+      } else if (bound.left + bound.width > WORKSPACE_WIDTH) {
+        obj.left -= (bound.left + bound.width - WORKSPACE_WIDTH);
       }
 
       obj.setCoords();
-      bound = obj.getBoundingRect ? obj.getBoundingRect() : null;
+      bound = obj.getBoundingRect ? obj.getBoundingRect(true) : null;
       if (bound) {
-        if (bound.height >= WORKSPACE_HEIGHT) {
-          obj.top = 0;
-        } else {
-          if (bound.top < 0) {
-            obj.top += (0 - bound.top);
-          } else if (bound.top + bound.height > WORKSPACE_HEIGHT) {
-            obj.top -= (bound.top + bound.height - WORKSPACE_HEIGHT);
-          }
+        if (bound.top < 0) {
+          obj.top += (0 - bound.top);
+        } else if (bound.top + bound.height > WORKSPACE_HEIGHT) {
+          obj.top -= (bound.top + bound.height - WORKSPACE_HEIGHT);
         }
       }
       obj.setCoords();
@@ -3836,6 +3972,7 @@ const initFabric = () => {
     updateLiveDrag(e);
     updateStickyToolbar();
     updateArrowToolbar();
+    updateLockToolbar();
   });
   canvas.on('before:transform', (e: any) => {
     const transform = e?.transform;
@@ -4578,7 +4715,18 @@ const pasteSelection = async (targetPoint?: { x: number; y: number }) => {
         lockUniScaling: false,
         strokeUniform: true
       });
-      obj.initialMatrix = obj.calcTransformMatrix();
+      const oldM = (obj as any).initialMatrix || obj.calcTransformMatrix();
+      const newM = obj.calcTransformMatrix();
+      try {
+        const invOldM = fabric.util.invertTransform(oldM);
+        const deltaM = fabric.util.multiplyTransformMatrices(newM, invOldM);
+        if (Array.isArray(obj.arrowPoints)) {
+          obj.arrowPoints = obj.arrowPoints.map((pt: any) => fabric.util.transformPoint(pt, deltaM));
+        }
+      } catch (err) {
+        console.warn('Failed to offset arrowPoints on paste:', err);
+      }
+      obj.initialMatrix = newM;
       obj.setCoords();
     }
 
@@ -4758,16 +4906,24 @@ const enterGroupIsolation = (group: fabric.Group, targetChild?: any) => {
     });
   });
 
-  if (isIsolationMode.value && isolatedGroup) {
+  const isEnteringRoot = !isIsolationMode.value;
+  if (isEnteringRoot) {
+    isIsolationMode.value = true;
+    isolationStack.value = [];
+    hasIsolationChanged.value = false;
+    // Record true root interaction and opacity properties for ALL canvas objects
+    canvas.getObjects().forEach((o: any) => {
+      o._rootOrigOpacity = o.opacity ?? 1;
+      o._rootOrigSelectable = o.selectable ?? true;
+      o._rootOrigEvented = o.evented ?? true;
+    });
+  } else if (isolatedGroup) {
     // Nested group isolation: push current level onto stack
     isolationStack.value.push({
       group: isolatedGroup,
       items: isolatedItems,
       savedProps
     });
-  } else {
-    isIsolationMode.value = true;
-    isolationStack.value = [];
   }
 
   isolatedGroup = group;
@@ -4775,9 +4931,6 @@ const enterGroupIsolation = (group: fabric.Group, targetChild?: any) => {
   // Dim all other canvas objects except this group
   canvas.getObjects().forEach((o: any) => {
     if (o !== group) {
-      o._origOpacity = o.opacity ?? 1;
-      o._origSelectable = o.selectable ?? true;
-      o._origEvented = o.evented ?? true;
       o.set({ opacity: 0.2, selectable: false, evented: false });
     }
   });
@@ -4893,10 +5046,16 @@ const exitGroupIsolation = () => {
   // Fully exit all isolation levels
   canvas.getObjects().forEach((o: any) => {
     o.set({
-      opacity: o._origOpacity ?? 1,
-      selectable: o._origSelectable ?? true,
-      evented: o._origEvented ?? true
+      opacity: o._rootOrigOpacity !== undefined ? o._rootOrigOpacity : (o.opacity !== undefined ? o.opacity : 1),
+      selectable: o._rootOrigSelectable !== undefined ? o._rootOrigSelectable : true,
+      evented: o._rootOrigEvented !== undefined ? o._rootOrigEvented : true
     });
+    delete o._rootOrigOpacity;
+    delete o._rootOrigSelectable;
+    delete o._rootOrigEvented;
+    delete o._origOpacity;
+    delete o._origSelectable;
+    delete o._origEvented;
   });
 
   isIsolationMode.value = false;
@@ -4904,8 +5063,11 @@ const exitGroupIsolation = () => {
   isolatedItems = [];
   isolationStack.value = [];
   canvas.requestRenderAll();
-  saveHistoryState();
-  syncToFirebase();
+  if (hasIsolationChanged.value) {
+    hasIsolationChanged.value = false;
+    saveHistoryState();
+    syncToFirebase();
+  }
   updateSelectionState();
 };
 
@@ -5315,7 +5477,7 @@ const ungroupObjects = () => {
   if (!activeObj) return;
 
   const isGrp = activeObj.type?.toLowerCase() === 'group' || activeObj instanceof fabric.Group;
-  if (isGrp && !activeObj.isStickyNote) {
+  if (isGrp && !activeObj.isStickyNote && !(activeObj as any).isArrow) {
     const items = (activeObj as fabric.Group).removeAll();
     canvas.remove(activeObj);
     items.forEach(item => {
@@ -5645,6 +5807,7 @@ const handleImageUpload = async (e: Event) => {
 };
 
 const toggleMode = (drawing: boolean) => {
+  if (drawing && isArrowNodeEditing.value) return;
   currentTool.value = drawing ? 'draw' : 'select';
   if (canvas) {
     if (drawing) {
@@ -5659,6 +5822,7 @@ const toggleMode = (drawing: boolean) => {
 };
 
 const addShape = (type: any) => {
+  if (isArrowNodeEditing.value) return;
   currentTool.value = type;
   isDrawingMode.value = false;
   if (canvas) {
@@ -5672,6 +5836,7 @@ const addShape = (type: any) => {
 };
 
 const addText = () => {
+  if (isArrowNodeEditing.value) return;
   currentTool.value = 'text';
   isDrawingMode.value = false;
   if (canvas) {
@@ -6391,14 +6556,14 @@ onUnmounted(() => {
           <span v-if="whiteboardContainerWidth >= 640" class="truncate max-w-[140px]">{{ roomStore.currentRoom?.whiteboardHostName }} Shared Canvas</span>
         </div>
 
-        <!-- Personal Board Badge -->
+        <!-- Personal Badge -->
         <div
           v-else
           class="h-8 px-2.5 rounded-xl bg-white/95 shadow-sm border border-slate-200 flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-slate-700 shrink-0"
-          title="Personal Board (Private Draft)"
+          title="Personal (Private Draft)"
         >
           <User class="w-3.5 h-3.5 text-sky-500 shrink-0" />
-          <span v-if="whiteboardContainerWidth >= 640">Personal Board</span>
+          <span v-if="whiteboardContainerWidth >= 640">Personal</span>
         </div>
       </div>
 
@@ -6416,27 +6581,29 @@ onUnmounted(() => {
         <!-- Group Isolation Mode Top Floating Banner (hidden while in arrow node edit mode) -->
         <div
           v-else-if="isIsolationMode && !isArrowNodeEditing"
-          class="pointer-events-auto flex items-center gap-1.5 sm:gap-2.5 px-2.5 sm:px-3.5 py-1 sm:py-1.5 bg-slate-900/95 border border-indigo-500/80 rounded-2xl shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 whitespace-nowrap select-none shrink-0"
+          class="pointer-events-auto flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1 bg-slate-900/95 border border-indigo-500/80 rounded-2xl shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 whitespace-nowrap select-none shrink-0"
         >
-          <div class="flex items-center gap-1 sm:gap-1.5 text-indigo-300 font-medium text-xs whitespace-nowrap shrink-0">
+          <div v-if="whiteboardContainerWidth >= 560" class="flex items-center gap-1 sm:gap-1.5 text-indigo-300 font-medium text-xs whitespace-nowrap shrink-0">
             <Group class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-indigo-400 shrink-0" />
-            <span>{{ isolationStack.length > 0 ? `Group Isolation (L${isolationStack.length + 1})` : 'Group Isolation' }}</span>
+            <span>{{ isolationStack.length > 0 ? `Isolation (L${isolationStack.length + 1})` : 'Isolation' }}</span>
             <span v-if="whiteboardContainerWidth >= 768" class="text-slate-400 font-normal text-[11px]">(ESC to exit)</span>
           </div>
           <button
             @click="exitGroupIsolation"
-            class="px-2 py-0.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-[11px] sm:text-xs transition cursor-pointer whitespace-nowrap shrink-0 shadow-sm"
+            class="px-2 py-0.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-[11px] sm:text-xs transition cursor-pointer whitespace-nowrap shrink-0 shadow-sm flex items-center gap-1"
+            :title="isolationStack.length > 0 ? 'Back (ESC)' : 'Exit Isolation (ESC)'"
           >
-            {{ isolationStack.length > 0 ? 'Back' : (whiteboardContainerWidth >= 640 ? 'Exit Isolation' : 'Exit') }}
+            <Group v-if="whiteboardContainerWidth < 560" class="w-3.5 h-3.5 text-indigo-200" />
+            <span>{{ isolationStack.length > 0 ? 'Back' : 'Exit' }}</span>
           </button>
         </div>
 
         <!-- Arrow & Line Node Editing Mode Top Floating Banner -->
         <div
           v-else-if="isArrowNodeEditing"
-          class="pointer-events-auto flex items-center gap-1.5 sm:gap-2.5 px-2.5 sm:px-3.5 py-1 sm:py-1.5 bg-slate-900/95 border border-indigo-500/80 rounded-2xl shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 whitespace-nowrap select-none shrink-0"
+          class="pointer-events-auto flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1 bg-slate-900/95 border border-indigo-500/80 rounded-2xl shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 whitespace-nowrap select-none shrink-0"
         >
-          <div class="flex items-center gap-1.5 sm:gap-2 text-indigo-300 font-medium text-xs whitespace-nowrap shrink-0">
+          <div v-if="whiteboardContainerWidth >= 560" class="flex items-center gap-1.5 sm:gap-2 text-indigo-300 font-medium text-xs whitespace-nowrap shrink-0">
             <Waypoints class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-indigo-400 shrink-0" />
             <span>Node Edit</span>
 
@@ -6455,7 +6622,7 @@ onUnmounted(() => {
                   <li>Double-click line: add node</li>
                   <li>Double-click node: toggle corner / smooth</li>
                   <li>Drag stroke line: move whole arrow</li>
-                  <li>Drag box on background: marquee nodes</li>
+                  <li>Drag box on background: 框選多選 (Box Select) nodes</li>
                   <li>Del / Backspace: delete selected nodes</li>
                 </ul>
               </div>
@@ -6466,16 +6633,19 @@ onUnmounted(() => {
             <button
               v-if="selectedNodeIndices.size > 0"
               @click="deleteSelectedArrowNodes"
-              class="px-2 py-0.5 rounded-lg bg-rose-600/80 hover:bg-rose-500 text-white font-medium text-[11px] sm:text-xs transition cursor-pointer whitespace-nowrap shrink-0"
+              class="px-1.5 sm:px-2 py-0.5 rounded-lg bg-rose-600/80 hover:bg-rose-500 text-white font-medium text-[11px] sm:text-xs transition cursor-pointer whitespace-nowrap shrink-0"
               title="Delete selected nodes (Del/Backspace)"
             >
-              Delete ({{ selectedNodeIndices.size }})
+              <Trash2 v-if="whiteboardContainerWidth < 560" class="w-3.5 h-3.5" />
+              <span v-else>Delete ({{ selectedNodeIndices.size }})</span>
             </button>
             <button
               @click="exitArrowNodeEditing"
-              class="px-2.5 py-0.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-[11px] sm:text-xs transition cursor-pointer whitespace-nowrap shrink-0 shadow-sm"
+              class="px-2 sm:px-2.5 py-0.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-[11px] sm:text-xs transition cursor-pointer whitespace-nowrap shrink-0 shadow-sm flex items-center gap-1"
+              title="Done editing nodes (ESC)"
             >
-              Done
+              <Waypoints v-if="whiteboardContainerWidth < 560" class="w-3.5 h-3.5 text-indigo-200" />
+              <span>Done</span>
             </button>
           </div>
         </div>
@@ -6486,7 +6656,7 @@ onUnmounted(() => {
         class="flex items-center gap-1 sm:gap-2 transition-opacity duration-200 pointer-events-auto shrink-0"
         :class="{ 'opacity-15': isHoveringSend }"
       >
-        <!-- Explicit Save Button with Animated Auto-Save Status (Saving, Saved, Offline, Save Board) -->
+        <!-- Explicit Save Button with Animated Auto-Save Status (Saving, Saved, Offline, Save) -->
         <button
           @click="handleQuickSave"
           class="h-8 px-2.5 sm:px-3 rounded-xl transition-all duration-200 text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-sm border"
@@ -6505,20 +6675,20 @@ onUnmounted(() => {
           <Check v-else-if="saveStatus === 'saved' || isRecentlySaved" class="w-3.5 h-3.5 text-emerald-600 shrink-0" />
           <CloudOff v-else-if="saveStatus === 'offline'" class="w-3.5 h-3.5 text-amber-600 shrink-0" />
           <Save v-else class="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-          <span v-if="whiteboardContainerWidth >= 680">
+          <span v-if="whiteboardContainerWidth >= 680" class="w-14 text-center inline-block truncate">
             {{
               saveStatus === 'saving'
                 ? 'Saving...'
                 : saveStatus === 'saved' || isRecentlySaved
                   ? 'Saved'
                   : saveStatus === 'offline'
-                    ? 'Saved offline'
-                    : 'Save Board'
+                    ? 'Offline'
+                    : 'Save'
             }}
           </span>
         </button>
 
-        <!-- Toggle: Make Private (if Shared & Host) OR Share Board (if Personal) directly next to Save -->
+        <!-- Toggle: Make Private (if Shared & Host) OR Share (if Personal) directly next to Save -->
         <button
           v-if="isCollabActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid"
           @click="showPrivateConfirmModal = true"
@@ -6537,7 +6707,7 @@ onUnmounted(() => {
           title="Publish as shared canvas for team collaboration"
         >
           <Globe class="w-3.5 h-3.5 shrink-0" />
-          <span v-if="whiteboardContainerWidth >= 680">Share Board</span>
+          <span v-if="whiteboardContainerWidth >= 680">Share</span>
         </button>
 
         <!-- Shortcuts Cheatsheet -->
@@ -6749,6 +6919,29 @@ onUnmounted(() => {
           title="Delete Note"
         >
           <Trash2 class="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      <!-- Floating Unlock Button below Locked Object or Selection -->
+      <div
+        v-if="lockToolbarPosition.visible && lockToolbarPosition.hasLocked"
+        class="absolute z-35 flex items-center p-1 bg-slate-900/95 backdrop-blur-md border border-amber-500/70 rounded-xl shadow-2xl transition-all animate-in fade-in zoom-in-95 pointer-events-auto"
+        :class="{ 'opacity-15': isHoveringSend }"
+        @mousedown.prevent
+        :style="{
+          left: `${lockToolbarPosition.x}px`,
+          top: `${lockToolbarPosition.y}px`,
+          transform: 'translate(-50%, 0)'
+        }"
+      >
+        <button
+          @mousedown.prevent
+          @click="unlockSelectedObjects"
+          class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 hover:text-amber-200 border border-amber-500/40 text-xs font-medium transition cursor-pointer shadow-sm"
+          title="Click to unlock (Ctrl+L)"
+        >
+          <Lock class="w-3.5 h-3.5 text-amber-400" />
+          <span class="text-[11px] font-semibold">Unlock</span>
         </button>
       </div>
 
@@ -7004,9 +7197,9 @@ onUnmounted(() => {
             Stop
           </button>
         </div>
-        <form v-else @submit.prevent="generateAIObject" class="flex items-center h-9 sm:h-10 bg-white/95 rounded-2xl shadow-xl border border-slate-200 p-1">
-          <input v-model="aiPrompt" type="text" :placeholder="isStackedToolbar ? 'AI Vector icon, chart...' : 'AI Vector...'" class="flex-1 bg-transparent px-2 py-1 text-xs focus:outline-none text-slate-700 placeholder-slate-400 min-w-0" />
-          <button type="submit" :disabled="!aiPrompt.trim()" class="p-1 sm:p-1.5 rounded-xl bg-indigo-100 text-indigo-600 hover:bg-indigo-200 transition disabled:opacity-50 disabled:cursor-not-allowed shrink-0 cursor-pointer">
+        <form v-else @submit.prevent="generateAIObject" class="flex items-center h-9 sm:h-10 bg-white/95 rounded-2xl shadow-xl border border-slate-200 p-1" :class="{ 'opacity-40 pointer-events-none cursor-not-allowed': isArrowNodeEditing }">
+          <input :disabled="isArrowNodeEditing" v-model="aiPrompt" type="text" :placeholder="isStackedToolbar ? 'AI Vector icon, chart...' : 'AI Vector...'" class="flex-1 bg-transparent px-2 py-1 text-xs focus:outline-none text-slate-700 placeholder-slate-400 min-w-0" />
+          <button type="submit" :disabled="!aiPrompt.trim() || isArrowNodeEditing" class="p-1 sm:p-1.5 rounded-xl bg-indigo-100 text-indigo-600 hover:bg-indigo-200 transition disabled:opacity-50 disabled:cursor-not-allowed shrink-0 cursor-pointer">
             <Sparkles class="w-3.5 h-3.5" />
           </button>
         </form>
@@ -7033,7 +7226,17 @@ onUnmounted(() => {
           </button>
           
           <div class="relative">
-            <button @click="toggleMode(true); isBrushMenuOpen = !isBrushMenuOpen" class="rounded-xl transition flex items-center gap-1 cursor-pointer" :class="[currentTool !== 'select' && currentTool !== 'text' && currentTool !== 'sticky' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500', isNarrowToolbar ? 'p-1' : 'p-1.5']" title="Draw & Shapes">
+            <button
+              @click="toggleMode(true); isBrushMenuOpen = !isBrushMenuOpen"
+              class="rounded-xl transition flex items-center gap-1 cursor-pointer"
+              :class="[
+                currentTool !== 'select' && currentTool !== 'text' && currentTool !== 'sticky' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500',
+                isNarrowToolbar ? 'p-1' : 'p-1.5',
+                { 'opacity-40 pointer-events-none cursor-not-allowed': isArrowNodeEditing }
+              ]"
+              :disabled="isArrowNodeEditing"
+              title="Draw & Shapes"
+            >
               <Pencil class="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </button>
             
@@ -7054,7 +7257,17 @@ onUnmounted(() => {
             </div>
           </div>
           
-          <button @click="addText" class="rounded-xl transition cursor-pointer" :class="[currentTool === 'text' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500', isNarrowToolbar ? 'p-1' : 'p-1.5']" title="Add Text">
+          <button
+            @click="addText"
+            class="rounded-xl transition cursor-pointer"
+            :class="[
+              currentTool === 'text' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500',
+              isNarrowToolbar ? 'p-1' : 'p-1.5',
+              { 'opacity-40 pointer-events-none cursor-not-allowed': isArrowNodeEditing }
+            ]"
+            :disabled="isArrowNodeEditing"
+            title="Add Text"
+          >
             <Type class="w-3.5 h-3.5 sm:w-4 sm:h-4" />
           </button>
 
@@ -7063,7 +7276,12 @@ onUnmounted(() => {
             <button
               @click="addSticky(); isStickyMenuOpen = !isStickyMenuOpen"
               class="rounded-xl transition flex items-center gap-1 cursor-pointer"
-              :class="[currentTool === 'sticky' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500', isNarrowToolbar ? 'p-1' : 'p-1.5']"
+              :class="[
+                currentTool === 'sticky' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500',
+                isNarrowToolbar ? 'p-1' : 'p-1.5',
+                { 'opacity-40 pointer-events-none cursor-not-allowed': isArrowNodeEditing }
+              ]"
+              :disabled="isArrowNodeEditing"
               title="Sticky Note"
             >
               <StickyNote class="w-3.5 h-3.5 sm:w-4 sm:h-4" />
@@ -7124,7 +7342,7 @@ onUnmounted(() => {
           
           <div class="flex items-center" :class="isNarrowToolbar ? 'gap-0.5' : 'gap-0.5 sm:gap-1'">
             <input ref="fileInputRef" type="file" accept="image/*" class="hidden" @change="handleImageUpload" />
-            <button @click="fileInputRef?.click()" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="isNarrowToolbar ? 'p-1' : 'p-1.5'" title="Add Image"><ImageIcon class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
+            <button @click="fileInputRef?.click()" :disabled="isArrowNodeEditing" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="[isNarrowToolbar ? 'p-1' : 'p-1.5', { 'opacity-40 pointer-events-none cursor-not-allowed': isArrowNodeEditing }]" title="Add Image"><ImageIcon class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
             <button @click="undo" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="[{'opacity-50 cursor-not-allowed': !canUndo}, isNarrowToolbar ? 'p-1' : 'p-1.5']" title="Undo (Ctrl+Z)" :disabled="!canUndo"><Undo2 class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
             <button @click="redo" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="[{'opacity-50 cursor-not-allowed': !canRedo}, isNarrowToolbar ? 'p-1' : 'p-1.5']" title="Redo (Ctrl+Y / Ctrl+Shift+Z)" :disabled="!canRedo"><Redo2 class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
             <button @click="deleteSelected" class="rounded-xl hover:bg-rose-100 text-rose-500 transition cursor-pointer" :class="isNarrowToolbar ? 'p-1' : 'p-1.5'" title="Delete Selected (Del)"><Trash2 class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
@@ -7404,7 +7622,7 @@ onUnmounted(() => {
           </div>
           <div class="col-span-1 sm:col-span-2 p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80 text-[11px] text-slate-300 flex items-center gap-2">
             <span class="text-indigo-400 font-bold shrink-0">💡 Note:</span>
-            <span><strong class="text-indigo-300">Group Isolation:</strong> Double-click any group to edit individual elements. Press <kbd class="px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded-md font-mono text-[10px] text-slate-200">ESC</kbd> or click "Exit Isolation" to return.</span>
+            <span><strong class="text-indigo-300">Group Isolation:</strong> Double-click any group or use <kbd class="px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded-md font-mono text-[10px] text-slate-200">Ctrl+Drag</kbd> to edit individual elements. Press <kbd class="px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded-md font-mono text-[10px] text-slate-200">ESC</kbd> or click "Exit" to return.</span>
           </div>
         </div>
       </div>

@@ -163,6 +163,7 @@ const selectedNodeIndices = ref<Set<number>>(new Set());
 const isNodeMarqueeActive = ref(false);
 const nodeMarqueeRect = ref<{ x1: number; y1: number; x2: number; y2: number }>({ x1: 0, y1: 0, x2: 0, y2: 0 });
 const isDraggingNode = ref(false);
+const showNodeHelp = ref(false);
 const viewportVersion = ref(0);
 let liveArrowPreview: any = null;
 let arrowPreviewRafId: number | null = null;
@@ -742,6 +743,7 @@ const exitArrowNodeEditing = () => {
   selectedNodeIndices.value.clear();
   isDraggingNode.value = false;
   isNodeMarqueeActive.value = false;
+  showNodeHelp.value = false;
 
   if (arrow && canvas) {
     arrow.set({
@@ -6682,24 +6684,29 @@ onUnmounted(() => {
             <Waypoints class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-indigo-400 shrink-0" />
             <span>Node Edit</span>
 
-            <!-- Compact ? Help Button with high-contrast card tooltip -->
-            <div class="relative group/tooltip inline-flex items-center">
+            <!-- Compact ? Help Button with concise card tooltip (vanishes immediately on mouse leave) -->
+            <div
+              class="relative inline-flex items-center"
+              @mouseenter="showNodeHelp = true"
+              @mouseleave="showNodeHelp = false"
+            >
               <button
                 type="button"
-                class="w-4 h-4 rounded-full bg-indigo-500/20 hover:bg-indigo-500/40 text-indigo-300 text-[10px] font-bold flex items-center justify-center transition cursor-help border border-indigo-400/40"
+                @click.stop="showNodeHelp = !showNodeHelp"
+                class="w-4 h-4 rounded-full bg-indigo-500/20 hover:bg-indigo-500/40 text-indigo-300 text-[10px] font-bold flex items-center justify-center transition cursor-pointer border border-indigo-400/40"
                 aria-label="Node editing guide"
               >
                 ?
               </button>
-              <div class="absolute top-full left-1/2 -translate-x-1/2 mt-2 hidden group-hover/tooltip:block group-focus-within/tooltip:block z-50 w-64 p-2.5 bg-slate-950/95 border border-indigo-500/60 rounded-xl text-slate-200 text-xs shadow-2xl backdrop-blur-md pointer-events-none transition select-none">
-                <p class="font-semibold text-indigo-300 mb-1">Node Editing Tips:</p>
-                <ul class="space-y-1 text-[11px] text-slate-300 leading-snug list-disc pl-4">
-                  <li>Double-click line: add node</li>
-                  <li>Double-click node: toggle corner / smooth</li>
-                  <li>Drag stroke line: move whole arrow</li>
-                  <li>Drag box on background: 框選多選 (Box Select) nodes</li>
-                  <li>Del / Backspace: delete selected nodes</li>
-                </ul>
+              <div
+                v-if="showNodeHelp"
+                class="absolute top-full left-1/2 -translate-x-1/2 mt-2 z-50 w-56 p-2 bg-slate-950/95 border border-indigo-500/60 rounded-xl text-slate-200 text-xs shadow-2xl backdrop-blur-md transition select-none"
+              >
+                <div class="text-[11px] text-slate-300 leading-snug space-y-1">
+                  <p><span class="text-indigo-300 font-medium">Double-click</span> line to add node, node to toggle corner.</p>
+                  <p><span class="text-indigo-300 font-medium">Drag</span> line to move arrow, background to box select.</p>
+                  <p><span class="text-indigo-300 font-medium">Del / Backspace</span> to delete selected nodes.</p>
+                </div>
               </div>
             </div>
           </div>

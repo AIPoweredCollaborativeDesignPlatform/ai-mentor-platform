@@ -57,7 +57,10 @@ service cloud.firestore {
           (request.resource.data.senderUid == request.auth.uid ||
            request.resource.data.senderUid == 'system' ||
            request.resource.data.senderUid == 'ai_mentor');
-        allow update, delete: if isRoomHost(roomId) || 
+        allow update: if isRoomHost(roomId) || 
+          (isAuthenticated() && resource.data.senderUid == request.auth.uid) ||
+          (isApprovedParticipant(roomId) && resource.data.type == 'whiteboard_state');
+        allow delete: if isRoomHost(roomId) || 
           (isAuthenticated() && resource.data.senderUid == request.auth.uid);
       }
     }

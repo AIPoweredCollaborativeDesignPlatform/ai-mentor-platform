@@ -1586,22 +1586,6 @@ export const useRoomStore = defineStore('room', () => {
         whiteboardState: null,
         whiteboardThumbnail: null
       });
-
-      // Move shared whiteboard back to host's Personal collection (clean out from Public area!)
-      const publicSharedAssets = currentRoom.value.messages.filter(m => 
-        m.type === 'whiteboard_state' && 
-        !m.metadata?.isPrivate && 
-        (m.metadata?.creatorUid === authStore.uid || m.senderUid === authStore.uid)
-      );
-      for (const asset of publicSharedAssets) {
-        await updateCustomMessage(asset.id, {
-          metadata: {
-            ...(asset.metadata || {}),
-            isPrivate: true,
-            isSharedPost: true
-          }
-        });
-      }
     } catch (e) {
       console.warn('Failed to end whiteboard:', e);
     }

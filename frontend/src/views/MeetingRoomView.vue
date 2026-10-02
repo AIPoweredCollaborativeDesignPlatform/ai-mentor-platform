@@ -123,12 +123,29 @@ watch(() => roomStore.currentRoom?.whiteboardActive, (isActive, wasActive) => {
       isJoiningSharedBoard.value = false;
       activeWhiteboardAssetId.value = null;
       currentWhiteboardJson.value = undefined;
-      roomStore.pushToast('Collaboration Ended', 'The host converted the whiteboard to private.', 'info');
+      roomStore.pushToast('Collaboration Ended', 'The shared whiteboard session has ended.', 'info');
     }
   }
 });
 
+const isWhiteboardSharedSession = computed(() => {
+  if (!roomStore.currentRoom?.whiteboardActive) return false;
+  if (isLocalWhiteboardPublisher.value || roomStore.currentRoom?.whiteboardHostUid === authStore.uid) return true;
+  if (isJoiningSharedBoard.value) return true;
+  if (activeWhiteboardAssetId.value) {
+    const asset = roomStore.currentRoom?.messages.find(m => m.id === activeWhiteboardAssetId.value);
+    if (asset?.metadata?.isPrivate && !asset?.metadata?.isSharedPost) {
+      return false;
+    }
+  }
+  return true;
+});
+
 const handleOpenNewWhiteboard = () => {
+  if (roomStore.currentRoom?.whiteboardActive) {
+    handleJoinSharedWhiteboard();
+    return;
+  }
   isJoiningSharedBoard.value = false;
   activeWhiteboardAssetId.value = null;
   currentWhiteboardJson.value = undefined;
@@ -137,8 +154,14 @@ const handleOpenNewWhiteboard = () => {
 
 const handleJoinSharedWhiteboard = () => {
   isJoiningSharedBoard.value = true;
-  activeWhiteboardAssetId.value = null;
-  currentWhiteboardJson.value = roomStore.currentRoom?.whiteboardState || undefined;
+  const hostUid = roomStore.currentRoom?.whiteboardHostUid;
+  const existingShared = roomStore.currentRoom?.messages.find(m => 
+    m.type === 'whiteboard_state' && 
+    (!hostUid || m.metadata?.creatorUid === hostUid || m.senderUid === hostUid) && 
+    (m.metadata?.isSharedPost || !m.metadata?.isPrivate)
+  );
+  activeWhiteboardAssetId.value = existingShared?.id || null;
+  currentWhiteboardJson.value = roomStore.currentRoom?.whiteboardState || existingShared?.metadata?.whiteboardJson || undefined;
   isWhiteboardOpen.value = true;
 };
 
@@ -178,20 +201,19 @@ const handleToggleHideAsset = async (msg: any) => {
 const handleSaveWhiteboardState = async (json: string, previewUrl: string, explicitAssetId?: string | null, isPrivateParam?: boolean) => {
   let targetAssetId = explicitAssetId || activeWhiteboardAssetId.value;
   // Check if whiteboard is in shared session or personal session
-  const isCurrentBoardShared = isJoiningSharedBoard.value || (isLocalWhiteboardPublisher.value && !activeWhiteboardAssetId.value);
-  const isShared = isCurrentBoardShared && !!roomStore.currentRoom?.whiteboardActive;
-  const isPrivate = isPrivateParam !== undefined ? isPrivateParam : !isShared;
+  const isShared = isWhiteboardSharedSession.value;
+  const isPrivate = isShared ? false : (isPrivateParam !== undefined ? isPrivateParam : true);
 
   const hostUid = roomStore.currentRoom?.whiteboardHostUid || authStore.uid;
   const hostName = roomStore.currentRoom?.whiteboardHostName || authStore.displayName || 'Host';
 
   if (isShared) {
-    // In shared session, the asset ALWAYS belongs to the initiator (host)
+    // In shared session, look for the shared asset in this room
     if (!targetAssetId) {
       const existingShared = roomStore.currentRoom?.messages.find(m => 
         m.type === 'whiteboard_state' && 
-        (m.metadata?.creatorUid === hostUid || m.senderUid === hostUid) && 
-        !m.metadata?.isPrivate
+        (!hostUid || m.metadata?.creatorUid === hostUid || m.senderUid === hostUid) && 
+        (m.metadata?.isSharedPost || !m.metadata?.isPrivate)
       );
       if (existingShared) {
         targetAssetId = existingShared.id;
@@ -232,11 +254,11 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string, expli
   } else {
     // Create new whiteboard asset under appropriate owner
     const newId = await roomStore.sendCustomMessage({
-      senderUid: isShared ? hostUid : authStore.uid,
-      senderName: isShared ? hostName : (authStore.displayName || 'Participant'),
-      senderAvatar: isShared ? (roomStore.currentRoom?.participants[hostUid]?.avatar || '🎨') : (authStore.avatar || '🎨'),
+      senderUid: authStore.uid,
+      senderName: authStore.displayName || 'Participant',
+      senderAvatar: authStore.avatar || '🎨',
       type: 'whiteboard_state',
-      content: isPrivate ? 'Personal Draft' : 'Shared Whiteboard saved to Assets Library',
+      content: isPrivate ? 'Personal Draft' : `${hostName} shared a collaborative whiteboard`,
       fileData: {
         type: 'image',
         url: previewUrl,
@@ -271,11 +293,11 @@ const handleRetryAiMessage = async (messageId: string) => {
 const openWhiteboardState = (msg: any) => {
   if (msg.type !== 'whiteboard_state') return;
   const isHost = roomStore.currentRoom?.whiteboardHostUid === authStore.uid || msg.metadata?.creatorUid === authStore.uid || msg.senderUid === authStore.uid;
-  if (!roomStore.currentRoom?.whiteboardActive && !isHost && msg.metadata?.isPrivate) {
-    roomStore.pushToast('Access Restricted', 'This whiteboard is private or the shared session has ended.', 'warning');
+  if (!roomStore.currentRoom?.whiteboardActive && !isHost && msg.metadata?.isPrivate && !msg.metadata?.isSharedPost) {
+    roomStore.pushToast('Access Restricted', 'This whiteboard is private.', 'warning');
     return;
   }
-  if (roomStore.currentRoom?.whiteboardActive && !msg.metadata?.isPrivate) {
+  if (roomStore.currentRoom?.whiteboardActive && (msg.metadata?.isSharedPost || !msg.metadata?.isPrivate)) {
     handleJoinSharedWhiteboard();
     return;
   }
@@ -293,7 +315,7 @@ const allPublicAlbumItems = computed(() => {
   if (!roomStore.currentRoom?.messages) return [];
   const items = roomStore.currentRoom.messages.filter(m => {
     if (m.type === 'whiteboard_state') {
-      if (m.metadata?.isPrivate) return false;
+      if (m.metadata?.isPrivate && !m.metadata?.isSharedPost) return false;
     } else if (m.type !== 'ai_asset' && !(m.type === 'file' && m.fileData?.type === 'image')) {
       return false;
     }
@@ -1547,7 +1569,7 @@ onUnmounted(() => {
                 v-else-if="msg.type === 'whiteboard_state'"
                 class="mt-2 rounded-xl overflow-hidden shadow-lg relative border transition max-w-[210px] sm:max-w-[250px] bg-slate-900 select-none"
                 :class="[
-                  (!roomStore.currentRoom?.whiteboardActive || msg.metadata?.isPrivate) && msg.senderUid !== authStore.uid && msg.metadata?.creatorUid !== authStore.uid
+                  (msg.metadata?.isPrivate && !msg.metadata?.isSharedPost && msg.senderUid !== authStore.uid && msg.metadata?.creatorUid !== authStore.uid)
                     ? 'opacity-60 cursor-not-allowed border-slate-800'
                     : 'cursor-pointer group hover:border-indigo-500 border-indigo-500/40'
                 ]"
@@ -1559,7 +1581,7 @@ onUnmounted(() => {
                     :src="msg.fileData.url"
                     class="w-full h-full object-cover transition duration-300"
                     :class="[
-                      (!roomStore.currentRoom?.whiteboardActive || msg.metadata?.isPrivate) && msg.senderUid !== authStore.uid && msg.metadata?.creatorUid !== authStore.uid
+                      (msg.metadata?.isPrivate && !msg.metadata?.isSharedPost && msg.senderUid !== authStore.uid && msg.metadata?.creatorUid !== authStore.uid)
                         ? 'grayscale brightness-75'
                         : 'group-hover:scale-105'
                     ]"
@@ -1568,21 +1590,21 @@ onUnmounted(() => {
                     <Palette class="w-8 h-8 opacity-40" />
                   </div>
 
-                  <!-- Locked Overlay for non-hosts when session ended or private -->
+                  <!-- Locked Overlay for non-hosts when explicitly private draft -->
                   <div
-                    v-if="(!roomStore.currentRoom?.whiteboardActive || msg.metadata?.isPrivate) && msg.senderUid !== authStore.uid && msg.metadata?.creatorUid !== authStore.uid"
+                    v-if="msg.metadata?.isPrivate && !msg.metadata?.isSharedPost && msg.senderUid !== authStore.uid && msg.metadata?.creatorUid !== authStore.uid"
                     class="absolute inset-0 bg-slate-950/80 flex flex-col items-center justify-center p-2 text-center backdrop-blur-xs"
                   >
                     <div class="w-7 h-7 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center mb-1">
                       <Lock class="w-3.5 h-3.5 text-amber-400" />
                     </div>
-                    <span class="text-[10px] font-bold text-slate-200 leading-tight">Private / Ended</span>
-                    <span class="text-[8px] text-slate-400">Host access only</span>
+                    <span class="text-[10px] font-bold text-slate-200 leading-tight">Private Draft</span>
+                    <span class="text-[8px] text-slate-400">Creator access only</span>
                   </div>
 
                   <!-- Active Live Badge (Top Right) -->
                   <div
-                    v-else-if="roomStore.currentRoom?.whiteboardActive && !msg.metadata?.isPrivate"
+                    v-else-if="roomStore.currentRoom?.whiteboardActive && (msg.metadata?.isSharedPost || !msg.metadata?.isPrivate)"
                     class="absolute top-1.5 right-1.5 z-10 px-1.5 py-0.5 rounded-full bg-emerald-500/90 text-white text-[9px] font-bold shadow flex items-center gap-1 animate-pulse"
                   >
                     <span class="w-1.5 h-1.5 rounded-full bg-white"></span>
@@ -1591,7 +1613,7 @@ onUnmounted(() => {
 
                   <!-- Active Join Hover Action -->
                   <div
-                    v-if="roomStore.currentRoom?.whiteboardActive || msg.senderUid === authStore.uid || msg.metadata?.creatorUid === authStore.uid"
+                    v-if="!msg.metadata?.isPrivate || msg.metadata?.isSharedPost || msg.senderUid === authStore.uid || msg.metadata?.creatorUid === authStore.uid"
                     class="absolute inset-0 flex items-center justify-center bg-indigo-950/60 opacity-0 group-hover:opacity-100 transition z-10"
                   >
                     <span class="bg-indigo-600 hover:bg-indigo-500 text-white px-2.5 py-1 rounded-lg text-xs font-bold shadow-lg flex items-center gap-1.5 transition">
@@ -1606,11 +1628,11 @@ onUnmounted(() => {
                   <span class="text-slate-300 font-medium truncate max-w-[140px]">
                     {{ msg.metadata?.creatorName || msg.senderName }}'s Board
                   </span>
-                  <span v-if="roomStore.currentRoom?.whiteboardActive && !msg.metadata?.isPrivate" class="text-emerald-400 font-semibold text-[9px] shrink-0">
+                  <span v-if="roomStore.currentRoom?.whiteboardActive && (msg.metadata?.isSharedPost || !msg.metadata?.isPrivate)" class="text-emerald-400 font-semibold text-[9px] shrink-0">
                     Active
                   </span>
                   <span v-else class="text-slate-500 text-[9px] shrink-0">
-                    Ended
+                    Saved
                   </span>
                 </div>
               </div>
@@ -1995,7 +2017,7 @@ onUnmounted(() => {
           ref="whiteboardRef"
           :initialJson="currentWhiteboardJson"
           :activeAssetId="activeWhiteboardAssetId"
-          :isSharedSession="isJoiningSharedBoard || (!activeWhiteboardAssetId && isLocalWhiteboardPublisher)"
+          :isSharedSession="isWhiteboardSharedSession"
           @close="isWhiteboardOpen = false; isJoiningSharedBoard = false; activeWhiteboardAssetId = null; currentWhiteboardJson = undefined;"
           @share="handleShareWhiteboard"
           @save-state="handleSaveWhiteboardState"

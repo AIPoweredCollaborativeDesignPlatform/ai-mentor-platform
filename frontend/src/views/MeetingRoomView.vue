@@ -129,23 +129,19 @@ watch(() => roomStore.currentRoom?.whiteboardActive, (isActive, wasActive) => {
 });
 
 const isWhiteboardSharedSession = computed(() => {
-  if (!roomStore.currentRoom?.whiteboardActive) return false;
-  if (isLocalWhiteboardPublisher.value || roomStore.currentRoom?.whiteboardHostUid === authStore.uid) return true;
+  if (isLocalWhiteboardPublisher.value) return true;
   if (isJoiningSharedBoard.value) return true;
   if (activeWhiteboardAssetId.value) {
     const asset = roomStore.currentRoom?.messages.find(m => m.id === activeWhiteboardAssetId.value);
-    if (asset?.metadata?.isPrivate && !asset?.metadata?.isSharedPost) {
-      return false;
+    if (asset?.metadata?.isSharedPost || (asset && !asset.metadata?.isPrivate)) {
+      return true;
     }
   }
-  return true;
+  return false;
 });
 
 const handleOpenNewWhiteboard = () => {
-  if (roomStore.currentRoom?.whiteboardActive) {
-    handleJoinSharedWhiteboard();
-    return;
-  }
+  // Always open a clean, new blank whiteboard (entering collab is done via chat message or assets library)
   isJoiningSharedBoard.value = false;
   activeWhiteboardAssetId.value = null;
   currentWhiteboardJson.value = undefined;

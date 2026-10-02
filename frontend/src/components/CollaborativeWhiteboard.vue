@@ -2159,17 +2159,21 @@ const createArrowFromPoints = (
     }
     finalPts = sampled.map(p => ({ x: p.x, y: p.y }));
 
-    let pRef = p0;
-    if (sampled.length >= 2) {
+    // Endpoint vector calculation: Align strictly with the stroke's actual local arrival vector at pn
+    // Looking back only 6-8px ensures the arrow head aligns with the stroke's endpoint vector, not p0 or distant knots
+    let tangentAngle = Math.atan2(pn.y - p0.y, pn.x - p0.x);
+    const ptsSource = (pts.length >= 2) ? pts : sampled;
+    if (ptsSource.length >= 2) {
       let accumulated = 0;
-      const targetLookback = Math.max(22, headLen * 1.25);
-      for (let i = sampled.length - 1; i >= 1; i--) {
-        accumulated += Math.hypot(sampled[i].x - sampled[i - 1].x, sampled[i].y - sampled[i - 1].y);
-        pRef = sampled[i - 1];
-        if (accumulated >= targetLookback) break;
+      let pRef = ptsSource[ptsSource.length - 2];
+      for (let i = ptsSource.length - 1; i >= 1; i--) {
+        const d = Math.hypot(ptsSource[i].x - ptsSource[i - 1].x, ptsSource[i].y - ptsSource[i - 1].y);
+        accumulated += d;
+        pRef = ptsSource[i - 1];
+        if (accumulated >= 8) break;
       }
+      tangentAngle = Math.atan2(pn.y - pRef.y, pn.x - pRef.x);
     }
-    const tangentAngle = Math.atan2(pn.y - pRef.y, pn.x - pRef.x);
 
     const baseDist = headLen * Math.cos(headAngle);
     const shaftCut = Math.max(2, baseDist - Math.min(3, headLen * 0.15));
@@ -2680,23 +2684,16 @@ const initFabric = () => {
       ctx.save();
       ctx.transform(vpt[0], vpt[1], vpt[2], vpt[3], vpt[4], vpt[5]);
 
-      const drawSolidOutline = (obj: any) => {
-        if (!obj || !obj.visible) return;
-        ctx.save();
-        const m = obj.calcTransformMatrix();
-        ctx.transform(m[0], m[1], m[2], m[3], m[4], m[5]);
-        ctx.strokeStyle = '#f59e0b';
-        ctx.shadowColor = '#f59e0b';
-        ctx.shadowBlur = 4;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-
-        if (obj.isArrow && obj._objects) {
-          obj._objects.forEach((child: any) => drawSolidOutline(child));
-        } else if (obj.type === 'path' && obj.path) {
-          ctx.lineWidth = (obj.strokeWidth || 4) + 6;
+      const renderObjectGeometry = (target: any) => {
+        if (!target) return;
+        if (target.type === 'path' && target.path) {
+          ctx.save();
+          if (target.pathOffset) {
+            ctx.translate(-target.pathOffset.x, -target.pathOffset.y);
+          }
+          ctx.lineWidth = (target.strokeWidth || 4) + 6;
           ctx.beginPath();
-          for (const cmd of obj.path) {
+          for (const cmd of target.path) {
             const op = cmd[0];
             if (op === 'M') ctx.moveTo(cmd[1], cmd[2]);
             else if (op === 'L') ctx.lineTo(cmd[1], cmd[2]);
@@ -2705,26 +2702,38 @@ const initFabric = () => {
             else if (op === 'Z') ctx.closePath();
           }
           ctx.stroke();
-        } else if (obj.type === 'line') {
-          ctx.lineWidth = (obj.strokeWidth || 4) + 6;
+          ctx.restore();
+        } else if (target.type === 'line') {
+          ctx.lineWidth = (target.strokeWidth || 4) + 6;
+          const p = target.calcLinePoints ? target.calcLinePoints() : {
+            x1: -target.width / 2,
+            y1: -target.height / 2,
+            x2: target.width / 2,
+            y2: target.height / 2
+          };
           ctx.beginPath();
-          ctx.moveTo(obj.x1, obj.y1);
-          ctx.lineTo(obj.x2, obj.y2);
+          ctx.moveTo(p.x1, p.y1);
+          ctx.lineTo(p.x2, p.y2);
           ctx.stroke();
-        } else if (obj.type === 'polygon' && obj.points) {
-          ctx.lineWidth = (obj.strokeWidth || 2) + 4;
+        } else if (target.type === 'polygon' && target.points) {
+          ctx.save();
+          if (target.pathOffset) {
+            ctx.translate(-target.pathOffset.x, -target.pathOffset.y);
+          }
+          ctx.lineWidth = (target.strokeWidth || 2) + 4;
           ctx.fillStyle = 'rgba(245, 158, 11, 0.4)';
           ctx.beginPath();
-          obj.points.forEach((p: any, idx: number) => {
+          target.points.forEach((p: any, idx: number) => {
             if (idx === 0) ctx.moveTo(p.x, p.y);
             else ctx.lineTo(p.x, p.y);
           });
           ctx.closePath();
           ctx.stroke();
           ctx.fill();
-        } else if (obj.isStickyNote || (obj.type === 'textbox' && obj.stickyColorConfig)) {
-          const w = obj.width || 180;
-          const h = (obj as any).minHeight || obj.height || 180;
+          ctx.restore();
+        } else if (target.isStickyNote || (target.type === 'textbox' && target.stickyColorConfig)) {
+          const w = target.width || 180;
+          const h = (target as any).minHeight || target.height || 180;
           ctx.lineWidth = 4;
           ctx.beginPath();
           if ((ctx as any).roundRect) {
@@ -2733,22 +2742,51 @@ const initFabric = () => {
             ctx.rect(-w / 2, -h / 2, w, h);
           }
           ctx.stroke();
-        } else if (obj.type === 'rect') {
+        } else if (target.type === 'rect') {
           ctx.lineWidth = 4;
-          ctx.strokeRect(-obj.width / 2, -obj.height / 2, obj.width, obj.height);
-        } else if (obj.type === 'circle') {
+          ctx.strokeRect(-target.width / 2, -target.height / 2, target.width, target.height);
+        } else if (target.type === 'circle') {
           ctx.lineWidth = 4;
           ctx.beginPath();
-          ctx.arc(0, 0, obj.radius || 20, 0, 2 * Math.PI);
+          ctx.arc(0, 0, target.radius || 20, 0, 2 * Math.PI);
           ctx.stroke();
-        } else if (obj.type === 'group' && obj._objects) {
-          obj._objects.forEach((child: any) => drawSolidOutline(child));
         } else {
-          const w = obj.width || 40;
-          const h = obj.height || 40;
+          const w = target.width || 40;
+          const h = target.height || 40;
           ctx.lineWidth = 4;
           ctx.strokeRect(-w / 2, -h / 2, w, h);
         }
+      };
+
+      const drawSolidOutline = (obj: any) => {
+        if (!obj || !obj.visible) return;
+
+        if ((obj.isArrow || obj.type === 'group') && obj._objects) {
+          obj._objects.forEach((child: any) => {
+            if (!child || !child.visible) return;
+            ctx.save();
+            const childWorldM = fabric.util.multiplyTransformMatrices(obj.calcTransformMatrix(), child.calcTransformMatrix());
+            ctx.transform(childWorldM[0], childWorldM[1], childWorldM[2], childWorldM[3], childWorldM[4], childWorldM[5]);
+            ctx.strokeStyle = '#f59e0b';
+            ctx.shadowColor = '#f59e0b';
+            ctx.shadowBlur = 4;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            renderObjectGeometry(child);
+            ctx.restore();
+          });
+          return;
+        }
+
+        ctx.save();
+        const m = obj.calcTransformMatrix();
+        ctx.transform(m[0], m[1], m[2], m[3], m[4], m[5]);
+        ctx.strokeStyle = '#f59e0b';
+        ctx.shadowColor = '#f59e0b';
+        ctx.shadowBlur = 4;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        renderObjectGeometry(obj);
         ctx.restore();
       };
 
@@ -2944,14 +2982,21 @@ const initFabric = () => {
     } else if (obj && (obj.type === 'activeselection' || obj.type === 'activeSelection' || obj.type === 'group')) {
       obj.setCoords();
       const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
+      const rawScaleX = obj.scaleX || 1;
+      const rawScaleY = obj.scaleY || 1;
+      const selScaleX = Math.max(0.01, Math.abs(rawScaleX));
+      const selScaleY = Math.max(0.01, Math.abs(rawScaleY));
+      const isParentFlippedX = !!(obj.flipX || rawScaleX < 0);
+      const isParentFlippedY = !!(obj.flipY || rawScaleY < 0);
+
       targets.forEach((c: any) => {
         if (c.isStickyNote || c.stickyColorConfig) {
           c.set({
-            scaleX: 1,
-            scaleY: 1,
-            flipX: false,
-            flipY: false,
-            angle: 0
+            scaleX: 1 / selScaleX,
+            scaleY: 1 / selScaleY,
+            flipX: isParentFlippedX,
+            flipY: isParentFlippedY,
+            angle: -(obj.angle || 0)
           });
           c.setCoords();
         }
@@ -3332,7 +3377,7 @@ const initFabric = () => {
 
     // Ctrl+Click / Ctrl+Marquee on group sub-object: directly enter group isolation mode (supports nested groups)
     if ((e.ctrlKey || e.metaKey) && currentTool.value === 'select') {
-      const hitTarget = opt.target || (canvas.findTarget(e) as any)?.target || null;
+      const hitTarget = opt.target || (canvas.findTarget(e) as any)?.target || canvas.findTarget(e) || null;
       let group: fabric.Group | null = null;
       let hitChild: any = null;
 
@@ -3346,38 +3391,58 @@ const initFabric = () => {
 
       if (isEligibleGroup(hitTarget)) {
         group = hitTarget as fabric.Group;
-        const children = group.getObjects ? group.getObjects() : (group as any)._objects || [];
-        const invGroup = fabric.util.invertTransform(group.calcTransformMatrix());
-        const localPoint = fabric.util.transformPoint(scenePoint, invGroup);
+      } else if (hitTarget && hitTarget.group && isEligibleGroup(hitTarget.group)) {
+        group = hitTarget.group;
+        hitChild = hitTarget;
+      }
 
-        for (let i = children.length - 1; i >= 0; i--) {
-          const child = children[i];
-          const cMatrix = child.calcTransformMatrix();
-          const invChild = fabric.util.invertTransform(cMatrix);
-          const ptInChild = fabric.util.transformPoint(localPoint, invChild);
-          const w2 = ((child.width || 0) * (child.scaleX || 1)) / 2 + 6;
-          const h2 = ((child.height || 0) * (child.scaleY || 1)) / 2 + 6;
-          if (Math.abs(ptInChild.x) <= w2 && Math.abs(ptInChild.y) <= h2) {
-            hitChild = child;
-            break;
+      // If clicked on a group, search for the child sub-target using true world transformation
+      if (group) {
+        if (!hitChild) {
+          const children = group.getObjects ? group.getObjects() : (group as any)._objects || [];
+          const gMatrix = group.calcTransformMatrix();
+
+          for (let i = children.length - 1; i >= 0; i--) {
+            const child = children[i];
+            const childWorldM = fabric.util.multiplyTransformMatrices(gMatrix, child.calcTransformMatrix());
+            const invChild = fabric.util.invertTransform(childWorldM);
+            const ptInChild = fabric.util.transformPoint(scenePoint, invChild);
+
+            let minX = -((child.width || 0) / 2);
+            let maxX = ((child.width || 0) / 2);
+            let minY = -((child.height || 0) / 2);
+            let maxY = ((child.height || 0) / 2);
+
+            if (child.originX === 'left') {
+              minX = 0;
+              maxX = child.width || 0;
+            }
+            if (child.originY === 'top') {
+              minY = 0;
+              maxY = child.height || 0;
+            }
+
+            const pad = 12;
+            if (ptInChild.x >= minX - pad && ptInChild.x <= maxX + pad &&
+                ptInChild.y >= minY - pad && ptInChild.y <= maxY + pad) {
+              hitChild = child;
+              break;
+            }
           }
         }
 
-        // If clicked on empty space of group bounding box without hitting any child, don't treat as group click
-        if (!hitChild) {
-          group = null;
-        }
-      }
-
-      isCtrlInteracting = true;
-      ctrlMouseDownPoint = { x: scenePoint.x, y: scenePoint.y };
-      ctrlHitGroup = group;
-      ctrlHitChild = hitChild;
-      isCtrlMarqueeDragging = false;
-
-      // Prevent Fabric from dragging the whole group during potential marquee drag
-      if (group) {
+        isCtrlInteracting = true;
+        ctrlMouseDownPoint = { x: scenePoint.x, y: scenePoint.y };
+        ctrlHitGroup = group;
+        ctrlHitChild = hitChild;
+        isCtrlMarqueeDragging = false;
         (canvas as any)._currentTransform = null;
+      } else {
+        isCtrlInteracting = true;
+        ctrlMouseDownPoint = { x: scenePoint.x, y: scenePoint.y };
+        ctrlHitGroup = null;
+        ctrlHitChild = null;
+        isCtrlMarqueeDragging = false;
       }
     }
 
@@ -3835,13 +3900,17 @@ const initFabric = () => {
             const gMatrix = g.calcTransformMatrix();
             const hasChild = children.some((child: any) => {
               const childMatrix = fabric.util.multiplyTransformMatrices(gMatrix, child.calcTransformMatrix());
-              const w2 = (child.width || 0) / 2;
-              const h2 = (child.height || 0) / 2;
+              let minX = -((child.width || 0) / 2);
+              let maxX = ((child.width || 0) / 2);
+              let minY = -((child.height || 0) / 2);
+              let maxY = ((child.height || 0) / 2);
+              if (child.originX === 'left') { minX = 0; maxX = child.width || 0; }
+              if (child.originY === 'top') { minY = 0; maxY = child.height || 0; }
               const sceneCorners = [
-                fabric.util.transformPoint({ x: -w2, y: -h2 } as any, childMatrix),
-                fabric.util.transformPoint({ x: w2, y: -h2 } as any, childMatrix),
-                fabric.util.transformPoint({ x: w2, y: h2 } as any, childMatrix),
-                fabric.util.transformPoint({ x: -w2, y: h2 } as any, childMatrix)
+                fabric.util.transformPoint({ x: minX, y: minY } as any, childMatrix),
+                fabric.util.transformPoint({ x: maxX, y: minY } as any, childMatrix),
+                fabric.util.transformPoint({ x: maxX, y: maxY } as any, childMatrix),
+                fabric.util.transformPoint({ x: minX, y: maxY } as any, childMatrix)
               ];
               const childMinX = Math.min(...sceneCorners.map((p: any) => p.x));
               const childMaxX = Math.max(...sceneCorners.map((p: any) => p.x));
@@ -3864,13 +3933,17 @@ const initFabric = () => {
 
           children.forEach((child: any) => {
             const childMatrix = fabric.util.multiplyTransformMatrices(gMatrix, child.calcTransformMatrix());
-            const w2 = (child.width || 0) / 2;
-            const h2 = (child.height || 0) / 2;
+            let minX = -((child.width || 0) / 2);
+            let maxX = ((child.width || 0) / 2);
+            let minY = -((child.height || 0) / 2);
+            let maxY = ((child.height || 0) / 2);
+            if (child.originX === 'left') { minX = 0; maxX = child.width || 0; }
+            if (child.originY === 'top') { minY = 0; maxY = child.height || 0; }
             const sceneCorners = [
-              fabric.util.transformPoint({ x: -w2, y: -h2 } as any, childMatrix),
-              fabric.util.transformPoint({ x: w2, y: -h2 } as any, childMatrix),
-              fabric.util.transformPoint({ x: w2, y: h2 } as any, childMatrix),
-              fabric.util.transformPoint({ x: -w2, y: h2 } as any, childMatrix)
+              fabric.util.transformPoint({ x: minX, y: minY } as any, childMatrix),
+              fabric.util.transformPoint({ x: maxX, y: minY } as any, childMatrix),
+              fabric.util.transformPoint({ x: maxX, y: maxY } as any, childMatrix),
+              fabric.util.transformPoint({ x: minX, y: maxY } as any, childMatrix)
             ];
             const childMinX = Math.min(...sceneCorners.map((p: any) => p.x));
             const childMaxX = Math.max(...sceneCorners.map((p: any) => p.x));
@@ -3890,8 +3963,8 @@ const initFabric = () => {
           }
         }
       } else {
-        if (targetGroup && singleChild) {
-          enterGroupIsolation(targetGroup, singleChild);
+        if (targetGroup) {
+          enterGroupIsolation(targetGroup, singleChild || undefined);
           return;
         }
       }
@@ -4263,30 +4336,30 @@ const initFabric = () => {
         const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
         const rawScaleX = obj.scaleX || 1;
         const rawScaleY = obj.scaleY || 1;
-        const selScaleX = Math.max(0.05, Math.abs(rawScaleX));
-        const selScaleY = Math.max(0.05, Math.abs(rawScaleY));
+        const selScaleX = Math.max(0.01, Math.abs(rawScaleX));
+        const selScaleY = Math.max(0.01, Math.abs(rawScaleY));
 
-        const signX = rawScaleX < 0 ? -1 : 1;
-        const signY = rawScaleY < 0 ? -1 : 1;
+        const isParentFlippedX = !!(obj.flipX || rawScaleX < 0);
+        const isParentFlippedY = !!(obj.flipY || rawScaleY < 0);
 
         targets.forEach((c: any) => {
           if (c.isStickyNote || c.stickyColorConfig) {
             // Major Update: Sticky note NEVER scales, NEVER rotates, NEVER flips/mirrors.
             // It strictly preserves visual scale 1.0, 0 rotation, flipX=false, flipY=false.
-            // Its position moves automatically with the selection!
-            c.scaleX = signX * (1 / selScaleX);
-            c.scaleY = signY * (1 / selScaleY);
-            c.flipX = false;
-            c.flipY = false;
+            // Canceling parent reflection and scaling:
+            c.scaleX = 1 / selScaleX;
+            c.scaleY = 1 / selScaleY;
+            c.flipX = isParentFlippedX;
+            c.flipY = isParentFlippedY;
             c.angle = -(obj.angle || 0);
           } else if (c.isLocked) {
             // Locked objects in multi-selection should not scale or mirror
             const origSx = Math.abs(c._origScaleX || 1);
             const origSy = Math.abs(c._origScaleY || 1);
-            c.scaleX = signX * (origSx / selScaleX);
-            c.scaleY = signY * (origSy / selScaleY);
-            c.flipX = false;
-            c.flipY = false;
+            c.scaleX = origSx / selScaleX;
+            c.scaleY = origSy / selScaleY;
+            c.flipX = isParentFlippedX;
+            c.flipY = isParentFlippedY;
           }
         });
       }
@@ -5234,6 +5307,9 @@ const enterGroupIsolation = (group: fabric.Group, targetChild?: any) => {
       }
     } else if (targetChild && isolatedItems.includes(targetChild)) {
       canvas.setActiveObject(targetChild);
+    } else if (!targetChild && isolatedItems.length > 0) {
+      const activeSel = new fabric.ActiveSelection(isolatedItems, { canvas });
+      canvas.setActiveObject(activeSel);
     }
     canvas.requestRenderAll();
     updateSelectionState();
@@ -5743,7 +5819,7 @@ const groupObjects = () => {
     items.forEach((item: any) => canvas?.remove(item));
     const group = new fabric.Group(items, {
       canvas,
-      subTargetCheck: false,
+      subTargetCheck: true,
       perPixelTargetFind: true
     });
     canvas.add(group);

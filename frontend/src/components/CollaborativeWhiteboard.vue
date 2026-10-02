@@ -431,7 +431,7 @@ const updateLockToolbar = () => {
     };
   }
 };
-let lockedHighlights: any[] = [];
+let lockedGlowObjects: any[] = [];
 
 const highlightLockedObjects = () => {
   if (!canvas) return;
@@ -441,35 +441,51 @@ const highlightLockedObjects = () => {
     ? (active.getObjects ? active.getObjects() : active._objects || []) 
     : [active];
   
+  clearLockedHighlights();
+
+  const applyGlow = (obj: any) => {
+    if (obj._hasGlowHighlight) return;
+    obj._hasGlowHighlight = true;
+    obj._origShadow = obj.shadow !== undefined ? obj.shadow : null;
+    obj.set({
+      shadow: new fabric.Shadow({
+        color: '#f59e0b',
+        blur: 18,
+        offsetX: 0,
+        offsetY: 0
+      })
+    });
+    lockedGlowObjects.push(obj);
+  };
+
   targets.forEach((o: any) => {
-    if (o.isLocked || o.hasLockedChildren) {
-      const bound = getObjectSceneBoundingBox(o);
-      const highlight = new fabric.Rect({
-        left: bound.left - 4,
-        top: bound.top - 4,
-        width: bound.width + 8,
-        height: bound.height + 8,
-        fill: 'transparent',
-        stroke: '#f59e0b',
-        strokeWidth: 2,
-        strokeDashArray: [6, 4],
-        selectable: false,
-        evented: false,
-        excludeFromExport: true
+    if (o.isLocked) {
+      applyGlow(o);
+      if (o.type === 'group' && o.getObjects) {
+        o.getObjects().forEach((child: any) => applyGlow(child));
+      }
+    } else if (o.hasLockedChildren && o.getObjects) {
+      o.getObjects().forEach((child: any) => {
+        if (child.isLocked) applyGlow(child);
       });
-      (highlight as any)._isPreview = true; // prevent saving to history
-      canvas?.add(highlight);
-      lockedHighlights.push(highlight);
     }
   });
-  canvas?.requestRenderAll();
+  canvas.requestRenderAll();
 };
 
 const clearLockedHighlights = () => {
-  if (!canvas || lockedHighlights.length === 0) return;
-  lockedHighlights.forEach(h => canvas?.remove(h));
-  lockedHighlights = [];
-  canvas?.requestRenderAll();
+  if (!canvas || lockedGlowObjects.length === 0) return;
+  lockedGlowObjects.forEach(obj => {
+    if (obj._hasGlowHighlight) {
+      obj.set({
+        shadow: obj._origShadow
+      });
+      delete obj._hasGlowHighlight;
+      delete obj._origShadow;
+    }
+  });
+  lockedGlowObjects = [];
+  canvas.requestRenderAll();
 };
 const unlockSelectedObjects = () => {
   if (!canvas) return;
@@ -641,25 +657,28 @@ const liveNodeArrowSvg = computed(() => {
   const isStraight = maxDev < Math.max(16 * zoom, sDist * 0.12) || sPts.length <= 3;
 
   let tangentAngle = Math.atan2(sn.y - s0.y, sn.x - s0.x);
+  let sCur = s0;
   if (sPts.length >= 2) {
     const m = sPts.length - 1;
-    const sCur = sPts[m - 1];
+    sCur = sPts[m - 1];
     const sPrev = sPts[Math.max(0, m - 2)];
     const isCorner = editingArrowCorners.value.has(m) || editingArrowCorners.value.has(m - 1);
+    tangentAngle = Math.atan2(sn.y - sCur.y, sn.x - sCur.x);
     if (!isCorner && m >= 2) {
       const vx = 1.5 * (sn.x - sCur.x) - 0.5 * (sCur.x - sPrev.x);
       const vy = 1.5 * (sn.y - sCur.y) - 0.5 * (sCur.y - sPrev.y);
       if (Math.hypot(vx, vy) > 1e-4) {
-        tangentAngle = Math.atan2(vy, vx);
-      } else {
-        tangentAngle = Math.atan2(sn.y - sCur.y, sn.x - sCur.x);
+        const curveAngle = Math.atan2(vy, vx);
+        const angleDiff = Math.atan2(Math.sin(curveAngle - tangentAngle), Math.cos(curveAngle - tangentAngle));
+        if (Math.abs(angleDiff) < Math.PI / 3) {
+          tangentAngle = curveAngle;
+        }
       }
-    } else {
-      tangentAngle = Math.atan2(sn.y - sCur.y, sn.x - sCur.x);
     }
   }
 
-  const shaftCut = headLen * 0.55;
+  const sDistToCur = Math.hypot(sn.x - sCur.x, sn.y - sCur.y);
+  const shaftCut = Math.min(Math.max(2, (rawWidth * zoom) * 0.4), headLen * 0.2, sDistToCur * 0.35);
   const shaftEndX = sn.x - shaftCut * Math.cos(tangentAngle);
   const shaftEndY = sn.y - shaftCut * Math.sin(tangentAngle);
 
@@ -1419,8 +1438,7 @@ const updateSelectionState = () => {
       lockRotation: allLocked,
       lockScalingX: allLocked,
       lockScalingY: allLocked,
-      hasControls: !allLocked,
-      lockScalingFlip: true
+      hasControls: !allLocked
     });
     // Multi-selection controls: ALWAYS enable single-axis scale handles (ml, mr, mt, mb) and rotation
     active.setControlsVisibility({
@@ -2048,7 +2066,7 @@ const createArrowFromPoints = (
       finalPts.push({ x: p0.x + t * (pn.x - p0.x), y: p0.y + t * (pn.y - p0.y) });
     }
 
-    const shaftCut = headLen * 0.55;
+    const shaftCut = Math.min(Math.max(2, width * 0.4), headLen * 0.2);
     const shaftEndX = pn.x - shaftCut * Math.cos(tangentAngle);
     const shaftEndY = pn.y - shaftCut * Math.sin(tangentAngle);
 
@@ -2097,26 +2115,29 @@ const createArrowFromPoints = (
     finalPts = sampled.map(p => ({ x: p.x, y: p.y }));
 
     let tangentAngle = Math.atan2(pn.y - p0.y, pn.x - p0.x);
+    let pCur = p0;
     if (sampled.length >= 2) {
       const m = sampled.length - 1;
-      const pCur = sampled[m - 1];
+      pCur = sampled[m - 1];
       const pPrev = sampled[Math.max(0, m - 2)];
       const isCorner = cornersSet.has(m) || cornersSet.has(m - 1);
+      tangentAngle = Math.atan2(pn.y - pCur.y, pn.x - pCur.x);
       if (!isCorner && m >= 2) {
         // True instantaneous tangent vector at endpoint pn of the spline curve
         const vx = 1.5 * (pn.x - pCur.x) - 0.5 * (pCur.x - pPrev.x);
         const vy = 1.5 * (pn.y - pCur.y) - 0.5 * (pCur.y - pPrev.y);
         if (Math.hypot(vx, vy) > 1e-4) {
-          tangentAngle = Math.atan2(vy, vx);
-        } else {
-          tangentAngle = Math.atan2(pn.y - pCur.y, pn.x - pCur.x);
+          const curveAngle = Math.atan2(vy, vx);
+          const angleDiff = Math.atan2(Math.sin(curveAngle - tangentAngle), Math.cos(curveAngle - tangentAngle));
+          if (Math.abs(angleDiff) < Math.PI / 3) {
+            tangentAngle = curveAngle;
+          }
         }
-      } else {
-        tangentAngle = Math.atan2(pn.y - pCur.y, pn.x - pCur.x);
       }
     }
 
-    const shaftCut = headLen * 0.55;
+    const distToCur = Math.hypot(pn.x - pCur.x, pn.y - pCur.y);
+    const shaftCut = Math.min(Math.max(2, width * 0.4), headLen * 0.2, distToCur * 0.35);
     const shaftEndX = pn.x - shaftCut * Math.cos(tangentAngle);
     const shaftEndY = pn.y - shaftCut * Math.sin(tangentAngle);
 
@@ -2793,8 +2814,8 @@ const initFabric = () => {
         const curW = obj.width || 180;
         const curMinH = (obj as any).minHeight !== undefined ? (obj as any).minHeight : (obj.height || 180);
 
-        const targetW = Math.max(80, Math.min(600, Math.round(curW * s)));
-        const targetH = Math.max(80, Math.min(600, Math.round(curMinH * s)));
+        const targetW = Math.max(80, Math.min(360, Math.round(curW * s)));
+        const targetH = Math.max(80, Math.min(360, Math.round(curMinH * s)));
         const curFontSize = obj.fontSize || 18;
         const newFontSize = Math.max(10, Math.min(120, Math.round(curFontSize * s)));
 
@@ -2854,8 +2875,8 @@ const initFabric = () => {
                                  (arrowObj.scaleY && Math.abs(arrowObj.scaleY - 1) > 1e-3) ||
                                  (arrowObj.angle && Math.abs(arrowObj.angle % 360) > 1e-3);
 
-        if (!isScaledOrRotated) {
-          // Just translated in normal mode: update arrowPoints and initialMatrix directly without recreating
+        if (!isScaledOrRotated || arrowObj.group) {
+          // Just translated or inside multi-selection/group: update arrowPoints and initialMatrix directly without recreating
           (arrowObj as any).arrowPoints = newPts;
           (arrowObj as any).initialMatrix = M1;
         } else {
@@ -4083,7 +4104,7 @@ const initFabric = () => {
     updateFloatingToolbars();
     updateArrowToolbar();
     updateLockToolbar();
-    if (lockedHighlights.length > 0) {
+    if (lockedGlowObjects.length > 0) {
       clearLockedHighlights();
       highlightLockedObjects();
     }
@@ -4123,7 +4144,7 @@ const initFabric = () => {
         const baseW = obj.width || 120;
         const uniformScale = Math.max(Math.abs(obj.scaleX || 1), Math.abs(obj.scaleY || 1));
         const minScale = 80 / baseW;
-        const maxScale = 600 / baseW;
+        const maxScale = 360 / baseW;
         const clampedScale = Math.max(minScale, Math.min(maxScale, uniformScale));
         const transform = (canvas as any)._currentTransform;
         const originX = transform?.originX || 'center';
@@ -4165,21 +4186,21 @@ const initFabric = () => {
           if (c.isStickyNote || c.stickyColorConfig) {
             const baseW = c.width || 120;
             const minScale = 80 / baseW;
-            const maxScale = 600 / baseW;
+            const maxScale = 360 / baseW;
             const origBaseScale = Math.abs(c._origBaseScale || 1);
             const childVisualScale = Math.max(minScale, Math.min(maxScale, activeScaleFactor * origBaseScale));
 
-            // Strictly positive scales, completely eliminate any negative or flip mirror
-            c.scaleX = Math.abs(childVisualScale / selScaleX);
-            c.scaleY = Math.abs(childVisualScale / selScaleY);
+            // Counteract selection negative flip so sticky note stays upright and never mirrored while moving across
+            c.scaleX = signX * (childVisualScale / selScaleX);
+            c.scaleY = signY * (childVisualScale / selScaleY);
             c.flipX = false;
             c.flipY = false;
           } else if (c.isLocked) {
             // Locked objects in multi-selection should not scale or mirror
             const origSx = Math.abs(c._origScaleX || 1);
             const origSy = Math.abs(c._origScaleY || 1);
-            c.scaleX = Math.abs(origSx / selScaleX);
-            c.scaleY = Math.abs(origSy / selScaleY);
+            c.scaleX = signX * (origSx / selScaleX);
+            c.scaleY = signY * (origSy / selScaleY);
             c.flipX = false;
             c.flipY = false;
           }

@@ -2161,8 +2161,8 @@ const createArrowFromPoints = (
 
     // Endpoint vector calculation: Align strictly with the stroke's actual local arrival vector at pn
     // Looking back only 6-8px ensures the arrow head aligns with the stroke's endpoint vector, not p0 or distant knots
-    let tangentAngle = Math.atan2(pn.y - p0.y, pn.x - p0.x);
-    const ptsSource = (pts.length >= 2) ? pts : sampled;
+    tangentAngle = Math.atan2(pn.y - p0.y, pn.x - p0.x);
+    const ptsSource = (pts && pts.length >= 2) ? pts : sampled;
     if (ptsSource.length >= 2) {
       let accumulated = 0;
       let pRef = ptsSource[ptsSource.length - 2];
@@ -2702,6 +2702,19 @@ const initFabric = () => {
             else if (op === 'Z') ctx.closePath();
           }
           ctx.stroke();
+
+          // Re-draw core stroke so amber highlight surrounds rather than covers line
+          const origStroke = target.stroke || (target as any).arrowColor || '#1e293b';
+          const origWidth = target.strokeWidth || (target as any).arrowStrokeWidth || 3;
+          if (origStroke && origStroke !== 'transparent') {
+            ctx.save();
+            ctx.shadowBlur = 0;
+            ctx.shadowColor = 'transparent';
+            ctx.strokeStyle = origStroke;
+            ctx.lineWidth = origWidth;
+            ctx.stroke();
+            ctx.restore();
+          }
           ctx.restore();
         } else if (target.type === 'line') {
           ctx.lineWidth = (target.strokeWidth || 4) + 6;
@@ -2715,6 +2728,19 @@ const initFabric = () => {
           ctx.moveTo(p.x1, p.y1);
           ctx.lineTo(p.x2, p.y2);
           ctx.stroke();
+
+          // Re-draw core line
+          const origStroke = target.stroke || (target as any).arrowColor || '#1e293b';
+          const origWidth = target.strokeWidth || (target as any).arrowStrokeWidth || 3;
+          if (origStroke && origStroke !== 'transparent') {
+            ctx.save();
+            ctx.shadowBlur = 0;
+            ctx.shadowColor = 'transparent';
+            ctx.strokeStyle = origStroke;
+            ctx.lineWidth = origWidth;
+            ctx.stroke();
+            ctx.restore();
+          }
         } else if (target.type === 'polygon' && target.points) {
           ctx.save();
           if (target.pathOffset) {
@@ -2730,6 +2756,17 @@ const initFabric = () => {
           ctx.closePath();
           ctx.stroke();
           ctx.fill();
+
+          // Re-fill arrowhead with original color
+          const origFill = target.fill || (target as any).arrowColor;
+          if (origFill && origFill !== 'transparent') {
+            ctx.save();
+            ctx.shadowBlur = 0;
+            ctx.shadowColor = 'transparent';
+            ctx.fillStyle = origFill;
+            ctx.fill();
+            ctx.restore();
+          }
           ctx.restore();
         } else if (target.isStickyNote || (target.type === 'textbox' && target.stickyColorConfig)) {
           const w = target.width || 180;
@@ -2748,7 +2785,22 @@ const initFabric = () => {
         } else if (target.type === 'circle') {
           ctx.lineWidth = 4;
           ctx.beginPath();
-          ctx.arc(0, 0, target.radius || 20, 0, 2 * Math.PI);
+          ctx.arc(0, 0, target.radius || (target.width || 40) / 2, 0, 2 * Math.PI);
+          ctx.stroke();
+        } else if (target.type === 'ellipse') {
+          ctx.lineWidth = 4;
+          ctx.beginPath();
+          ctx.ellipse(0, 0, target.rx || (target.width || 40) / 2, target.ry || (target.height || 40) / 2, 0, 0, 2 * Math.PI);
+          ctx.stroke();
+        } else if (target.type === 'triangle') {
+          ctx.lineWidth = 4;
+          const w2 = (target.width || 40) / 2;
+          const h2 = (target.height || 40) / 2;
+          ctx.beginPath();
+          ctx.moveTo(0, -h2);
+          ctx.lineTo(w2, h2);
+          ctx.lineTo(-w2, h2);
+          ctx.closePath();
           ctx.stroke();
         } else {
           const w = target.width || 40;
@@ -2765,7 +2817,8 @@ const initFabric = () => {
           obj._objects.forEach((child: any) => {
             if (!child || !child.visible) return;
             ctx.save();
-            const childWorldM = fabric.util.multiplyTransformMatrices(obj.calcTransformMatrix(), child.calcTransformMatrix());
+            // In Fabric 6, child.calcTransformMatrix() is already the child's world transform
+            const childWorldM = child.calcTransformMatrix();
             ctx.transform(childWorldM[0], childWorldM[1], childWorldM[2], childWorldM[3], childWorldM[4], childWorldM[5]);
             ctx.strokeStyle = '#f59e0b';
             ctx.shadowColor = '#f59e0b';
@@ -2841,6 +2894,9 @@ const initFabric = () => {
   canvas.on('selection:updated', updateSelectionState);
   canvas.on('selection:cleared', () => {
     canvas?.getObjects().forEach((o: any) => {
+      delete o._origLockedWorldPos;
+      delete o._dragStartLocalLeft;
+      delete o._dragStartLocalTop;
       if (o.isStickyNote || o.stickyColorConfig) {
         if (o.flipX || o.flipY || (o.scaleX && o.scaleX < 0) || (o.scaleY && o.scaleY < 0)) {
           o.flipX = false;
@@ -2997,6 +3053,21 @@ const initFabric = () => {
             flipX: isParentFlippedX,
             flipY: isParentFlippedY,
             angle: -(obj.angle || 0)
+          });
+          c.setCoords();
+        } else if (c.isLocked && c._origLockedWorldPos) {
+          const origSx = Math.abs(c._origScaleX || 1);
+          const origSy = Math.abs(c._origScaleY || 1);
+          const invSel = fabric.util.invertTransform(obj.calcTransformMatrix());
+          const localPos = fabric.util.transformPoint(c._origLockedWorldPos, invSel);
+          c.set({
+            scaleX: origSx / selScaleX,
+            scaleY: origSy / selScaleY,
+            flipX: isParentFlippedX,
+            flipY: isParentFlippedY,
+            angle: (c._origAngle || 0) - (obj.angle || 0),
+            left: localPos.x,
+            top: localPos.y
           });
           c.setCoords();
         }
@@ -3389,22 +3460,33 @@ const initFabric = () => {
         return true;
       };
 
-      if (isEligibleGroup(hitTarget)) {
-        group = hitTarget as fabric.Group;
-      } else if (hitTarget && hitTarget.group && isEligibleGroup(hitTarget.group)) {
-        group = hitTarget.group;
-        hitChild = hitTarget;
+      // 1. Check opt.subTargets first (Fabric 6 populates this when subTargetCheck is true)
+      if ((opt as any).subTargets && (opt as any).subTargets.length > 0) {
+        const sub = (opt as any).subTargets[(opt as any).subTargets.length - 1];
+        if (sub && sub.group && isEligibleGroup(sub.group)) {
+          group = sub.group;
+          hitChild = sub;
+        }
+      }
+
+      if (!group) {
+        if (isEligibleGroup(hitTarget)) {
+          group = hitTarget as fabric.Group;
+        } else if (hitTarget && hitTarget.group && isEligibleGroup(hitTarget.group)) {
+          group = hitTarget.group;
+          hitChild = hitTarget;
+        }
       }
 
       // If clicked on a group, search for the child sub-target using true world transformation
       if (group) {
         if (!hitChild) {
           const children = group.getObjects ? group.getObjects() : (group as any)._objects || [];
-          const gMatrix = group.calcTransformMatrix();
 
           for (let i = children.length - 1; i >= 0; i--) {
             const child = children[i];
-            const childWorldM = fabric.util.multiplyTransformMatrices(gMatrix, child.calcTransformMatrix());
+            // In Fabric 6, child.calcTransformMatrix() is already the child's world matrix
+            const childWorldM = child.calcTransformMatrix();
             const invChild = fabric.util.invertTransform(childWorldM);
             const ptInChild = fabric.util.transformPoint(scenePoint, invChild);
 
@@ -3897,9 +3979,9 @@ const initFabric = () => {
           for (let i = groups.length - 1; i >= 0; i--) {
             const g = groups[i];
             const children = g.getObjects ? g.getObjects() : (g as any)._objects || [];
-            const gMatrix = g.calcTransformMatrix();
             const hasChild = children.some((child: any) => {
-              const childMatrix = fabric.util.multiplyTransformMatrices(gMatrix, child.calcTransformMatrix());
+              // In Fabric 6, child.calcTransformMatrix() is already the child's world matrix
+              const childMatrix = child.calcTransformMatrix();
               let minX = -((child.width || 0) / 2);
               let maxX = ((child.width || 0) / 2);
               let minY = -((child.height || 0) / 2);
@@ -3928,11 +4010,10 @@ const initFabric = () => {
 
         if (groupToIsolate) {
           const children = groupToIsolate.getObjects ? groupToIsolate.getObjects() : (groupToIsolate as any)._objects || [];
-          const gMatrix = groupToIsolate.calcTransformMatrix();
           const matchedChildren: any[] = [];
 
           children.forEach((child: any) => {
-            const childMatrix = fabric.util.multiplyTransformMatrices(gMatrix, child.calcTransformMatrix());
+            const childMatrix = child.calcTransformMatrix();
             let minX = -((child.width || 0) / 2);
             let maxX = ((child.width || 0) / 2);
             let minY = -((child.height || 0) / 2);
@@ -4254,10 +4335,18 @@ const initFabric = () => {
       const dx = obj.left - (obj._dragStartLeft !== undefined ? obj._dragStartLeft : obj.left);
       const dy = obj.top - (obj._dragStartTop !== undefined ? obj._dragStartTop : obj.top);
       targets.forEach((c: any) => {
-        if (c.isLocked && c._dragStartLocalLeft !== undefined && c._dragStartLocalTop !== undefined) {
-          c.left = c._dragStartLocalLeft - dx;
-          c.top = c._dragStartLocalTop - dy;
-          c.setCoords();
+        if (c.isLocked) {
+          if (c._origLockedWorldPos) {
+            const invSel = fabric.util.invertTransform(obj.calcTransformMatrix());
+            const localPos = fabric.util.transformPoint(c._origLockedWorldPos, invSel);
+            c.left = localPos.x;
+            c.top = localPos.y;
+            c.setCoords();
+          } else if (c._dragStartLocalLeft !== undefined && c._dragStartLocalTop !== undefined) {
+            c.left = c._dragStartLocalLeft - dx;
+            c.top = c._dragStartLocalTop - dy;
+            c.setCoords();
+          }
         }
       });
     }
@@ -4312,6 +4401,10 @@ const initFabric = () => {
         c._origScaleX = c.scaleX || 1;
         c._origScaleY = c.scaleY || 1;
         c._origAngle = c.angle || 0;
+        if (c.isLocked) {
+          const wm = c.calcTransformMatrix();
+          c._origLockedWorldPos = new fabric.Point(wm[4], wm[5]);
+        }
         if (c.isStickyNote || c.stickyColorConfig) {
            c._origBaseScale = Math.max(Math.abs(c.scaleX || 1), Math.abs(c.scaleY || 1));
         }
@@ -4353,13 +4446,21 @@ const initFabric = () => {
             c.flipY = isParentFlippedY;
             c.angle = -(obj.angle || 0);
           } else if (c.isLocked) {
-            // Locked objects in multi-selection should not scale or mirror
+            // Locked objects in multi-selection must not scale, mirror, rotate, or move!
             const origSx = Math.abs(c._origScaleX || 1);
             const origSy = Math.abs(c._origScaleY || 1);
             c.scaleX = origSx / selScaleX;
             c.scaleY = origSy / selScaleY;
             c.flipX = isParentFlippedX;
             c.flipY = isParentFlippedY;
+            c.angle = (c._origAngle || 0) - (obj.angle || 0);
+
+            if (c._origLockedWorldPos) {
+              const invSel = fabric.util.invertTransform(obj.calcTransformMatrix());
+              const localPos = fabric.util.transformPoint(c._origLockedWorldPos, invSel);
+              c.left = localPos.x;
+              c.top = localPos.y;
+            }
           }
         });
       }
@@ -4395,8 +4496,17 @@ const initFabric = () => {
     if (obj && (obj.type === 'activeselection' || obj.type === 'activeSelection' || obj.type === 'group')) {
       const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
       targets.forEach((c: any) => {
-        if (c.isStickyNote || c.stickyColorConfig || c.isLocked) {
+        if (c.isStickyNote || c.stickyColorConfig) {
+          c.angle = -(obj.angle || 0);
+        } else if (c.isLocked) {
           c.angle = (c._origAngle || 0) - (obj.angle || 0);
+          if (c._origLockedWorldPos) {
+            const invSel = fabric.util.invertTransform(obj.calcTransformMatrix());
+            const localPos = fabric.util.transformPoint(c._origLockedWorldPos, invSel);
+            c.left = localPos.x;
+            c.top = localPos.y;
+            c.setCoords();
+          }
         }
       });
       canvas?.requestRenderAll();
@@ -5047,6 +5157,23 @@ const pasteSelection = async (targetPoint?: { x: number; y: number }) => {
       obj.setCoords();
     }
 
+    if (obj.type === 'group' || obj instanceof fabric.Group) {
+      const children = obj.getObjects ? obj.getObjects() : (obj as any)._objects || [];
+      children.forEach((child: any) => {
+        if (child.isStickyNote || (child.type === 'textbox' && (child.stickyColorConfig || child.backgroundColor))) {
+          child.isStickyNote = true;
+          child.minHeight = child.minHeight || 180;
+          child.textAlign = 'center';
+          child.splitByGrapheme = true;
+          child.lockUniScaling = true;
+          child.hasRotatingPoint = false;
+          applyStickyNoteMethods(child);
+          child.initDimensions?.();
+          child.setCoords();
+        }
+      });
+    }
+
     if (obj.isArrow) {
       obj.set({
         lockUniScaling: false,
@@ -5097,11 +5224,19 @@ const pasteSelection = async (targetPoint?: { x: number; y: number }) => {
     clonedObj.forEachObject((obj: any) => {
       preparePastedObject(obj);
       canvas?.add(obj);
+      if (isIsolationMode.value && !isolatedItems.includes(obj)) {
+        isolatedItems.push(obj);
+        hasIsolationChanged.value = true;
+      }
     });
     clonedObj.setCoords();
   } else {
     preparePastedObject(clonedObj);
     canvas.add(clonedObj);
+    if (isIsolationMode.value && !isolatedItems.includes(clonedObj)) {
+      isolatedItems.push(clonedObj);
+      hasIsolationChanged.value = true;
+    }
   }
 
   if (pastedItemsForUndo.length > 0) {
@@ -5224,6 +5359,10 @@ const duplicateStickyNote = async (note: any) => {
   cloned.initDimensions();
   cloned.setCoords();
   canvas.add(cloned);
+  if (isIsolationMode.value && !isolatedItems.includes(cloned)) {
+    isolatedItems.push(cloned);
+    hasIsolationChanged.value = true;
+  }
   canvas.setActiveObject(cloned);
   canvas.requestRenderAll();
   saveHistoryState();
@@ -5326,13 +5465,20 @@ const exitGroupIsolation = () => {
   try {
     // Re-bundle ONLY remaining isolated items back into group (ignoring deleted items!)
     const remainingItems = isolatedItems.filter(item => canvas?.getObjects().includes(item));
-    remainingItems.forEach(item => canvas?.remove(item));
+    remainingItems.forEach(item => {
+      if (item.isStickyNote || item.stickyColorConfig) {
+        item.minHeight = item.minHeight || 180;
+        applyStickyNoteMethods(item);
+        item.initDimensions?.();
+      }
+      canvas?.remove(item);
+    });
 
     let bundledGroup: any = null;
     if (remainingItems.length > 1) {
       const newGroup = new fabric.Group(remainingItems, {
         canvas,
-        subTargetCheck: false,
+        subTargetCheck: true,
         perPixelTargetFind: true
       });
       const allLocked = remainingItems.length > 0 && remainingItems.every((o: any) => o.isLocked);
@@ -5816,7 +5962,14 @@ const groupObjects = () => {
     const items = activeObj.getObjects ? activeObj.getObjects() : (activeObj._objects || []);
     if (!items.length) return;
     canvas.discardActiveObject();
-    items.forEach((item: any) => canvas?.remove(item));
+    items.forEach((item: any) => {
+      if (item.isStickyNote || item.stickyColorConfig) {
+        item.minHeight = item.minHeight || 180;
+        applyStickyNoteMethods(item);
+        item.initDimensions?.();
+      }
+      canvas?.remove(item);
+    });
     const group = new fabric.Group(items, {
       canvas,
       subTargetCheck: true,
@@ -5837,16 +5990,64 @@ const ungroupObjects = () => {
   const activeObj = canvas.getActiveObject() as any;
   if (!activeObj) return;
 
-  const isGrp = activeObj.type?.toLowerCase() === 'group' || activeObj instanceof fabric.Group;
-  if (isGrp && !activeObj.isStickyNote && !(activeObj as any).isArrow) {
+  const isActualGroup = activeObj.type === 'group' && !activeObj.isStickyNote && !(activeObj as any).isArrow;
+  const isActiveSel = activeObj.type === 'activeselection' || activeObj.type === 'activeSelection';
+
+  if (isActualGroup) {
     const items = (activeObj as fabric.Group).removeAll();
     canvas.remove(activeObj);
-    items.forEach(item => {
+    items.forEach((item: any) => {
       item.set({ selectable: true, evented: true, perPixelTargetFind: true });
+      if (item.isStickyNote || item.stickyColorConfig) {
+        item.minHeight = item.minHeight || 180;
+        applyStickyNoteMethods(item);
+        item.initDimensions?.();
+      }
       canvas?.add(item);
     });
     const sel = new fabric.ActiveSelection(items, { canvas });
     canvas.setActiveObject(sel);
+    canvas.requestRenderAll();
+    saveHistoryState();
+    syncToFirebase();
+    updateSelectionState();
+    displayToast('Objects ungrouped (Ctrl+Shift+G)');
+  } else if (isActiveSel) {
+    // If multiple items are selected in ActiveSelection, only ungroup actual groups inside it!
+    const subObjects = activeObj.getObjects ? activeObj.getObjects() : (activeObj as any)._objects || [];
+    const groupsToUngroup = subObjects.filter(
+      (o: any) => o.type === 'group' && !o.isStickyNote && !o.isArrow
+    ) as fabric.Group[];
+    if (groupsToUngroup.length === 0) {
+      // No groups inside the ActiveSelection; do nothing to prevent corrupting coordinates or duplicating objects!
+      return;
+    }
+    canvas.discardActiveObject();
+    const allResultingItems: any[] = [];
+    groupsToUngroup.forEach((g: fabric.Group) => {
+      const items = g.removeAll();
+      canvas?.remove(g);
+      items.forEach((item: any) => {
+        item.set({ selectable: true, evented: true, perPixelTargetFind: true });
+        if (item.isStickyNote || item.stickyColorConfig) {
+          item.minHeight = item.minHeight || 180;
+          applyStickyNoteMethods(item);
+          item.initDimensions?.();
+        }
+        canvas?.add(item);
+        allResultingItems.push(item);
+      });
+    });
+    // Re-include non-group objects from original selection
+    subObjects.forEach((o: any) => {
+      if (!groupsToUngroup.includes(o) && canvas?.contains(o)) {
+        allResultingItems.push(o);
+      }
+    });
+    if (allResultingItems.length > 0) {
+      const sel = new fabric.ActiveSelection(allResultingItems, { canvas });
+      canvas.setActiveObject(sel);
+    }
     canvas.requestRenderAll();
     saveHistoryState();
     syncToFirebase();

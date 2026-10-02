@@ -432,6 +432,7 @@ const updateLockToolbar = () => {
   }
 };
 let lockedGlowObjects: any[] = [];
+let broadcastLiveLock: (targetIds: string[], isLocked: boolean) => void = () => {};
 
 const highlightLockedObjects = () => {
   if (!canvas) return;
@@ -441,32 +442,16 @@ const highlightLockedObjects = () => {
     ? (active.getObjects ? active.getObjects() : active._objects || []) 
     : [active];
   
-  clearLockedHighlights();
-
-  const applyGlow = (obj: any) => {
-    if (obj._hasGlowHighlight) return;
-    obj._hasGlowHighlight = true;
-    obj._origShadow = obj.shadow !== undefined ? obj.shadow : null;
-    obj.set({
-      shadow: new fabric.Shadow({
-        color: '#f59e0b',
-        blur: 18,
-        offsetX: 0,
-        offsetY: 0
-      })
-    });
-    lockedGlowObjects.push(obj);
-  };
-
+  lockedGlowObjects = [];
   targets.forEach((o: any) => {
     if (o.isLocked) {
-      applyGlow(o);
+      lockedGlowObjects.push(o);
       if (o.type === 'group' && o.getObjects) {
-        o.getObjects().forEach((child: any) => applyGlow(child));
+        o.getObjects().forEach((child: any) => lockedGlowObjects.push(child));
       }
     } else if (o.hasLockedChildren && o.getObjects) {
       o.getObjects().forEach((child: any) => {
-        if (child.isLocked) applyGlow(child);
+        if (child.isLocked) lockedGlowObjects.push(child);
       });
     }
   });
@@ -475,15 +460,6 @@ const highlightLockedObjects = () => {
 
 const clearLockedHighlights = () => {
   if (!canvas || lockedGlowObjects.length === 0) return;
-  lockedGlowObjects.forEach(obj => {
-    if (obj._hasGlowHighlight) {
-      obj.set({
-        shadow: obj._origShadow
-      });
-      delete obj._hasGlowHighlight;
-      delete obj._origShadow;
-    }
-  });
   lockedGlowObjects = [];
   canvas.requestRenderAll();
 };
@@ -520,9 +496,13 @@ const unlockSelectedObjects = () => {
     item.setCoords();
   };
 
+  const targets: any[] = (active.type?.toLowerCase() === 'activeselection' || active instanceof fabric.ActiveSelection)
+    ? (active.getObjects ? active.getObjects() : active._objects || [])
+    : [active];
+
+  targets.forEach((o: any) => unlockItem(o));
+
   if (active.type?.toLowerCase() === 'activeselection' || active instanceof fabric.ActiveSelection) {
-    const targets = active.getObjects ? active.getObjects() : active._objects || [];
-    targets.forEach((o: any) => unlockItem(o));
     active.isLocked = false;
     active.set({
       lockMovementX: false,
@@ -540,8 +520,11 @@ const unlockSelectedObjects = () => {
       ml: true, mr: true, mt: true, mb: true, mtr: true
     });
     active.setCoords();
-  } else {
-    unlockItem(active);
+  }
+
+  const unlockedIds = targets.map((o: any) => o.id || o.arrowId).filter(Boolean);
+  if (unlockedIds.length > 0) {
+    broadcastLiveLock(unlockedIds, false);
   }
 
   isObjectLocked.value = false;
@@ -656,29 +639,20 @@ const liveNodeArrowSvg = computed(() => {
   }
   const isStraight = maxDev < Math.max(16 * zoom, sDist * 0.12) || sPts.length <= 3;
 
-  let tangentAngle = Math.atan2(sn.y - s0.y, sn.x - s0.x);
-  let sCur = s0;
+  let sRef = s0;
   if (sPts.length >= 2) {
-    const m = sPts.length - 1;
-    sCur = sPts[m - 1];
-    const sPrev = sPts[Math.max(0, m - 2)];
-    const isCorner = editingArrowCorners.value.has(m) || editingArrowCorners.value.has(m - 1);
-    tangentAngle = Math.atan2(sn.y - sCur.y, sn.x - sCur.x);
-    if (!isCorner && m >= 2) {
-      const vx = 1.5 * (sn.x - sCur.x) - 0.5 * (sCur.x - sPrev.x);
-      const vy = 1.5 * (sn.y - sCur.y) - 0.5 * (sCur.y - sPrev.y);
-      if (Math.hypot(vx, vy) > 1e-4) {
-        const curveAngle = Math.atan2(vy, vx);
-        const angleDiff = Math.atan2(Math.sin(curveAngle - tangentAngle), Math.cos(curveAngle - tangentAngle));
-        if (Math.abs(angleDiff) < Math.PI / 3) {
-          tangentAngle = curveAngle;
-        }
-      }
+    let accumulated = 0;
+    const targetLookback = Math.max(22 * zoom, headLen * 1.25);
+    for (let i = sPts.length - 1; i >= 1; i--) {
+      accumulated += Math.hypot(sPts[i].x - sPts[i - 1].x, sPts[i].y - sPts[i - 1].y);
+      sRef = sPts[i - 1];
+      if (accumulated >= targetLookback) break;
     }
   }
+  const tangentAngle = Math.atan2(sn.y - sRef.y, sn.x - sRef.x);
 
-  const sDistToCur = Math.hypot(sn.x - sCur.x, sn.y - sCur.y);
-  const shaftCut = Math.min(Math.max(2, (rawWidth * zoom) * 0.4), headLen * 0.2, sDistToCur * 0.35);
+  const baseDist = headLen * Math.cos(headAngle);
+  const shaftCut = Math.max(2, baseDist - Math.min(3 * zoom, headLen * 0.15));
   const shaftEndX = sn.x - shaftCut * Math.cos(tangentAngle);
   const shaftEndY = sn.y - shaftCut * Math.sin(tangentAngle);
 
@@ -1466,7 +1440,19 @@ const updateSelectionState = () => {
       ml: true, mr: true, mt: true, mb: true, mtr: true
     });
   } else if (active && (active.isStickyNote || active.stickyColorConfig)) {
-    active.set({ lockUniScaling: true, lockScalingFlip: true });
+    active.set({
+      lockUniScaling: true,
+      lockScalingFlip: true,
+      lockScalingX: true,
+      lockScalingY: true,
+      lockRotation: true,
+      hasControls: false,
+      hasBorders: true
+    });
+    active.setControlsVisibility({
+      tl: false, tr: false, bl: false, br: false,
+      ml: false, mr: false, mt: false, mb: false, mtr: false
+    });
     isObjectLocked.value = !!(active && active.isLocked === true);
   } else {
     isObjectLocked.value = !!(active && active.isLocked === true);
@@ -1709,6 +1695,13 @@ const currentLiveText = ref<{
   text: string;
 } | null>(null);
 
+const currentLiveLock = ref<{
+  targetIds: string[];
+  isLocked: boolean;
+  timestamp: number;
+} | null>(null);
+const remoteLockTimestamps: Record<string, number> = {};
+
 const sampleStrokePoints = (points: Array<{ x: number; y: number }>, maxPoints = 150) => {
   if (points.length <= maxPoints) return points.map(p => ({ x: Math.round(p.x), y: Math.round(p.y) }));
   const step = (points.length - 1) / (maxPoints - 1);
@@ -1850,8 +1843,30 @@ const broadcastMyCursor = (opt: any) => {
     liveStroke: liveStrokePayload,
     liveDrag: currentLiveDrag.value,
     liveShape: currentLiveShape.value,
-    liveText: currentLiveText.value
+    liveText: currentLiveText.value,
+    liveLock: currentLiveLock.value
   }).catch(() => {});
+};
+
+broadcastLiveLock = (targetIds: string[], isLocked: boolean) => {
+  if (!isCollabActive.value || !db || !authStore.uid || !roomStore.currentRoom) return;
+  const roomId = roomStore.currentRoom.roomId;
+  const cursorRef = doc(db, 'rooms', roomId, 'cursors', authStore.uid);
+  currentLiveLock.value = {
+    targetIds,
+    isLocked,
+    timestamp: Date.now()
+  };
+  setDoc(cursorRef, {
+    uid: authStore.uid,
+    name: authStore.displayName || 'Guest',
+    avatar: authStore.avatar || '🎨',
+    color: getCursorColor(authStore.uid),
+    x: Math.round(Number.isFinite(lastCursorPos.x) && lastCursorPos.x !== -9999 ? lastCursorPos.x : 0),
+    y: Math.round(Number.isFinite(lastCursorPos.y) && lastCursorPos.y !== -9999 ? lastCursorPos.y : 0),
+    updatedAt: Date.now(),
+    liveLock: currentLiveLock.value
+  }, { merge: true }).catch(() => {});
 };
 
 const removeMyCursor = () => {
@@ -1950,6 +1965,35 @@ const startCursorListener = () => {
               }
               targetObj.setCoords?.();
               canvas.requestRenderAll();
+            }
+          }
+        }
+
+        // Apply instant Channel 1 object lock/unlock from remote peer
+        if (data.liveLock && canvas) {
+          const lk = data.liveLock;
+          if (lk.timestamp > (remoteLockTimestamps[data.uid] || 0)) {
+            remoteLockTimestamps[data.uid] = lk.timestamp;
+            let changed = false;
+            canvas.getObjects().forEach((o: any) => {
+              const id = o.id || o.arrowId;
+              if (id && lk.targetIds.includes(id)) {
+                o.isLocked = lk.isLocked;
+                o.set({
+                  lockMovementX: lk.isLocked,
+                  lockMovementY: lk.isLocked,
+                  lockRotation: lk.isLocked,
+                  lockScalingX: lk.isLocked,
+                  lockScalingY: lk.isLocked,
+                  hasControls: !lk.isLocked
+                });
+                o.setCoords();
+                changed = true;
+              }
+            });
+            if (changed) {
+              canvas.requestRenderAll();
+              updateSelectionState();
             }
           }
         }
@@ -2066,7 +2110,8 @@ const createArrowFromPoints = (
       finalPts.push({ x: p0.x + t * (pn.x - p0.x), y: p0.y + t * (pn.y - p0.y) });
     }
 
-    const shaftCut = Math.min(Math.max(2, width * 0.4), headLen * 0.2);
+    const baseDist = headLen * Math.cos(headAngle);
+    const shaftCut = Math.max(2, baseDist - Math.min(3, headLen * 0.15));
     const shaftEndX = pn.x - shaftCut * Math.cos(tangentAngle);
     const shaftEndY = pn.y - shaftCut * Math.sin(tangentAngle);
 
@@ -2114,30 +2159,20 @@ const createArrowFromPoints = (
     }
     finalPts = sampled.map(p => ({ x: p.x, y: p.y }));
 
-    let tangentAngle = Math.atan2(pn.y - p0.y, pn.x - p0.x);
-    let pCur = p0;
+    let pRef = p0;
     if (sampled.length >= 2) {
-      const m = sampled.length - 1;
-      pCur = sampled[m - 1];
-      const pPrev = sampled[Math.max(0, m - 2)];
-      const isCorner = cornersSet.has(m) || cornersSet.has(m - 1);
-      tangentAngle = Math.atan2(pn.y - pCur.y, pn.x - pCur.x);
-      if (!isCorner && m >= 2) {
-        // True instantaneous tangent vector at endpoint pn of the spline curve
-        const vx = 1.5 * (pn.x - pCur.x) - 0.5 * (pCur.x - pPrev.x);
-        const vy = 1.5 * (pn.y - pCur.y) - 0.5 * (pCur.y - pPrev.y);
-        if (Math.hypot(vx, vy) > 1e-4) {
-          const curveAngle = Math.atan2(vy, vx);
-          const angleDiff = Math.atan2(Math.sin(curveAngle - tangentAngle), Math.cos(curveAngle - tangentAngle));
-          if (Math.abs(angleDiff) < Math.PI / 3) {
-            tangentAngle = curveAngle;
-          }
-        }
+      let accumulated = 0;
+      const targetLookback = Math.max(22, headLen * 1.25);
+      for (let i = sampled.length - 1; i >= 1; i--) {
+        accumulated += Math.hypot(sampled[i].x - sampled[i - 1].x, sampled[i].y - sampled[i - 1].y);
+        pRef = sampled[i - 1];
+        if (accumulated >= targetLookback) break;
       }
     }
+    const tangentAngle = Math.atan2(pn.y - pRef.y, pn.x - pRef.x);
 
-    const distToCur = Math.hypot(pn.x - pCur.x, pn.y - pCur.y);
-    const shaftCut = Math.min(Math.max(2, width * 0.4), headLen * 0.2, distToCur * 0.35);
+    const baseDist = headLen * Math.cos(headAngle);
+    const shaftCut = Math.max(2, baseDist - Math.min(3, headLen * 0.15));
     const shaftEndX = pn.x - shaftCut * Math.cos(tangentAngle);
     const shaftEndY = pn.y - shaftCut * Math.sin(tangentAngle);
 
@@ -2640,6 +2675,89 @@ const initFabric = () => {
     const screenW = WORKSPACE_WIDTH * zoom;
     const screenH = WORKSPACE_HEIGHT * zoom;
 
+    // Render high-visibility solid amber contour for locked objects when hovering unlock button
+    if (lockedGlowObjects.length > 0) {
+      ctx.save();
+      ctx.transform(vpt[0], vpt[1], vpt[2], vpt[3], vpt[4], vpt[5]);
+
+      const drawSolidOutline = (obj: any) => {
+        if (!obj || !obj.visible) return;
+        ctx.save();
+        const m = obj.calcTransformMatrix();
+        ctx.transform(m[0], m[1], m[2], m[3], m[4], m[5]);
+        ctx.strokeStyle = '#f59e0b';
+        ctx.shadowColor = '#f59e0b';
+        ctx.shadowBlur = 4;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        if (obj.isArrow && obj._objects) {
+          obj._objects.forEach((child: any) => drawSolidOutline(child));
+        } else if (obj.type === 'path' && obj.path) {
+          ctx.lineWidth = (obj.strokeWidth || 4) + 6;
+          ctx.beginPath();
+          for (const cmd of obj.path) {
+            const op = cmd[0];
+            if (op === 'M') ctx.moveTo(cmd[1], cmd[2]);
+            else if (op === 'L') ctx.lineTo(cmd[1], cmd[2]);
+            else if (op === 'C') ctx.bezierCurveTo(cmd[1], cmd[2], cmd[3], cmd[4], cmd[5], cmd[6]);
+            else if (op === 'Q') ctx.quadraticCurveTo(cmd[1], cmd[2], cmd[3], cmd[4]);
+            else if (op === 'Z') ctx.closePath();
+          }
+          ctx.stroke();
+        } else if (obj.type === 'line') {
+          ctx.lineWidth = (obj.strokeWidth || 4) + 6;
+          ctx.beginPath();
+          ctx.moveTo(obj.x1, obj.y1);
+          ctx.lineTo(obj.x2, obj.y2);
+          ctx.stroke();
+        } else if (obj.type === 'polygon' && obj.points) {
+          ctx.lineWidth = (obj.strokeWidth || 2) + 4;
+          ctx.fillStyle = 'rgba(245, 158, 11, 0.4)';
+          ctx.beginPath();
+          obj.points.forEach((p: any, idx: number) => {
+            if (idx === 0) ctx.moveTo(p.x, p.y);
+            else ctx.lineTo(p.x, p.y);
+          });
+          ctx.closePath();
+          ctx.stroke();
+          ctx.fill();
+        } else if (obj.isStickyNote || (obj.type === 'textbox' && obj.stickyColorConfig)) {
+          const w = obj.width || 180;
+          const h = (obj as any).minHeight || obj.height || 180;
+          ctx.lineWidth = 4;
+          ctx.beginPath();
+          if ((ctx as any).roundRect) {
+            (ctx as any).roundRect(-w / 2, -h / 2, w, h, 8);
+          } else {
+            ctx.rect(-w / 2, -h / 2, w, h);
+          }
+          ctx.stroke();
+        } else if (obj.type === 'rect') {
+          ctx.lineWidth = 4;
+          ctx.strokeRect(-obj.width / 2, -obj.height / 2, obj.width, obj.height);
+        } else if (obj.type === 'circle') {
+          ctx.lineWidth = 4;
+          ctx.beginPath();
+          ctx.arc(0, 0, obj.radius || 20, 0, 2 * Math.PI);
+          ctx.stroke();
+        } else if (obj.type === 'group' && obj._objects) {
+          obj._objects.forEach((child: any) => drawSolidOutline(child));
+        } else {
+          const w = obj.width || 40;
+          const h = obj.height || 40;
+          ctx.lineWidth = 4;
+          ctx.strokeRect(-w / 2, -h / 2, w, h);
+        }
+        ctx.restore();
+      };
+
+      lockedGlowObjects.forEach(obj => {
+        drawSolidOutline(obj);
+      });
+      ctx.restore();
+    }
+
     ctx.save();
     ctx.fillStyle = '#0f172a';
 
@@ -2722,6 +2840,8 @@ const initFabric = () => {
 
       // Tag author and push to user undo stack
       if (!isInternalChange) {
+        target._createdAt = Date.now();
+        target._localModifiedAt = Date.now();
         if (isIsolationMode.value && target) {
           if (!isolatedItems.includes(target) && target !== isolatedGroup && target !== liveArrowPreview && target !== drawingObject && !target._isPreview) {
             isolatedItems.push(target);
@@ -2782,6 +2902,8 @@ const initFabric = () => {
         e.path.id = 'path_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
       }
       e.path.authorUid = authStore.uid;
+      e.path._createdAt = Date.now();
+      e.path._localModifiedAt = Date.now();
       e.path.set({ perPixelTargetFind: true });
       if (isIsolationMode.value) {
         if (!isolatedItems.includes(e.path)) {
@@ -2804,44 +2926,33 @@ const initFabric = () => {
       hasIsolationChanged.value = true;
     }
     const obj = e?.target;
-    if (obj && (obj.isStickyNote || obj.stickyColorConfig)) {
-      const sx = Math.abs(obj.scaleX || 1);
-      const sy = Math.abs(obj.scaleY || 1);
-      if (Math.abs(sx - 1) > 1e-4 || Math.abs(sy - 1) > 1e-4) {
-        // Enforce uniform proportional scale factor in 2D
-        const s = Math.max(sx, sy);
-        const center = obj.getCenterPoint();
-        const curW = obj.width || 180;
-        const curMinH = (obj as any).minHeight !== undefined ? (obj as any).minHeight : (obj.height || 180);
-
-        const targetW = Math.max(80, Math.min(360, Math.round(curW * s)));
-        const targetH = Math.max(80, Math.min(360, Math.round(curMinH * s)));
-        const curFontSize = obj.fontSize || 18;
-        const newFontSize = Math.max(10, Math.min(120, Math.round(curFontSize * s)));
-
-        (obj as any).minHeight = targetH;
-        obj.set({
-          width: targetW,
-          height: targetH,
-          fontSize: newFontSize,
-          scaleX: 1,
-          scaleY: 1
-        });
-        obj.initDimensions();
-        if (obj.setPositionByOrigin) {
-          obj.setPositionByOrigin(center, 'center', 'center');
-        }
-        obj.setCoords();
+    if (!isInternalChange && obj) {
+      obj._localModifiedAt = Date.now();
+      if (typeof obj.forEachObject === 'function') {
+        obj.forEachObject((c: any) => { c._localModifiedAt = Date.now(); });
       }
+    }
+    if (obj && (obj.isStickyNote || obj.stickyColorConfig)) {
+      obj.set({
+        scaleX: 1,
+        scaleY: 1,
+        flipX: false,
+        flipY: false,
+        angle: 0
+      });
+      obj.setCoords();
     } else if (obj && (obj.type === 'activeselection' || obj.type === 'activeSelection' || obj.type === 'group')) {
       obj.setCoords();
       const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
       targets.forEach((c: any) => {
         if (c.isStickyNote || c.stickyColorConfig) {
-          c.flipX = false;
-          c.flipY = false;
-          c.scaleX = Math.abs(c.scaleX || 1);
-          c.scaleY = Math.abs(c.scaleY || 1);
+          c.set({
+            scaleX: 1,
+            scaleY: 1,
+            flipX: false,
+            flipY: false,
+            angle: 0
+          });
           c.setCoords();
         }
       });
@@ -4139,24 +4250,15 @@ const initFabric = () => {
     hasObjectTransformed = true;
     const obj = e?.target;
     if (obj) {
-      // 1. Single sticky note: enforce strict 1:1 aspect ratio and min (80px) / max (600px) clamp in real-time
+      // 1. Single sticky note: scaling is completely disabled
       if (obj.isStickyNote || obj.stickyColorConfig) {
-        const baseW = obj.width || 120;
-        const uniformScale = Math.max(Math.abs(obj.scaleX || 1), Math.abs(obj.scaleY || 1));
-        const minScale = 80 / baseW;
-        const maxScale = 360 / baseW;
-        const clampedScale = Math.max(minScale, Math.min(maxScale, uniformScale));
-        const transform = (canvas as any)._currentTransform;
-        const originX = transform?.originX || 'center';
-        const originY = transform?.originY || 'center';
-        const anchorPoint = obj.getPointByOrigin(originX, originY);
         obj.set({
-          scaleX: clampedScale,
-          scaleY: clampedScale,
+          scaleX: 1,
+          scaleY: 1,
           flipX: false,
-          flipY: false
+          flipY: false,
+          angle: 0
         });
-        obj.setPositionByOrigin(anchorPoint, originX, originY);
       } else if (obj.type === 'activeselection' || obj.type === 'activeSelection' || obj.type === 'group') {
         const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
         const rawScaleX = obj.scaleX || 1;
@@ -4164,37 +4266,19 @@ const initFabric = () => {
         const selScaleX = Math.max(0.05, Math.abs(rawScaleX));
         const selScaleY = Math.max(0.05, Math.abs(rawScaleY));
 
-        const transform = (canvas as any)._currentTransform || (e as any).transform;
-        const corner = transform?.corner;
-
-        let activeScaleFactor = 1;
-        if (corner === 'ml' || corner === 'mr') {
-          // Dragging horizontal handle: drive uniform scale by width change
-          activeScaleFactor = selScaleX;
-        } else if (corner === 'mt' || corner === 'mb') {
-          // Dragging vertical handle: drive uniform scale by height change
-          activeScaleFactor = selScaleY;
-        } else {
-          // Corner scaling: drive by min scale to shrink with dragging handle
-          activeScaleFactor = Math.min(selScaleX, selScaleY);
-        }
-
         const signX = rawScaleX < 0 ? -1 : 1;
         const signY = rawScaleY < 0 ? -1 : 1;
 
         targets.forEach((c: any) => {
           if (c.isStickyNote || c.stickyColorConfig) {
-            const baseW = c.width || 120;
-            const minScale = 80 / baseW;
-            const maxScale = 360 / baseW;
-            const origBaseScale = Math.abs(c._origBaseScale || 1);
-            const childVisualScale = Math.max(minScale, Math.min(maxScale, activeScaleFactor * origBaseScale));
-
-            // Counteract selection negative flip so sticky note stays upright and never mirrored while moving across
-            c.scaleX = signX * (childVisualScale / selScaleX);
-            c.scaleY = signY * (childVisualScale / selScaleY);
+            // Major Update: Sticky note NEVER scales, NEVER rotates, NEVER flips/mirrors.
+            // It strictly preserves visual scale 1.0, 0 rotation, flipX=false, flipY=false.
+            // Its position moves automatically with the selection!
+            c.scaleX = signX * (1 / selScaleX);
+            c.scaleY = signY * (1 / selScaleY);
             c.flipX = false;
             c.flipY = false;
+            c.angle = -(obj.angle || 0);
           } else if (c.isLocked) {
             // Locked objects in multi-selection should not scale or mirror
             const origSx = Math.abs(c._origScaleX || 1);
@@ -4352,27 +4436,25 @@ const changeStickyHeight = (eventData: any, transform: any, x: number, y: number
 };
 
 const setupStickyControls = (note: any) => {
-  const defaultControls = fabric.controlsUtils?.createObjectDefaultControls?.() || {};
-
-  note.controls = {
-    tl: defaultControls.tl,
-    tr: defaultControls.tr,
-    bl: defaultControls.bl,
-    br: defaultControls.br
-  };
   note.setControlsVisibility({
-    tl: true,
-    tr: true,
-    bl: true,
-    br: true,
+    tl: false,
+    tr: false,
+    bl: false,
+    br: false,
     ml: false,
     mr: false,
     mt: false,
     mb: false,
     mtr: false
   });
+  note.hasControls = false;
+  note.hasBorders = true;
   note.hasRotatingPoint = false;
+  note.lockScalingX = true;
+  note.lockScalingY = true;
+  note.lockRotation = true;
   note.lockUniScaling = true;
+  note.lockScalingFlip = true;
 };
 
 const applyStickyNoteMethods = (note: any) => {
@@ -4683,11 +4765,21 @@ const loadFromFirebase = async (json: string) => {
       }
     }
 
-    // Remove deleted objects (excluding temporary preview items)
+    // Remove deleted objects (excluding temporary preview items and recently modified local objects)
     const toRemove = existingObjects.filter((o: any) => {
       if (o === liveArrowPreview || o === drawingObject || o._isPreview) return false;
       const id = o.id || o.arrowId;
-      return id && !incomingIds.has(id);
+      if (!id || incomingIds.has(id)) return false;
+
+      // Anti-vanishing protection:
+      // If object was authored by local user or modified locally within 15 seconds,
+      // DO NOT delete it! The incoming snapshot may have been taken before this object was synced.
+      const isLocallyCreatedOrModified = (o.authorUid === authStore.uid || o._localModifiedAt) && 
+        (Date.now() - (o._localModifiedAt || o._createdAt || 0) < 15000);
+      if (isLocallyCreatedOrModified) {
+        return false;
+      }
+      return true;
     });
     toRemove.forEach((o: any) => canvas?.remove(o));
 
@@ -5294,6 +5386,11 @@ const toggleLockSelected = () => {
     });
   }
 
+  const targetIds = targets.map((o: any) => o.id || o.arrowId).filter(Boolean);
+  if (targetIds.length > 0) {
+    broadcastLiveLock(targetIds, newLocked);
+  }
+
   isObjectLocked.value = newLocked;
   canvas.requestRenderAll();
   saveHistoryState();
@@ -5718,6 +5815,9 @@ const undo = async () => {
 
         canvas.requestRenderAll();
         updateSelectionState();
+        hasUnsavedChanges.value = true;
+        triggerDebouncedAutoSave();
+        syncToFirebase();
         displayToast('Undo (Ctrl+Z)');
       } finally {
         isInternalChange = false;
@@ -5795,6 +5895,8 @@ const undo = async () => {
       }
       canvas.requestRenderAll();
       syncToFirebase();
+      hasUnsavedChanges.value = true;
+      triggerDebouncedAutoSave();
       updateSelectionState();
       displayToast('Undo: reverted your change (Ctrl+Z)');
       return;
@@ -5840,6 +5942,9 @@ const redo = async () => {
 
         canvas.requestRenderAll();
         updateSelectionState();
+        hasUnsavedChanges.value = true;
+        triggerDebouncedAutoSave();
+        syncToFirebase();
         displayToast('Redo (Ctrl+Y)');
       } finally {
         isInternalChange = false;
@@ -5922,6 +6027,8 @@ const redo = async () => {
       }
       canvas.requestRenderAll();
       syncToFirebase();
+      hasUnsavedChanges.value = true;
+      triggerDebouncedAutoSave();
       updateSelectionState();
       displayToast('Redo: reapplied your change (Ctrl+Y)');
       return;

@@ -257,6 +257,7 @@ export const useRoomStore = defineStore('room', () => {
 
     // 2. Participants Collection listener
     let isInitialParticipantsLoad = true;
+    let myApprovedAt = 0;
     const notifiedPending = new Set<string>();
     
     const partCol = collection(db, 'rooms', roomId, 'participants');
@@ -275,7 +276,11 @@ export const useRoomStore = defineStore('room', () => {
           parts[p.uid] = p;
         }
         if (p.uid === authStore.uid) {
+          const prevStatus = myStatus.value;
           myStatus.value = p.status;
+          if (p.status === 'approved' && prevStatus !== 'approved' && !myApprovedAt) {
+            myApprovedAt = Date.now();
+          }
         }
       });
 
@@ -295,7 +300,11 @@ export const useRoomStore = defineStore('room', () => {
                   pushToast('Participant Removed', `${p.displayName} was removed by host`, 'warning');
                 }
               } else if (p.status === 'approved' && change.type === 'added') {
-                pushToast('Participant Joined', `${p.displayName} joined the meeting`, 'info');
+                // Only push toast if participant joined in real time after current user was approved in the room
+                const joinedAt = p.joinedAt || 0;
+                if (myApprovedAt && joinedAt >= myApprovedAt - 2000 && (now - joinedAt < 20000)) {
+                  pushToast('Participant Joined', `${p.displayName} joined the meeting`, 'info');
+                }
               }
             }
           }

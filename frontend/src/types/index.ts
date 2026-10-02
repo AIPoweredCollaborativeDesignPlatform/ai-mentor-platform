@@ -140,6 +140,11 @@ export interface CursorData {
     targetId: string;
     text: string;
   } | null;
+  liveLock?: {
+    targetIds: string[];
+    isLocked: boolean;
+    timestamp: number;
+  } | null;
 }
 
 export type AnimationMotionType = 'harmonic' | 'bounce' | 'pendulum' | 'spin' | 'pulse' | 'wave';

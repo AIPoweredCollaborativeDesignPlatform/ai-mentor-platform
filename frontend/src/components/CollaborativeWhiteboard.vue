@@ -212,9 +212,13 @@ interface IsolationLevel {
   group: any;
   items: any[];
   savedProps: Array<{ obj: any; opacity: number; selectable: boolean; evented: boolean }>;
+  undoStack?: string[];
+  redoStack?: string[];
 }
 const isIsolationMode = ref(false);
 const isolationStack = ref<IsolationLevel[]>([]);
+const isolationUndoStack = ref<string[]>([]);
+const isolationRedoStack = ref<string[]>([]);
 let isolatedGroup: any = null;
 let isolatedItems: any[] = [];
 
@@ -2546,6 +2550,9 @@ const onPencilHoldDetected = () => {
 const initFabric = () => {
   if (!canvasRef.value || !wrapperRef.value) return;
 
+  fabric.FabricObject.ownDefaults.strokeUniform = true;
+  fabric.FabricObject.ownDefaults.borderScaleFactor = 2;
+
   canvas = new fabric.Canvas(canvasRef.value, {
     selectionFullyContained: false,
     perPixelTargetFind: true,
@@ -2558,9 +2565,54 @@ const initFabric = () => {
     height: wrapperRef.value.clientHeight,
     selectionColor: 'rgba(99, 102, 241, 0.18)',
     selectionBorderColor: '#6366f1',
-    selectionLineWidth: 1.5,
+    selectionLineWidth: 3,
     uniformScaling: false
   });
+
+  // Patch ActiveSelection._drawBorders to always envelop all children (including stationary locked items)
+  // and guarantee border thickness is doubled (borderScaleFactor = 2)
+  const origDrawBorders = fabric.ActiveSelection.prototype._drawBorders;
+  fabric.ActiveSelection.prototype._drawBorders = function(ctx: CanvasRenderingContext2D, options: any) {
+    if (this._objects && this._objects.length > 0) {
+      const invSel = fabric.util.invertTransform(this.calcTransformMatrix());
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      let hasValidCoords = false;
+
+      this._objects.forEach((c: any) => {
+        if (!c || !c.visible) return;
+        const cm = c.calcTransformMatrix();
+        const w = (c.width || 0), h = (c.height || 0);
+        const pts = [
+          new fabric.Point(-w / 2, -h / 2),
+          new fabric.Point(w / 2, -h / 2),
+          new fabric.Point(w / 2, h / 2),
+          new fabric.Point(-w / 2, h / 2)
+        ].map(p => fabric.util.transformPoint(p, cm))
+         .map(wp => fabric.util.transformPoint(wp, invSel));
+
+        pts.forEach(p => {
+          hasValidCoords = true;
+          minX = Math.min(minX, p.x);
+          minY = Math.min(minY, p.y);
+          maxX = Math.max(maxX, p.x);
+          maxY = Math.max(maxY, p.y);
+        });
+      });
+
+      if (hasValidCoords && isFinite(minX) && isFinite(minY)) {
+        const pad = (this.padding || 0);
+        const strokeW = (this.borderScaleFactor || 2) / (this.canvas ? this.canvas.getZoom() : 1);
+        ctx.save();
+        ctx.strokeStyle = this.borderColor || 'rgb(178,204,255)';
+        ctx.lineWidth = strokeW;
+        (this as any)._setLineDash(ctx, this.borderDashArray);
+        ctx.strokeRect(minX - pad, minY - pad, (maxX - minX) + 2 * pad, (maxY - minY) + 2 * pad);
+        ctx.restore();
+        return;
+      }
+    }
+    origDrawBorders.call(this, ctx, options);
+  };
 
   (canvas as any).centeredKey = 'altKey';
   (canvas as any).uniScaleKey = 'shiftKey';
@@ -2703,7 +2755,15 @@ const initFabric = () => {
           }
           ctx.stroke();
 
-          // Re-draw core stroke so amber highlight surrounds rather than covers line
+          // Re-draw fill and core stroke so amber highlight surrounds rather than covers line
+          if (target.fill && target.fill !== 'transparent') {
+            ctx.save();
+            ctx.shadowBlur = 0;
+            ctx.shadowColor = 'transparent';
+            ctx.fillStyle = target.fill;
+            ctx.fill();
+            ctx.restore();
+          }
           const origStroke = target.stroke || (target as any).arrowColor || '#1e293b';
           const origWidth = target.strokeWidth || (target as any).arrowStrokeWidth || 3;
           if (origStroke && origStroke !== 'transparent') {
@@ -2780,33 +2840,131 @@ const initFabric = () => {
           }
           ctx.stroke();
         } else if (target.type === 'rect') {
-          ctx.lineWidth = 4;
+          const haloWidth = Math.max(6, (target.strokeWidth || 2) + 6);
+          ctx.lineWidth = haloWidth;
           ctx.strokeRect(-target.width / 2, -target.height / 2, target.width, target.height);
+
+          if (target.fill && target.fill !== 'transparent') {
+            ctx.save();
+            ctx.shadowBlur = 0;
+            ctx.shadowColor = 'transparent';
+            ctx.fillStyle = target.fill;
+            ctx.fillRect(-target.width / 2, -target.height / 2, target.width, target.height);
+            ctx.restore();
+          }
+          if (target.stroke && target.stroke !== 'transparent') {
+            ctx.save();
+            ctx.shadowBlur = 0;
+            ctx.shadowColor = 'transparent';
+            ctx.strokeStyle = target.stroke;
+            ctx.lineWidth = target.strokeWidth || 2;
+            ctx.strokeRect(-target.width / 2, -target.height / 2, target.width, target.height);
+            ctx.restore();
+          }
         } else if (target.type === 'circle') {
-          ctx.lineWidth = 4;
+          const r = target.radius || (target.width || 40) / 2;
+          const haloWidth = Math.max(6, (target.strokeWidth || 2) + 6);
+          ctx.lineWidth = haloWidth;
           ctx.beginPath();
-          ctx.arc(0, 0, target.radius || (target.width || 40) / 2, 0, 2 * Math.PI);
+          ctx.arc(0, 0, r, 0, 2 * Math.PI);
           ctx.stroke();
+
+          if (target.fill && target.fill !== 'transparent') {
+            ctx.save();
+            ctx.shadowBlur = 0;
+            ctx.shadowColor = 'transparent';
+            ctx.fillStyle = target.fill;
+            ctx.fill();
+            ctx.restore();
+          }
+          if (target.stroke && target.stroke !== 'transparent') {
+            ctx.save();
+            ctx.shadowBlur = 0;
+            ctx.shadowColor = 'transparent';
+            ctx.strokeStyle = target.stroke;
+            ctx.lineWidth = target.strokeWidth || 2;
+            ctx.stroke();
+            ctx.restore();
+          }
         } else if (target.type === 'ellipse') {
-          ctx.lineWidth = 4;
+          const rx = target.rx || (target.width || 40) / 2;
+          const ry = target.ry || (target.height || 40) / 2;
+          const haloWidth = Math.max(6, (target.strokeWidth || 2) + 6);
+          ctx.lineWidth = haloWidth;
           ctx.beginPath();
-          ctx.ellipse(0, 0, target.rx || (target.width || 40) / 2, target.ry || (target.height || 40) / 2, 0, 0, 2 * Math.PI);
+          ctx.ellipse(0, 0, rx, ry, 0, 0, 2 * Math.PI);
           ctx.stroke();
+
+          if (target.fill && target.fill !== 'transparent') {
+            ctx.save();
+            ctx.shadowBlur = 0;
+            ctx.shadowColor = 'transparent';
+            ctx.fillStyle = target.fill;
+            ctx.fill();
+            ctx.restore();
+          }
+          if (target.stroke && target.stroke !== 'transparent') {
+            ctx.save();
+            ctx.shadowBlur = 0;
+            ctx.shadowColor = 'transparent';
+            ctx.strokeStyle = target.stroke;
+            ctx.lineWidth = target.strokeWidth || 2;
+            ctx.stroke();
+            ctx.restore();
+          }
         } else if (target.type === 'triangle') {
-          ctx.lineWidth = 4;
           const w2 = (target.width || 40) / 2;
           const h2 = (target.height || 40) / 2;
+          const haloWidth = Math.max(6, (target.strokeWidth || 2) + 6);
+          ctx.lineWidth = haloWidth;
           ctx.beginPath();
           ctx.moveTo(0, -h2);
           ctx.lineTo(w2, h2);
           ctx.lineTo(-w2, h2);
           ctx.closePath();
           ctx.stroke();
+
+          if (target.fill && target.fill !== 'transparent') {
+            ctx.save();
+            ctx.shadowBlur = 0;
+            ctx.shadowColor = 'transparent';
+            ctx.fillStyle = target.fill;
+            ctx.fill();
+            ctx.restore();
+          }
+          if (target.stroke && target.stroke !== 'transparent') {
+            ctx.save();
+            ctx.shadowBlur = 0;
+            ctx.shadowColor = 'transparent';
+            ctx.strokeStyle = target.stroke;
+            ctx.lineWidth = target.strokeWidth || 2;
+            ctx.stroke();
+            ctx.restore();
+          }
         } else {
           const w = target.width || 40;
           const h = target.height || 40;
-          ctx.lineWidth = 4;
+          const haloWidth = Math.max(6, (target.strokeWidth || 2) + 6);
+          ctx.lineWidth = haloWidth;
           ctx.strokeRect(-w / 2, -h / 2, w, h);
+
+          if (target.fill && target.fill !== 'transparent') {
+            ctx.save();
+            ctx.shadowBlur = 0;
+            ctx.shadowColor = 'transparent';
+            ctx.fillStyle = target.fill;
+            ctx.fillRect(-w / 2, -h / 2, w, h);
+            ctx.restore();
+          }
+          if (target.stroke && target.stroke !== 'transparent') {
+            ctx.save();
+            ctx.shadowBlur = 0;
+            ctx.shadowColor = 'transparent';
+            ctx.strokeStyle = target.stroke;
+            ctx.lineWidth = target.strokeWidth || 2;
+            ctx.strokeRect(-w / 2, -h / 2, w, h);
+            ctx.restore();
+          }
         }
       };
 
@@ -2915,9 +3073,11 @@ const initFabric = () => {
     const target = e.target;
     if (target) {
       target.objectCaching = false;
+      target.strokeUniform = true;
       if (typeof target.getObjects === 'function') {
         target.getObjects().forEach((o: any) => {
           o.objectCaching = false;
+          o.strokeUniform = true;
         });
       }
 
@@ -2998,7 +3158,7 @@ const initFabric = () => {
       e.path.authorUid = authStore.uid;
       e.path._createdAt = Date.now();
       e.path._localModifiedAt = Date.now();
-      e.path.set({ perPixelTargetFind: true });
+      e.path.set({ strokeUniform: true, perPixelTargetFind: true });
       if (isIsolationMode.value) {
         if (!isolatedItems.includes(e.path)) {
           isolatedItems.push(e.path);
@@ -3677,6 +3837,7 @@ const initFabric = () => {
         originY: 'top' as const,
         selectable: false,
         evented: false,
+        strokeUniform: true,
         perPixelTargetFind: true
       };
 
@@ -4332,45 +4493,72 @@ const initFabric = () => {
         obj.setCoords();
         return;
       }
-      const dx = obj.left - (obj._dragStartLeft !== undefined ? obj._dragStartLeft : obj.left);
-      const dy = obj.top - (obj._dragStartTop !== undefined ? obj._dragStartTop : obj.top);
-      targets.forEach((c: any) => {
-        if (c.isLocked) {
-          if (c._origLockedWorldPos) {
-            const invSel = fabric.util.invertTransform(obj.calcTransformMatrix());
-            const localPos = fabric.util.transformPoint(c._origLockedWorldPos, invSel);
-            c.left = localPos.x;
-            c.top = localPos.y;
-            c.setCoords();
-          } else if (c._dragStartLocalLeft !== undefined && c._dragStartLocalTop !== undefined) {
-            c.left = c._dragStartLocalLeft - dx;
-            c.top = c._dragStartLocalTop - dy;
-            c.setCoords();
-          }
+
+      const unlockedTargets = targets.filter((o: any) => !o.isLocked);
+      let dx = obj.left - (obj._dragStartLeft !== undefined ? obj._dragStartLeft : obj.left);
+      let dy = obj.top - (obj._dragStartTop !== undefined ? obj._dragStartTop : obj.top);
+
+      // Clamp movement of selection box based strictly on moving unlocked targets
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      unlockedTargets.forEach((u: any) => {
+        if (u._origWorldBounds) {
+          minX = Math.min(minX, u._origWorldBounds.minX + dx);
+          minY = Math.min(minY, u._origWorldBounds.minY + dy);
+          maxX = Math.max(maxX, u._origWorldBounds.maxX + dx);
+          maxY = Math.max(maxY, u._origWorldBounds.maxY + dy);
         }
       });
-    }
 
-    // 2. Strict boundary clamping: flush coordinates first to obtain true scene bounding box
-    obj.setCoords();
-    let bound = obj.getBoundingRect ? obj.getBoundingRect(true) : null;
-    if (bound) {
-      if (bound.left < 0) {
-        obj.left += (0 - bound.left);
-      } else if (bound.left + bound.width > WORKSPACE_WIDTH) {
-        obj.left -= (bound.left + bound.width - WORKSPACE_WIDTH);
-      }
-
-      obj.setCoords();
-      bound = obj.getBoundingRect ? obj.getBoundingRect(true) : null;
-      if (bound) {
-        if (bound.top < 0) {
-          obj.top += (0 - bound.top);
-        } else if (bound.top + bound.height > WORKSPACE_HEIGHT) {
-          obj.top -= (bound.top + bound.height - WORKSPACE_HEIGHT);
+      if (isFinite(minX)) {
+        if (minX < 0) {
+          dx += (0 - minX);
+          obj.left = (obj._dragStartLeft !== undefined ? obj._dragStartLeft : obj.left) + dx;
+        } else if (maxX > WORKSPACE_WIDTH) {
+          dx -= (maxX - WORKSPACE_WIDTH);
+          obj.left = (obj._dragStartLeft !== undefined ? obj._dragStartLeft : obj.left) + dx;
+        }
+        if (minY < 0) {
+          dy += (0 - minY);
+          obj.top = (obj._dragStartTop !== undefined ? obj._dragStartTop : obj.top) + dy;
+        } else if (maxY > WORKSPACE_HEIGHT) {
+          dy -= (maxY - WORKSPACE_HEIGHT);
+          obj.top = (obj._dragStartTop !== undefined ? obj._dragStartTop : obj.top) + dy;
         }
       }
+
+      // Anchor locked targets firmly at their original world positions via inverted transform of obj
+      targets.forEach((c: any) => {
+        if (c.isLocked && c._origLockedWorldPos) {
+          const invSel = fabric.util.invertTransform(obj.calcTransformMatrix());
+          const localPos = fabric.util.transformPoint(c._origLockedWorldPos, invSel);
+          c.left = localPos.x;
+          c.top = localPos.y;
+          c.setCoords();
+        }
+      });
       obj.setCoords();
+    } else {
+      // 2. Single object strict boundary clamping
+      obj.setCoords();
+      let bound = obj.getBoundingRect ? obj.getBoundingRect(true) : null;
+      if (bound) {
+        if (bound.left < 0) {
+          obj.left += (0 - bound.left);
+        } else if (bound.left + bound.width > WORKSPACE_WIDTH) {
+          obj.left -= (bound.left + bound.width - WORKSPACE_WIDTH);
+        }
+
+        obj.setCoords();
+        bound = obj.getBoundingRect ? obj.getBoundingRect(true) : null;
+        if (bound) {
+          if (bound.top < 0) {
+            obj.top += (0 - bound.top);
+          } else if (bound.top + bound.height > WORKSPACE_HEIGHT) {
+            obj.top -= (bound.top + bound.height - WORKSPACE_HEIGHT);
+          }
+        }
+        obj.setCoords();
+      }
     }
     hasObjectTransformed = true;
     updateLiveDrag(e);
@@ -4401,6 +4589,8 @@ const initFabric = () => {
         c._origScaleX = c.scaleX || 1;
         c._origScaleY = c.scaleY || 1;
         c._origAngle = c.angle || 0;
+        const br = c.getBoundingRect ? c.getBoundingRect(true) : { left: c.left || 0, top: c.top || 0, width: c.width || 0, height: c.height || 0 };
+        c._origWorldBounds = { minX: br.left, minY: br.top, maxX: br.left + br.width, maxY: br.top + br.height };
         if (c.isLocked) {
           const wm = c.calcTransformMatrix();
           c._origLockedWorldPos = new fabric.Point(wm[4], wm[5]);
@@ -4618,6 +4808,8 @@ const changeStickyHeight = (eventData: any, transform: any, x: number, y: number
   return oldH !== newH;
 };
 
+const STICKY_NOTE_CONST_SIZE = 180;
+
 const setupStickyControls = (note: any) => {
   note.setControlsVisibility({
     tl: false,
@@ -4642,15 +4834,24 @@ const setupStickyControls = (note: any) => {
 
 const applyStickyNoteMethods = (note: any) => {
   note.padding = 0;
+  note.width = STICKY_NOTE_CONST_SIZE;
+  note.minHeight = STICKY_NOTE_CONST_SIZE;
+  note.height = Math.max(note.height || 0, STICKY_NOTE_CONST_SIZE);
+
   note.calcTextHeight = function() {
     const textH = fabric.Textbox.prototype.calcTextHeight.call(this);
-    return Math.max(textH, (this as any).minHeight !== undefined ? (this as any).minHeight : 60);
+    return Math.max(textH, STICKY_NOTE_CONST_SIZE);
   };
   (note as any)._getTopOffset = function() {
     const textH = fabric.Textbox.prototype.calcTextHeight.call(this);
-    const h = (this as any).height || (this as any).minHeight || 60;
+    const h = Math.max((this as any).height || STICKY_NOTE_CONST_SIZE, STICKY_NOTE_CONST_SIZE);
     const extraOffset = Math.max(0, (h - textH) / 2);
     return -h / 2 + extraOffset;
+  };
+  note.initDimensions = function() {
+    fabric.Textbox.prototype.initDimensions.call(this);
+    this.width = STICKY_NOTE_CONST_SIZE;
+    this.height = Math.max(this.height || 0, STICKY_NOTE_CONST_SIZE);
   };
 
   // Pure visual canvas placeholder render that disappears on typing and never serializes
@@ -4676,7 +4877,7 @@ const rehydrateCanvasObjects = () => {
   if (!canvas) return;
 
   const processObject = (o: any) => {
-    o.set({ perPixelTargetFind: true });
+    o.set({ strokeUniform: true, perPixelTargetFind: true });
 
     if (!o.id) {
       o.id = (o.isArrow || o.arrowId ? (o.arrowId || 'arrow_' + Date.now()) : (o.isStickyNote ? 'note_' : 'obj_') + Date.now() + '_' + Math.random().toString(36).substring(2, 9));
@@ -4703,7 +4904,11 @@ const rehydrateCanvasObjects = () => {
       if (o.text === 'Type note here...' || o.text === 'Type here...') {
         o.text = '';
       }
-      o.minHeight = o.minHeight || 180;
+      o.width = STICKY_NOTE_CONST_SIZE;
+      o.minHeight = STICKY_NOTE_CONST_SIZE;
+      o.height = Math.max(o.height || 0, STICKY_NOTE_CONST_SIZE);
+      o.scaleX = 1;
+      o.scaleY = 1;
       o.textAlign = 'center';
       o.splitByGrapheme = true;
       o.lockUniScaling = true;
@@ -4712,6 +4917,8 @@ const rehydrateCanvasObjects = () => {
       o.perPixelTargetFind = false;
       applyStickyNoteMethods(o);
       o.initDimensions?.();
+      o.height = Math.max(o.height || 0, STICKY_NOTE_CONST_SIZE);
+      o.setCoords();
     }
 
     if ((o as any).isArrow) {
@@ -4804,8 +5011,19 @@ const getSerializedCanvasJson = (): string => {
 
 const saveHistoryState = () => {
   if (!canvas || isInternalChange) return;
-  // If in isolation mode, do not record intermediate unbundled states in the global history stack!
-  if (isIsolationMode.value) return;
+  // If in isolation mode, record isolated items state in isolation undo stack!
+  if (isIsolationMode.value) {
+    if (isolatedItems.length > 0) {
+      const state = JSON.stringify(isolatedItems.map(i => i.toObject(CUSTOM_PROPS)));
+      if (isolationUndoStack.value.length === 0 || isolationUndoStack.value[isolationUndoStack.value.length - 1] !== state) {
+        isolationUndoStack.value.push(state);
+        if (isolationUndoStack.value.length > 50) isolationUndoStack.value.shift();
+        isolationRedoStack.value = [];
+        hasIsolationChanged.value = true;
+      }
+    }
+    return;
+  }
   const json = getSerializedCanvasJson();
   historyStack.value.push(json);
   if (historyStack.value.length > 50) {
@@ -5142,7 +5360,11 @@ const pasteSelection = async (targetPoint?: { x: number; y: number }) => {
 
     if (obj.isStickyNote || (obj.type === 'textbox' && (obj.stickyColorConfig || obj.backgroundColor))) {
       obj.isStickyNote = true;
-      obj.minHeight = obj.minHeight || 180;
+      obj.width = STICKY_NOTE_CONST_SIZE;
+      obj.minHeight = STICKY_NOTE_CONST_SIZE;
+      obj.height = Math.max(obj.height || 0, STICKY_NOTE_CONST_SIZE);
+      obj.scaleX = 1;
+      obj.scaleY = 1;
       obj.textAlign = 'center';
       obj.splitByGrapheme = true;
       obj.lockUniScaling = true;
@@ -5154,6 +5376,7 @@ const pasteSelection = async (targetPoint?: { x: number; y: number }) => {
       });
       applyStickyNoteMethods(obj);
       obj.initDimensions?.();
+      obj.height = Math.max(obj.height || 0, STICKY_NOTE_CONST_SIZE);
       obj.setCoords();
     }
 
@@ -5162,13 +5385,18 @@ const pasteSelection = async (targetPoint?: { x: number; y: number }) => {
       children.forEach((child: any) => {
         if (child.isStickyNote || (child.type === 'textbox' && (child.stickyColorConfig || child.backgroundColor))) {
           child.isStickyNote = true;
-          child.minHeight = child.minHeight || 180;
+          child.width = STICKY_NOTE_CONST_SIZE;
+          child.minHeight = STICKY_NOTE_CONST_SIZE;
+          child.height = Math.max(child.height || 0, STICKY_NOTE_CONST_SIZE);
+          child.scaleX = 1;
+          child.scaleY = 1;
           child.textAlign = 'center';
           child.splitByGrapheme = true;
           child.lockUniScaling = true;
           child.hasRotatingPoint = false;
           applyStickyNoteMethods(child);
           child.initDimensions?.();
+          child.height = Math.max(child.height || 0, STICKY_NOTE_CONST_SIZE);
           child.setCoords();
         }
       });
@@ -5345,6 +5573,8 @@ const duplicateStickyNote = async (note: any) => {
   cloned.set({
     left: (note.left || 0) + 24,
     top: (note.top || 0) + 24,
+    scaleX: 1,
+    scaleY: 1,
     selectable: true,
     evented: true,
     perPixelTargetFind: false,
@@ -5354,9 +5584,12 @@ const duplicateStickyNote = async (note: any) => {
   });
   (cloned as any).isStickyNote = true;
   (cloned as any).stickyColorConfig = (note as any).stickyColorConfig;
-  (cloned as any).minHeight = (note as any).minHeight || 180;
+  (cloned as any).width = STICKY_NOTE_CONST_SIZE;
+  (cloned as any).minHeight = STICKY_NOTE_CONST_SIZE;
+  (cloned as any).height = Math.max((cloned as any).height || 0, STICKY_NOTE_CONST_SIZE);
   applyStickyNoteMethods(cloned);
   cloned.initDimensions();
+  (cloned as any).height = Math.max((cloned as any).height || 0, STICKY_NOTE_CONST_SIZE);
   cloned.setCoords();
   canvas.add(cloned);
   if (isIsolationMode.value && !isolatedItems.includes(cloned)) {
@@ -5382,9 +5615,9 @@ const enterGroupIsolation = (group: fabric.Group, targetChild?: any) => {
     canvas.getObjects().forEach((o: any) => {
       savedProps.push({
         obj: o,
-        opacity: o.opacity ?? 1,
-        selectable: o.selectable ?? true,
-        evented: o.evented ?? true
+        opacity: (o._rootOrigOpacity !== undefined && o._rootOrigOpacity > 0.25) ? o._rootOrigOpacity : ((o.opacity !== undefined && o.opacity > 0.25) ? o.opacity : 1),
+        selectable: o._rootOrigSelectable !== undefined ? o._rootOrigSelectable : (o.selectable ?? true),
+        evented: o._rootOrigEvented !== undefined ? o._rootOrigEvented : (o.evented ?? true)
       });
     });
 
@@ -5392,10 +5625,12 @@ const enterGroupIsolation = (group: fabric.Group, targetChild?: any) => {
     if (isEnteringRoot) {
       isIsolationMode.value = true;
       isolationStack.value = [];
+      isolationUndoStack.value = [];
+      isolationRedoStack.value = [];
       hasIsolationChanged.value = false;
       // Record true root interaction and opacity properties for ALL canvas objects
       canvas.getObjects().forEach((o: any) => {
-        o._rootOrigOpacity = o.opacity ?? 1;
+        o._rootOrigOpacity = (o.opacity !== undefined && o.opacity > 0.25) ? o.opacity : 1;
         o._rootOrigSelectable = o.selectable ?? true;
         o._rootOrigEvented = o.evented ?? true;
       });
@@ -5404,8 +5639,12 @@ const enterGroupIsolation = (group: fabric.Group, targetChild?: any) => {
       isolationStack.value.push({
         group: isolatedGroup,
         items: isolatedItems,
-        savedProps
+        savedProps,
+        undoStack: [...isolationUndoStack.value],
+        redoStack: [...isolationRedoStack.value]
       });
+      isolationUndoStack.value = [];
+      isolationRedoStack.value = [];
     }
 
     isolatedGroup = group;
@@ -5426,6 +5665,7 @@ const enterGroupIsolation = (group: fabric.Group, targetChild?: any) => {
         selectable: true,
         evented: true,
         perPixelTargetFind: true,
+        strokeUniform: true,
         lockMovementX: !!(item as any).isLocked,
         lockMovementY: !!(item as any).isLocked,
         lockRotation: !!(item as any).isLocked,
@@ -5435,6 +5675,9 @@ const enterGroupIsolation = (group: fabric.Group, targetChild?: any) => {
       });
       canvas?.add(item);
     });
+
+    isolationUndoStack.value = [JSON.stringify(isolatedItems.map(i => i.toObject(CUSTOM_PROPS)))];
+    isolationRedoStack.value = [];
 
     if (Array.isArray(targetChild) && targetChild.length > 0) {
       const validTargets = targetChild.filter(c => isolatedItems.includes(c));
@@ -5467,7 +5710,9 @@ const exitGroupIsolation = () => {
     const remainingItems = isolatedItems.filter(item => canvas?.getObjects().includes(item));
     remainingItems.forEach(item => {
       if (item.isStickyNote || item.stickyColorConfig) {
-        item.minHeight = item.minHeight || 180;
+        item.width = STICKY_NOTE_CONST_SIZE;
+        item.minHeight = STICKY_NOTE_CONST_SIZE;
+        item.height = Math.max(item.height || 0, STICKY_NOTE_CONST_SIZE);
         applyStickyNoteMethods(item);
         item.initDimensions?.();
       }
@@ -5518,10 +5763,11 @@ const exitGroupIsolation = () => {
       // Restore interaction / opacity for parent level's objects
       parentLevel.savedProps.forEach(sp => {
         if (canvas?.getObjects().includes(sp.obj)) {
+          const isItemOfParent = isolatedItems.includes(sp.obj);
           sp.obj.set({
-            opacity: sp.opacity,
-            selectable: sp.selectable,
-            evented: sp.evented
+            opacity: isItemOfParent ? ((sp.opacity && sp.opacity > 0.25) ? sp.opacity : 1) : 0.2,
+            selectable: isItemOfParent ? sp.selectable : false,
+            evented: isItemOfParent ? sp.evented : false
           });
         }
       });
@@ -5536,6 +5782,9 @@ const exitGroupIsolation = () => {
         });
       });
 
+      isolationUndoStack.value = parentLevel.undoStack || [];
+      isolationRedoStack.value = parentLevel.redoStack || [];
+
       canvas.requestRenderAll();
       updateSelectionState();
       return;
@@ -5543,8 +5792,11 @@ const exitGroupIsolation = () => {
 
     // Fully exit all isolation levels
     canvas.getObjects().forEach((o: any) => {
+      const normalOpacity = (o._rootOrigOpacity !== undefined && o._rootOrigOpacity > 0.25)
+        ? o._rootOrigOpacity
+        : ((o.opacity !== undefined && o.opacity > 0.25) ? o.opacity : 1);
       o.set({
-        opacity: o._rootOrigOpacity !== undefined ? o._rootOrigOpacity : (o.opacity !== undefined ? o.opacity : 1),
+        opacity: normalOpacity,
         selectable: o._rootOrigSelectable !== undefined ? o._rootOrigSelectable : true,
         evented: o._rootOrigEvented !== undefined ? o._rootOrigEvented : true
       });
@@ -5560,6 +5812,8 @@ const exitGroupIsolation = () => {
     isolatedGroup = null;
     isolatedItems = [];
     isolationStack.value = [];
+    isolationUndoStack.value = [];
+    isolationRedoStack.value = [];
     canvas.requestRenderAll();
     updateSelectionState();
   } finally {
@@ -5614,6 +5868,16 @@ const toggleLockSelected = () => {
   }
 
   isObjectLocked.value = newLocked;
+
+  // Clear hover unlock highlight and dismiss or update lock toolbar immediately upon unlocking
+  clearLockedHighlights();
+  if (!newLocked) {
+    lockToolbarPosition.value.visible = false;
+    lockToolbarPosition.value.hasLocked = false;
+  } else {
+    updateLockToolbar();
+  }
+
   canvas.requestRenderAll();
   saveHistoryState();
   syncToFirebase();
@@ -6060,9 +6324,63 @@ const undo = async () => {
   if (!canvas) return;
 
   if (isIsolationMode.value) {
-    // Fully exit isolation before performing undo to prevent state corruption
-    while (isIsolationMode.value) {
-      exitGroupIsolation();
+    if (isolationUndoStack.value.length > 1) {
+      isInternalChange = true;
+      try {
+        const currentState = isolationUndoStack.value.pop()!;
+        isolationRedoStack.value.push(currentState);
+        const targetState = isolationUndoStack.value[isolationUndoStack.value.length - 1];
+        const parsedItems = JSON.parse(targetState);
+
+        const cv = canvas;
+        if (!cv) return;
+
+        // Remove current isolated items from canvas
+        isolatedItems.forEach(item => {
+          cv.remove(item);
+        });
+
+        // Enliven target state objects
+        const enlivened = await fabric.util.enlivenObjects(parsedItems);
+        isolatedItems = enlivened as fabric.FabricObject[];
+        isolatedItems.forEach(item => {
+          item.set({
+            opacity: 1,
+            selectable: true,
+            evented: true,
+            perPixelTargetFind: true,
+            strokeUniform: true,
+            objectCaching: false,
+            lockMovementX: !!(item as any).isLocked,
+            lockMovementY: !!(item as any).isLocked,
+            lockRotation: !!(item as any).isLocked,
+            lockScalingX: !!(item as any).isLocked,
+            lockScalingY: !!(item as any).isLocked,
+            hasControls: !(item as any).isLocked
+          });
+          if ((item as any).isStickyNote || item.type === 'textbox') {
+            (item as any).isStickyNote = true;
+            (item as any).width = STICKY_NOTE_CONST_SIZE;
+            (item as any).minHeight = STICKY_NOTE_CONST_SIZE;
+            (item as any).height = Math.max((item as any).height || 0, STICKY_NOTE_CONST_SIZE);
+            applyStickyNoteMethods(item);
+            item.initDimensions?.();
+            (item as any).height = Math.max((item as any).height || 0, STICKY_NOTE_CONST_SIZE);
+            item.setCoords();
+          }
+          cv.add(item);
+        });
+        hasIsolationChanged.value = true;
+        cv.requestRenderAll();
+        updateSelectionState();
+        displayToast('Undo inside group (Ctrl+Z)');
+        return;
+      } finally {
+        isInternalChange = false;
+      }
+    } else {
+      displayToast('Nothing more to undo in this group');
+      return;
     }
   }
 
@@ -6189,8 +6507,62 @@ const redo = async () => {
   if (!canvas) return;
 
   if (isIsolationMode.value) {
-    while (isIsolationMode.value) {
-      exitGroupIsolation();
+    if (isolationRedoStack.value.length > 0) {
+      isInternalChange = true;
+      try {
+        const nextState = isolationRedoStack.value.pop()!;
+        isolationUndoStack.value.push(nextState);
+        const parsedItems = JSON.parse(nextState);
+
+        const cv = canvas;
+        if (!cv) return;
+
+        // Remove current isolated items from canvas
+        isolatedItems.forEach(item => {
+          cv.remove(item);
+        });
+
+        // Enliven next state objects
+        const enlivened = await fabric.util.enlivenObjects(parsedItems);
+        isolatedItems = enlivened as fabric.FabricObject[];
+        isolatedItems.forEach(item => {
+          item.set({
+            opacity: 1,
+            selectable: true,
+            evented: true,
+            perPixelTargetFind: true,
+            strokeUniform: true,
+            objectCaching: false,
+            lockMovementX: !!(item as any).isLocked,
+            lockMovementY: !!(item as any).isLocked,
+            lockRotation: !!(item as any).isLocked,
+            lockScalingX: !!(item as any).isLocked,
+            lockScalingY: !!(item as any).isLocked,
+            hasControls: !(item as any).isLocked
+          });
+          if ((item as any).isStickyNote || item.type === 'textbox') {
+            (item as any).isStickyNote = true;
+            (item as any).width = STICKY_NOTE_CONST_SIZE;
+            (item as any).minHeight = STICKY_NOTE_CONST_SIZE;
+            (item as any).height = Math.max((item as any).height || 0, STICKY_NOTE_CONST_SIZE);
+            applyStickyNoteMethods(item);
+            item.initDimensions?.();
+            (item as any).height = Math.max((item as any).height || 0, STICKY_NOTE_CONST_SIZE);
+            item.setCoords();
+          }
+          cv.add(item);
+        });
+        hasIsolationChanged.value = true;
+        cv.requestRenderAll();
+        updateSelectionState();
+        displayToast('Redo inside group (Ctrl+Y)');
+        return;
+      } finally {
+        isInternalChange = false;
+      }
+    } else {
+      displayToast('Nothing more to redo in this group');
+      return;
     }
   }
 

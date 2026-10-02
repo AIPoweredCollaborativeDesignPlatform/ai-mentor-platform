@@ -459,7 +459,13 @@ const unlockSelectedObjects = () => {
       lockScalingX: false,
       lockScalingY: false,
       hasControls: true,
+      selectable: true,
+      evented: true,
       isLocked: false
+    });
+    item.setControlsVisibility({
+      tl: true, tr: true, bl: true, br: true,
+      ml: true, mr: true, mt: true, mb: true, mtr: true
     });
     if (item.isStickyNote || item.stickyColorConfig) {
       setupStickyControls(item);
@@ -483,6 +489,8 @@ const unlockSelectedObjects = () => {
       lockScalingX: false,
       lockScalingY: false,
       hasControls: true,
+      selectable: true,
+      evented: true,
       isLocked: false
     });
     active.setControlsVisibility({
@@ -500,6 +508,7 @@ const unlockSelectedObjects = () => {
   clearLockedHighlights();
   updateSelectionState();
   updateFloatingToolbars();
+  canvas.setActiveObject(active);
   canvas.requestRenderAll();
   saveHistoryState();
   syncToFirebase();
@@ -4042,36 +4051,63 @@ const initFabric = () => {
         const minScale = 80 / baseW;
         const maxScale = 600 / baseW;
         const clampedScale = Math.max(minScale, Math.min(maxScale, uniformScale));
-        if (Math.abs(clampedScale - Math.abs(obj.scaleX || 1)) > 1e-4 || Math.abs(clampedScale - Math.abs(obj.scaleY || 1)) > 1e-4) {
-          const transform = (canvas as any)._currentTransform;
-          const originX = transform?.originX || 'center';
-          const originY = transform?.originY || 'center';
-          const anchorPoint = obj.getPointByOrigin(originX, originY);
-          obj.set({
-            scaleX: (obj.scaleX < 0 ? -1 : 1) * clampedScale,
-            scaleY: (obj.scaleY < 0 ? -1 : 1) * clampedScale
-          });
-          obj.setPositionByOrigin(anchorPoint, originX, originY);
-        }
+        const transform = (canvas as any)._currentTransform;
+        const originX = transform?.originX || 'center';
+        const originY = transform?.originY || 'center';
+        const anchorPoint = obj.getPointByOrigin(originX, originY);
+        obj.set({
+          scaleX: clampedScale,
+          scaleY: clampedScale,
+          flipX: false,
+          flipY: false
+        });
+        obj.setPositionByOrigin(anchorPoint, originX, originY);
       } else if (obj.type === 'activeselection' || obj.type === 'activeSelection' || obj.type === 'group') {
         const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
-        const selScaleX = Math.abs(obj.scaleX || 1);
-        const selScaleY = Math.abs(obj.scaleY || 1);
-        const uniformSelScale = Math.max(selScaleX, selScaleY);
+        const rawScaleX = obj.scaleX || 1;
+        const rawScaleY = obj.scaleY || 1;
+        const selScaleX = Math.max(0.05, Math.abs(rawScaleX));
+        const selScaleY = Math.max(0.05, Math.abs(rawScaleY));
+
+        const transform = (canvas as any)._currentTransform || (e as any).transform;
+        const corner = transform?.corner;
+
+        let activeScaleFactor = 1;
+        if (corner === 'ml' || corner === 'mr') {
+          // Dragging horizontal handle: drive uniform scale by width change
+          activeScaleFactor = selScaleX;
+        } else if (corner === 'mt' || corner === 'mb') {
+          // Dragging vertical handle: drive uniform scale by height change
+          activeScaleFactor = selScaleY;
+        } else {
+          // Corner scaling: drive by min scale to shrink with dragging handle
+          activeScaleFactor = Math.min(selScaleX, selScaleY);
+        }
+
+        const signX = rawScaleX < 0 ? -1 : 1;
+        const signY = rawScaleY < 0 ? -1 : 1;
 
         targets.forEach((c: any) => {
           if (c.isStickyNote || c.stickyColorConfig) {
-            // Counteract group's non-uniform scale by giving child an inverse non-uniform scale
-            // Visually, the child scales uniformly by `uniformSelScale`.
-            const childVisualScale = uniformSelScale * Math.abs(c._origBaseScale || 1);
-            c.scaleX = (c.scaleX < 0 ? -1 : 1) * (childVisualScale / selScaleX);
-            c.scaleY = (c.scaleY < 0 ? -1 : 1) * (childVisualScale / selScaleY);
+            const baseW = c.width || 120;
+            const minScale = 80 / baseW;
+            const maxScale = 600 / baseW;
+            const origBaseScale = Math.abs(c._origBaseScale || 1);
+            const childVisualScale = Math.max(minScale, Math.min(maxScale, activeScaleFactor * origBaseScale));
+
+            // Prevent ballooning and prevent counter-mirroring (反向縮放鏡射)
+            c.scaleX = signX * (childVisualScale / selScaleX);
+            c.scaleY = signY * (childVisualScale / selScaleY);
+            c.flipX = false;
+            c.flipY = false;
           } else if (c.isLocked) {
-            // Locked objects in multi-selection should not scale
+            // Locked objects in multi-selection should not scale or mirror
             const origSx = c._origScaleX || 1;
             const origSy = c._origScaleY || 1;
-            c.scaleX = (c.scaleX < 0 ? -1 : 1) * (origSx / selScaleX);
-            c.scaleY = (c.scaleY < 0 ? -1 : 1) * (origSy / selScaleY);
+            c.scaleX = signX * (origSx / selScaleX);
+            c.scaleY = signY * (origSy / selScaleY);
+            c.flipX = false;
+            c.flipY = false;
           }
         });
       }
@@ -6681,12 +6717,14 @@ onUnmounted(() => {
               </button>
               <div
                 v-if="showNodeHelp"
-                class="absolute top-full left-1/2 -translate-x-1/2 mt-2 z-50 w-56 p-2 bg-slate-950/95 border border-indigo-500/60 rounded-xl text-slate-200 text-xs shadow-2xl backdrop-blur-md transition select-none"
+                class="absolute top-full left-1/2 -translate-x-1/2 mt-2 z-50 w-72 sm:w-80 p-3 bg-slate-950/95 border border-indigo-500/60 rounded-xl text-slate-200 text-xs shadow-2xl backdrop-blur-md transition select-none"
               >
-                <div class="text-[11px] text-slate-300 leading-snug space-y-1">
-                  <p><span class="text-indigo-300 font-medium">Double-click</span> line to add node, node to toggle corner.</p>
-                  <p><span class="text-indigo-300 font-medium">Drag</span> line to move arrow, background to box select.</p>
-                  <p><span class="text-indigo-300 font-medium">Del / Backspace</span> to delete selected nodes.</p>
+                <div class="text-[11px] text-slate-300 leading-relaxed space-y-1.5">
+                  <p><span class="text-indigo-300 font-semibold">Double-click line:</span> Add new vector node</p>
+                  <p><span class="text-indigo-300 font-semibold">Double-click node:</span> Toggle sharp corner / smooth curve</p>
+                  <p><span class="text-indigo-300 font-semibold">Drag stroke line:</span> Move whole arrow or curve</p>
+                  <p><span class="text-indigo-300 font-semibold">Drag background:</span> Marquee box select multiple nodes</p>
+                  <p><span class="text-indigo-300 font-semibold">Del / Backspace:</span> Delete selected nodes</p>
                 </div>
               </div>
             </div>
@@ -6936,27 +6974,29 @@ onUnmounted(() => {
       <!-- Unified Floating Quick-Action Bar below Active Object -->
       <div
         v-if="(stickyToolbarPosition.visible && activeStickyNote) || (lockToolbarPosition.visible && lockToolbarPosition.hasLocked) || (arrowToolbarPosition.visible && activeArrow && !isArrowNodeEditing)"
-        class="absolute z-35 flex items-center gap-1.5 p-1 bg-slate-900/95 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl transition-all animate-in fade-in zoom-in-95 pointer-events-auto"
+        class="absolute z-40 flex items-center gap-1.5 p-1 bg-slate-900/95 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl transition-all animate-in fade-in zoom-in-95 pointer-events-auto cursor-default select-none"
         :class="{ 'opacity-15': isHoveringSend }"
-        @mousedown.prevent
+        @pointerdown.stop
+        @mousedown.stop
         :style="{
           left: `${lockToolbarPosition.visible ? lockToolbarPosition.x : (stickyToolbarPosition.visible ? stickyToolbarPosition.x : arrowToolbarPosition.x)}px`,
           top: `${lockToolbarPosition.visible ? lockToolbarPosition.y : (stickyToolbarPosition.visible ? stickyToolbarPosition.y : arrowToolbarPosition.y)}px`,
           transform: 'translate(-50%, 0)'
         }"
       >
-        <!-- Unlock Button (if locked) -->
+        <!-- Unlock Button (if locked: icon-only) -->
         <button
           v-if="lockToolbarPosition.visible && lockToolbarPosition.hasLocked"
-          @mousedown.prevent
+          type="button"
+          @pointerdown.stop
+          @mousedown.stop
           @click.stop="unlockSelectedObjects"
           @mouseenter="highlightLockedObjects"
           @mouseleave="clearLockedHighlights"
-          class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 hover:text-amber-200 border border-amber-500/40 text-xs font-medium transition cursor-pointer shadow-sm select-none"
+          class="p-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/35 text-amber-300 hover:text-amber-200 border border-amber-500/40 transition cursor-pointer shadow-sm flex items-center justify-center"
           title="Click to unlock (Ctrl+L)"
         >
-          <Lock class="w-3.5 h-3.5 text-amber-400 pointer-events-none" />
-          <span class="text-[11px] font-semibold pointer-events-none">Unlock</span>
+          <Lock class="w-4 h-4 text-amber-400 pointer-events-none" />
         </button>
 
         <!-- Sticky Note Tools (only if unlocked) -->
@@ -6965,8 +7005,10 @@ onUnmounted(() => {
             <button
               v-for="color in stickyColors"
               :key="color.name"
-              @mousedown.prevent
-              @click="changeStickyNoteColor(activeStickyNote, color)"
+              type="button"
+              @pointerdown.stop
+              @mousedown.stop
+              @click.stop="changeStickyNoteColor(activeStickyNote, color)"
               class="w-4 h-4 rounded-full border border-black/20 hover:scale-125 transition transform cursor-pointer"
               :style="{ backgroundColor: color.bg }"
               :title="color.name"
@@ -6974,30 +7016,84 @@ onUnmounted(() => {
           </div>
           <div class="w-px h-4 bg-slate-700"></div>
           <button
-            @mousedown.prevent
-            @click="duplicateStickyNote(activeStickyNote)"
+            type="button"
+            @pointerdown.stop
+            @mousedown.stop
+            @click.stop="duplicateStickyNote(activeStickyNote)"
             class="p-1 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition cursor-pointer"
             title="Duplicate Note"
           >
-            <Copy class="w-3.5 h-3.5" />
+            <Copy class="w-3.5 h-3.5 pointer-events-none" />
           </button>
           <button
-            @mousedown.prevent
-            @click="toggleLockSelected"
+            type="button"
+            @pointerdown.stop
+            @mousedown.stop
+            @click.stop="toggleLockSelected"
             class="p-1 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition cursor-pointer"
             title="Lock Note (Ctrl+L)"
           >
-            <Unlock class="w-3.5 h-3.5" />
+            <Unlock class="w-3.5 h-3.5 pointer-events-none" />
           </button>
           <button
-            @mousedown.prevent
-            @click="deleteSelected"
+            type="button"
+            @pointerdown.stop
+            @mousedown.stop
+            @click.stop="deleteSelected"
             class="p-1 hover:bg-rose-950/60 text-rose-400 hover:text-rose-300 rounded-lg transition cursor-pointer"
             title="Delete Note"
           >
-            <Trash2 class="w-3.5 h-3.5" />
+            <Trash2 class="w-3.5 h-3.5 pointer-events-none" />
           </button>
         </template>
+
+        <!-- Arrow Tools (only if unlocked) -->
+        <template v-if="arrowToolbarPosition.visible && activeArrow && !isArrowNodeEditing && !(lockToolbarPosition.visible && lockToolbarPosition.hasLocked)">
+          <button
+            type="button"
+            @pointerdown.stop
+            @mousedown.stop
+            @click.stop="enterArrowNodeEditing(activeArrow)"
+            class="px-2 py-1 bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-300 hover:text-white rounded-lg transition cursor-pointer flex items-center gap-1.5 text-xs font-medium whitespace-nowrap"
+            title="Edit vector line nodes (or double-click to edit)"
+          >
+            <Waypoints class="w-3.5 h-3.5 text-indigo-400 pointer-events-none" />
+            <span>Edit Nodes</span>
+          </button>
+          <div class="w-px h-4 bg-slate-700"></div>
+          <button
+            type="button"
+            @pointerdown.stop
+            @mousedown.stop
+            @click.stop="duplicateArrow(activeArrow)"
+            class="p-1 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition cursor-pointer"
+            title="Duplicate (Ctrl+D)"
+          >
+            <Copy class="w-3.5 h-3.5 pointer-events-none" />
+          </button>
+          <button
+            type="button"
+            @pointerdown.stop
+            @mousedown.stop
+            @click.stop="toggleLockSelected"
+            class="p-1 hover:bg-slate-800 rounded-lg transition cursor-pointer"
+            :class="isObjectLocked ? 'text-amber-400 hover:text-amber-300' : 'text-slate-300 hover:text-white'"
+            :title="isObjectLocked ? 'Unlock (Ctrl+L)' : 'Lock (Ctrl+L)'"
+          >
+            <component :is="isObjectLocked ? Lock : Unlock" class="w-3.5 h-3.5 pointer-events-none" />
+          </button>
+          <button
+            type="button"
+            @pointerdown.stop
+            @mousedown.stop
+            @click.stop="deleteSelected"
+            class="p-1 hover:bg-rose-950/60 text-rose-400 hover:text-rose-300 rounded-lg transition cursor-pointer"
+            title="Delete (Del)"
+          >
+            <Trash2 class="w-3.5 h-3.5 pointer-events-none" />
+          </button>
+        </template>
+      </div>
 
       <!-- Arrow Node Editing Handles Overlay -->
       <div
@@ -7092,46 +7188,6 @@ onUnmounted(() => {
             ></div>
           </div>
         </div>
-      </div>
-
-        <!-- Arrow Tools (only if unlocked) -->
-        <template v-if="arrowToolbarPosition.visible && activeArrow && !isArrowNodeEditing && !(lockToolbarPosition.visible && lockToolbarPosition.hasLocked)">
-          <button
-            @mousedown.prevent
-            @click="enterArrowNodeEditing(activeArrow)"
-            class="px-2 py-1 bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-300 hover:text-white rounded-lg transition cursor-pointer flex items-center gap-1.5 text-xs font-medium whitespace-nowrap"
-            title="Edit vector line nodes (or double-click to edit)"
-          >
-            <Waypoints class="w-3.5 h-3.5 text-indigo-400" />
-            <span>Edit Nodes</span>
-          </button>
-          <div class="w-px h-4 bg-slate-700"></div>
-          <button
-            @mousedown.prevent
-            @click="duplicateArrow(activeArrow)"
-            class="p-1 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition cursor-pointer"
-            title="Duplicate (Ctrl+D)"
-          >
-            <Copy class="w-3.5 h-3.5" />
-          </button>
-          <button
-            @mousedown.prevent
-            @click="toggleLockSelected"
-            class="p-1 hover:bg-slate-800 rounded-lg transition cursor-pointer"
-            :class="isObjectLocked ? 'text-amber-400 hover:text-amber-300' : 'text-slate-300 hover:text-white'"
-            :title="isObjectLocked ? 'Unlock (Ctrl+L)' : 'Lock (Ctrl+L)'"
-          >
-            <component :is="isObjectLocked ? Lock : Unlock" class="w-3.5 h-3.5" />
-          </button>
-          <button
-            @mousedown.prevent
-            @click="deleteSelected"
-            class="p-1 hover:bg-rose-950/60 text-rose-400 hover:text-rose-300 rounded-lg transition cursor-pointer"
-            title="Delete (Del)"
-          >
-            <Trash2 class="w-3.5 h-3.5" />
-          </button>
-        </template>
       </div>
     </div>
 

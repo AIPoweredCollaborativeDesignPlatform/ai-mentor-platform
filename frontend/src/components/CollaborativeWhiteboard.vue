@@ -262,6 +262,12 @@ const viewfinderBounds = computed(() => {
   };
 });
 
+const updateFloatingToolbars = () => {
+  updateStickyToolbar();
+  updateArrowToolbar();
+  updateLockToolbar();
+};
+
 const updateStickyToolbar = () => {
   if (!canvas) {
     activeStickyNote.value = null;
@@ -399,7 +405,45 @@ const updateLockToolbar = () => {
     };
   }
 };
+let lockedHighlights: any[] = [];
 
+const highlightLockedObjects = () => {
+  if (!canvas) return;
+  const active = canvas.getActiveObject() as any;
+  if (!active) return;
+  const targets: any[] = (active.type === 'activeselection' || active instanceof fabric.ActiveSelection || active.type === 'group') 
+    ? (active.getObjects ? active.getObjects() : active._objects || []) 
+    : [active];
+  
+  targets.forEach((o: any) => {
+    if (o.isLocked || o.hasLockedChildren) {
+      const bound = o.getBoundingRect(true, true);
+      const highlight = new fabric.Rect({
+        left: bound.left - 4,
+        top: bound.top - 4,
+        width: bound.width + 8,
+        height: bound.height + 8,
+        fill: 'transparent',
+        stroke: '#f59e0b',
+        strokeWidth: 2,
+        strokeDashArray: [6, 4],
+        selectable: false,
+        evented: false
+      });
+      (highlight as any)._isPreview = true; // prevent saving to history
+      canvas?.add(highlight);
+      lockedHighlights.push(highlight);
+    }
+  });
+  canvas?.requestRenderAll();
+};
+
+const clearLockedHighlights = () => {
+  if (!canvas || lockedHighlights.length === 0) return;
+  lockedHighlights.forEach(h => canvas?.remove(h));
+  lockedHighlights = [];
+  canvas?.requestRenderAll();
+};
 const unlockSelectedObjects = () => {
   if (!canvas) return;
   const active = canvas.getActiveObject() as any;
@@ -462,10 +506,12 @@ const unlockSelectedObjects = () => {
   }
   isObjectLocked.value = false;
   lockToolbarPosition.value.visible = false;
+  clearLockedHighlights();
+  updateSelectionState();
+  updateFloatingToolbars();
   canvas.requestRenderAll();
   saveHistoryState();
   syncToFirebase();
-  updateSelectionState();
   displayToast('Unlocked');
 };
 
@@ -1247,7 +1293,20 @@ const duplicateArrow = (arrow: any) => {
     pts = [{ x: arrow.x1 ?? 0, y: arrow.y1 ?? 0 }, { x: arrow.x2 ?? 0, y: arrow.y2 ?? 0 }];
   }
   if (!pts) return;
-  const newPts = pts.map((p: any) => ({ x: p.x + offset, y: p.y + offset }));
+
+  // Apply current transform delta so points match visual position before offset
+  let transformedPts = pts;
+  if (arrow.initialMatrix) {
+    const invOldM = fabric.util.invertTransform(arrow.initialMatrix);
+    const newM = arrow.calcTransformMatrix();
+    const deltaM = fabric.util.multiplyTransformMatrices(newM, invOldM);
+    transformedPts = pts.map((p: any) => {
+      const tp = fabric.util.transformPoint(new fabric.Point(p.x, p.y), deltaM);
+      return { x: tp.x, y: tp.y };
+    });
+  }
+
+  const newPts = transformedPts.map((p: any) => ({ x: p.x + offset, y: p.y + offset }));
   let newObj: any;
   if (arrow.isArrow) {
     const color = (arrow as any).arrowColor || activeColor.value;
@@ -1315,13 +1374,12 @@ const updateSelectionState = () => {
     const hasSticky = targets.some((o: any) => o.isStickyNote || o.stickyColorConfig);
     isObjectLocked.value = anyLocked;
     active.set({
-      lockMovementX: anyLocked,
-      lockMovementY: anyLocked,
-      lockRotation: anyLocked,
-      lockScalingX: anyLocked,
-      lockScalingY: anyLocked,
-      hasControls: !allLocked,
-      lockUniScaling: hasSticky
+      lockMovementX: allLocked,
+      lockMovementY: allLocked,
+      lockRotation: allLocked,
+      lockScalingX: allLocked,
+      lockScalingY: allLocked,
+      hasControls: !allLocked
     });
     if (hasSticky) {
       active.setControlsVisibility({
@@ -1356,7 +1414,7 @@ const updateSelectionState = () => {
   } else {
     isObjectLocked.value = !!(active && active.isLocked === true);
   }
-  updateStickyToolbar();
+  updateFloatingToolbars();
   updateArrowToolbar();
   updateLockToolbar();
 };
@@ -2922,8 +2980,7 @@ const initFabric = () => {
       clampViewportPan();
       const activeObj = canvas.getActiveObject();
       if (activeObj) activeObj.setCoords();
-      updateStickyToolbar();
-      updateArrowToolbar();
+      updateFloatingToolbars();
       viewportVersion.value++;
       opt.e.preventDefault();
       opt.e.stopPropagation();
@@ -2935,7 +2992,7 @@ const initFabric = () => {
         canvas.setViewportTransform(vpt);
         const activeObj = canvas.getActiveObject();
         if (activeObj) activeObj.setCoords();
-        updateStickyToolbar();
+        updateFloatingToolbars();
         updateArrowToolbar();
         viewportVersion.value++;
         canvas.requestRenderAll();
@@ -2950,7 +3007,7 @@ const initFabric = () => {
         canvas.setViewportTransform(vpt);
         const activeObj = canvas.getActiveObject();
         if (activeObj) activeObj.setCoords();
-        updateStickyToolbar();
+        updateFloatingToolbars();
         updateArrowToolbar();
         viewportVersion.value++;
         canvas.requestRenderAll();
@@ -3154,10 +3211,13 @@ const initFabric = () => {
 
     if (isArrowNodeEditing.value) {
       const hitTarget = opt.target || (canvas.findTarget(e) as any)?.target || null;
-      if (!hitTarget || (hitTarget !== editingArrow.value && !editingArrow.value?.contains?.(hitTarget))) {
-        // Start node marquee box without prematurely exiting node edit mode
+      if (!hitTarget || (hitTarget.type === 'image' && hitTarget.selectable === false)) {
+        // Start node marquee box when clicking empty canvas
         startNodeMarquee(e);
         return;
+      } else if (hitTarget !== editingArrow.value && !editingArrow.value?.contains?.(hitTarget)) {
+        // Clicked another object, exit node edit mode
+        exitArrowNodeEditing();
       }
     }
 
@@ -3354,7 +3414,7 @@ const initFabric = () => {
         canvas.setViewportTransform(vpt);
         const activeObj = canvas.getActiveObject();
         if (activeObj) activeObj.setCoords();
-        updateStickyToolbar();
+        updateFloatingToolbars();
         canvas.requestRenderAll();
       }
       lastPosX = e.clientX;
@@ -3603,18 +3663,18 @@ const initFabric = () => {
             const gMatrix = g.calcTransformMatrix();
             const hasChild = children.some((child: any) => {
               const childMatrix = fabric.util.multiplyTransformMatrices(gMatrix, child.calcTransformMatrix());
-              const w2 = ((child.width || 0) * (child.scaleX || 1)) / 2;
-              const h2 = ((child.height || 0) * (child.scaleY || 1)) / 2;
+              const w2 = (child.width || 0) / 2;
+              const h2 = (child.height || 0) / 2;
               const sceneCorners = [
-                fabric.util.transformPoint({ x: -w2, y: -h2 }, childMatrix),
-                fabric.util.transformPoint({ x: w2, y: -h2 }, childMatrix),
-                fabric.util.transformPoint({ x: w2, y: h2 }, childMatrix),
-                fabric.util.transformPoint({ x: -w2, y: h2 }, childMatrix)
+                fabric.util.transformPoint({ x: -w2, y: -h2 } as any, childMatrix),
+                fabric.util.transformPoint({ x: w2, y: -h2 } as any, childMatrix),
+                fabric.util.transformPoint({ x: w2, y: h2 } as any, childMatrix),
+                fabric.util.transformPoint({ x: -w2, y: h2 } as any, childMatrix)
               ];
-              const childMinX = Math.min(...sceneCorners.map(p => p.x));
-              const childMaxX = Math.max(...sceneCorners.map(p => p.x));
-              const childMinY = Math.min(...sceneCorners.map(p => p.y));
-              const childMaxY = Math.max(...sceneCorners.map(p => p.y));
+              const childMinX = Math.min(...sceneCorners.map((p: any) => p.x));
+              const childMaxX = Math.max(...sceneCorners.map((p: any) => p.x));
+              const childMinY = Math.min(...sceneCorners.map((p: any) => p.y));
+              const childMaxY = Math.max(...sceneCorners.map((p: any) => p.y));
               // Intersects if marquee box touches even a single corner or edge of the child's bounding box
               return (childMaxX >= boxLeft && childMinX <= boxRight && childMaxY >= boxTop && childMinY <= boxBottom);
             });
@@ -3632,18 +3692,18 @@ const initFabric = () => {
 
           children.forEach((child: any) => {
             const childMatrix = fabric.util.multiplyTransformMatrices(gMatrix, child.calcTransformMatrix());
-            const w2 = ((child.width || 0) * (child.scaleX || 1)) / 2;
-            const h2 = ((child.height || 0) * (child.scaleY || 1)) / 2;
+            const w2 = (child.width || 0) / 2;
+            const h2 = (child.height || 0) / 2;
             const sceneCorners = [
-              fabric.util.transformPoint({ x: -w2, y: -h2 }, childMatrix),
-              fabric.util.transformPoint({ x: w2, y: -h2 }, childMatrix),
-              fabric.util.transformPoint({ x: w2, y: h2 }, childMatrix),
-              fabric.util.transformPoint({ x: -w2, y: h2 }, childMatrix)
+              fabric.util.transformPoint({ x: -w2, y: -h2 } as any, childMatrix),
+              fabric.util.transformPoint({ x: w2, y: -h2 } as any, childMatrix),
+              fabric.util.transformPoint({ x: w2, y: h2 } as any, childMatrix),
+              fabric.util.transformPoint({ x: -w2, y: h2 } as any, childMatrix)
             ];
-            const childMinX = Math.min(...sceneCorners.map(p => p.x));
-            const childMaxX = Math.max(...sceneCorners.map(p => p.x));
-            const childMinY = Math.min(...sceneCorners.map(p => p.y));
-            const childMaxY = Math.max(...sceneCorners.map(p => p.y));
+            const childMinX = Math.min(...sceneCorners.map((p: any) => p.x));
+            const childMaxX = Math.max(...sceneCorners.map((p: any) => p.x));
+            const childMinY = Math.min(...sceneCorners.map((p: any) => p.y));
+            const childMaxY = Math.max(...sceneCorners.map((p: any) => p.y));
 
             // Select if marquee box touches any part (even corner) of the child's bounding box
             const intersects = (childMaxX >= boxLeft && childMinX <= boxRight && childMaxY >= boxTop && childMinY <= boxBottom);
@@ -3970,7 +4030,7 @@ const initFabric = () => {
     }
     hasObjectTransformed = true;
     updateLiveDrag(e);
-    updateStickyToolbar();
+    updateFloatingToolbars();
     updateArrowToolbar();
     updateLockToolbar();
   });
@@ -3980,14 +4040,17 @@ const initFabric = () => {
     if (obj) {
       // Alt modifier: scale from center
       obj.centeredScaling = !!(e.e?.altKey);
-      if (obj.isStickyNote || obj.stickyColorConfig) {
-        obj.lockUniScaling = true;
-      } else if (obj.type === 'activeselection' || obj.type === 'group') {
-        const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
-        if (targets.some((c: any) => c.isStickyNote || c.stickyColorConfig)) {
-          obj.lockUniScaling = true;
+      
+      const targets = obj.type === 'activeselection' || obj.type === 'activeSelection' || obj.type === 'group' 
+        ? (obj.getObjects ? obj.getObjects() : obj._objects || []) 
+        : [obj];
+        
+      targets.forEach((c: any) => {
+        if (c.isStickyNote || c.stickyColorConfig) {
+           c._origBaseScale = Math.max(Math.abs(c.scaleX || 1), Math.abs(c.scaleY || 1));
+           c._origAngle = c.angle || 0;
         }
-      }
+      });
     }
   });
 
@@ -4013,41 +4076,21 @@ const initFabric = () => {
           });
           obj.setPositionByOrigin(anchorPoint, originX, originY);
         }
-      } else if (obj.type === 'activeselection' || obj.type === 'activeSelection') {
-        // 2. Multi-selection containing sticky note(s):
-        // Enforce sticky children don't shrink below 80px or expand beyond 600px,
-        // and maintain 1:1 proportional scaling on sticky notes without flattening.
+      } else if (obj.type === 'activeselection' || obj.type === 'activeSelection' || obj.type === 'group') {
         const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
-        const hasStickyChild = targets.some((c: any) => c.isStickyNote || c.stickyColorConfig);
-        if (hasStickyChild) {
-          const selScaleX = Math.abs(obj.scaleX || 1);
-          const selScaleY = Math.abs(obj.scaleY || 1);
-          let uniformSelScale = Math.max(selScaleX, selScaleY);
+        const selScaleX = Math.abs(obj.scaleX || 1);
+        const selScaleY = Math.abs(obj.scaleY || 1);
+        const uniformSelScale = Math.max(selScaleX, selScaleY);
 
-          targets.forEach((c: any) => {
-            if (c.isStickyNote || c.stickyColorConfig) {
-              const baseW = c.width || 120;
-              const netScale = uniformSelScale * Math.abs(c.scaleX || 1);
-              const minNet = 80 / baseW;
-              const maxNet = 600 / baseW;
-              if (netScale < minNet) {
-                uniformSelScale = minNet / Math.abs(c.scaleX || 1);
-              } else if (netScale > maxNet) {
-                uniformSelScale = maxNet / Math.abs(c.scaleX || 1);
-              }
-            }
-          });
-
-          if (Math.abs(uniformSelScale - selScaleX) > 1e-4 || Math.abs(uniformSelScale - selScaleY) > 1e-4) {
-            const transform = (canvas as any)._currentTransform;
-            const originX = transform?.originX || 'center';
-            const originY = transform?.originY || 'center';
-            const anchorPoint = obj.getPointByOrigin(originX, originY);
-            obj.scaleX = (obj.scaleX < 0 ? -1 : 1) * uniformSelScale;
-            obj.scaleY = (obj.scaleY < 0 ? -1 : 1) * uniformSelScale;
-            obj.setPositionByOrigin(anchorPoint, originX, originY);
+        targets.forEach((c: any) => {
+          if (c.isStickyNote || c.stickyColorConfig) {
+            // Counteract group's non-uniform scale by giving child an inverse non-uniform scale
+            // Visually, the child scales uniformly by `uniformSelScale`.
+            const childVisualScale = uniformSelScale * Math.abs(c._origBaseScale || 1);
+            c.scaleX = (c.scaleX < 0 ? -1 : 1) * (childVisualScale / selScaleX);
+            c.scaleY = (c.scaleY < 0 ? -1 : 1) * (childVisualScale / selScaleY);
           }
-        }
+        });
       }
 
       obj.setCoords();
@@ -4057,11 +4100,11 @@ const initFabric = () => {
       canvas?.requestRenderAll();
     }
     // Scaling frames are not broadcast live to peers; sync on mouseup (user requirement)
-    updateStickyToolbar();
+    updateFloatingToolbars();
     updateArrowToolbar();
   });
   canvas.on('object:modified', (e: any) => {
-    updateStickyToolbar();
+    updateFloatingToolbars();
     updateArrowToolbar();
   });
   canvas.on('object:resizing', (e: any) => {
@@ -4072,14 +4115,23 @@ const initFabric = () => {
         obj.initDimensions();
         obj.setCoords();
       }
-      updateStickyToolbar();
-      updateArrowToolbar();
+      updateFloatingToolbars();
     }
   });
   canvas.on('object:rotating', (e: any) => {
     hasObjectTransformed = true;
+    const obj = e?.target;
+    if (obj && (obj.type === 'activeselection' || obj.type === 'activeSelection' || obj.type === 'group')) {
+      const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
+      targets.forEach((c: any) => {
+        if (c.isStickyNote || c.stickyColorConfig) {
+          c.angle = (c._origAngle || 0) - (obj.angle || 0);
+        }
+      });
+      canvas?.requestRenderAll();
+    }
     updateLiveDrag(e);
-    updateStickyToolbar();
+    updateFloatingToolbars();
     updateArrowToolbar();
   });
 
@@ -4852,7 +4904,7 @@ const changeStickyNoteColor = (note: any, colorCfg: StickyColorConfig) => {
   canvas.requestRenderAll();
   saveHistoryState();
   syncToFirebase();
-  updateStickyToolbar();
+  updateFloatingToolbars();
 
   if (wasEditing) {
     note.enterEditing();
@@ -4895,180 +4947,192 @@ const duplicateStickyNote = async (note: any) => {
 const enterGroupIsolation = (group: fabric.Group, targetChild?: any) => {
   if (!canvas) return;
 
-  // Snapshot the current canvas state for this isolation level
-  const savedProps: Array<{ obj: any; opacity: number; selectable: boolean; evented: boolean }> = [];
-  canvas.getObjects().forEach((o: any) => {
-    savedProps.push({
-      obj: o,
-      opacity: o.opacity ?? 1,
-      selectable: o.selectable ?? true,
-      evented: o.evented ?? true
-    });
-  });
-
-  const isEnteringRoot = !isIsolationMode.value;
-  if (isEnteringRoot) {
-    isIsolationMode.value = true;
-    isolationStack.value = [];
-    hasIsolationChanged.value = false;
-    // Record true root interaction and opacity properties for ALL canvas objects
+  isInternalChange = true;
+  try {
+    // Snapshot the current canvas state for this isolation level
+    const savedProps: Array<{ obj: any; opacity: number; selectable: boolean; evented: boolean }> = [];
     canvas.getObjects().forEach((o: any) => {
-      o._rootOrigOpacity = o.opacity ?? 1;
-      o._rootOrigSelectable = o.selectable ?? true;
-      o._rootOrigEvented = o.evented ?? true;
+      savedProps.push({
+        obj: o,
+        opacity: o.opacity ?? 1,
+        selectable: o.selectable ?? true,
+        evented: o.evented ?? true
+      });
     });
-  } else if (isolatedGroup) {
-    // Nested group isolation: push current level onto stack
-    isolationStack.value.push({
-      group: isolatedGroup,
-      items: isolatedItems,
-      savedProps
-    });
-  }
 
-  isolatedGroup = group;
-
-  // Dim all other canvas objects except this group
-  canvas.getObjects().forEach((o: any) => {
-    if (o !== group) {
-      o.set({ opacity: 0.2, selectable: false, evented: false });
-    }
-  });
-
-  // Extract items from group onto canvas
-  isolatedItems = group.removeAll();
-  canvas.remove(group);
-  isolatedItems.forEach(item => {
-    item.set({
-      opacity: 1,
-      selectable: true,
-      evented: true,
-      perPixelTargetFind: true,
-      lockMovementX: !!(item as any).isLocked,
-      lockMovementY: !!(item as any).isLocked,
-      lockRotation: !!(item as any).isLocked,
-      lockScalingX: !!(item as any).isLocked,
-      lockScalingY: !!(item as any).isLocked,
-      hasControls: !(item as any).isLocked
-    });
-    canvas?.add(item);
-  });
-
-  if (Array.isArray(targetChild) && targetChild.length > 0) {
-    const validTargets = targetChild.filter(c => isolatedItems.includes(c));
-    if (validTargets.length === 1) {
-      canvas.setActiveObject(validTargets[0]);
-    } else if (validTargets.length > 1) {
-      const activeSel = new fabric.ActiveSelection(validTargets, { canvas });
-      canvas.setActiveObject(activeSel);
-    }
-  } else if (targetChild && isolatedItems.includes(targetChild)) {
-    canvas.setActiveObject(targetChild);
-  }
-  canvas.requestRenderAll();
-  updateSelectionState();
-};
-
-const exitGroupIsolation = () => {
-  if (!canvas || !isIsolationMode.value) return;
-
-  // Re-bundle ONLY remaining isolated items back into group (ignoring deleted items!)
-  const remainingItems = isolatedItems.filter(item => canvas?.getObjects().includes(item));
-  remainingItems.forEach(item => canvas?.remove(item));
-
-  let bundledGroup: any = null;
-  if (remainingItems.length > 1) {
-    const newGroup = new fabric.Group(remainingItems, {
-      canvas,
-      subTargetCheck: false,
-      perPixelTargetFind: true
-    });
-    const allLocked = remainingItems.length > 0 && remainingItems.every((o: any) => o.isLocked);
-    const anyLocked = remainingItems.some((o: any) => o.isLocked);
-    (newGroup as any).hasLockedChildren = anyLocked;
-    if (allLocked) {
-      (newGroup as any).isLocked = true;
-      newGroup.set({
-        lockMovementX: true,
-        lockMovementY: true,
-        lockRotation: true,
-        lockScalingX: true,
-        lockScalingY: true,
-        hasControls: false
+    const isEnteringRoot = !isIsolationMode.value;
+    if (isEnteringRoot) {
+      isIsolationMode.value = true;
+      isolationStack.value = [];
+      hasIsolationChanged.value = false;
+      // Record true root interaction and opacity properties for ALL canvas objects
+      canvas.getObjects().forEach((o: any) => {
+        o._rootOrigOpacity = o.opacity ?? 1;
+        o._rootOrigSelectable = o.selectable ?? true;
+        o._rootOrigEvented = o.evented ?? true;
+      });
+    } else if (isolatedGroup) {
+      // Nested group isolation: push current level onto stack
+      isolationStack.value.push({
+        group: isolatedGroup,
+        items: isolatedItems,
+        savedProps
       });
     }
-    canvas.add(newGroup);
-    canvas.setActiveObject(newGroup);
-    bundledGroup = newGroup;
-  } else if (remainingItems.length === 1) {
-    // Only 1 item left, leave it as an ungrouped object
-    canvas.add(remainingItems[0]);
-    canvas.setActiveObject(remainingItems[0]);
-    bundledGroup = remainingItems[0];
-  }
 
-  // If there are parent levels on the stack, step back to the previous level!
-  if (isolationStack.value.length > 0) {
-    const parentLevel = isolationStack.value.pop()!;
-    isolatedGroup = parentLevel.group;
-    // Keep items from parent level that are still on canvas, and include the newly bundled group
-    isolatedItems = parentLevel.items.filter(item => canvas?.getObjects().includes(item));
-    if (bundledGroup && !isolatedItems.includes(bundledGroup)) {
-      isolatedItems.push(bundledGroup);
-    }
+    isolatedGroup = group;
 
-    // Restore interaction / opacity for parent level's objects
-    parentLevel.savedProps.forEach(sp => {
-      if (canvas?.getObjects().includes(sp.obj)) {
-        sp.obj.set({
-          opacity: sp.opacity,
-          selectable: sp.selectable,
-          evented: sp.evented
-        });
+    // Dim all other canvas objects except this group
+    canvas.getObjects().forEach((o: any) => {
+      if (o !== group) {
+        o.set({ opacity: 0.2, selectable: false, evented: false });
       }
     });
 
-    // Ensure all items belonging to this restored level are interactive and opaque
+    // Extract items from group onto canvas
+    isolatedItems = group.removeAll();
+    canvas.remove(group);
     isolatedItems.forEach(item => {
       item.set({
         opacity: 1,
         selectable: true,
         evented: true,
+        perPixelTargetFind: true,
+        lockMovementX: !!(item as any).isLocked,
+        lockMovementY: !!(item as any).isLocked,
+        lockRotation: !!(item as any).isLocked,
+        lockScalingX: !!(item as any).isLocked,
+        lockScalingY: !!(item as any).isLocked,
         hasControls: !(item as any).isLocked
       });
+      canvas?.add(item);
     });
 
+    if (Array.isArray(targetChild) && targetChild.length > 0) {
+      const validTargets = targetChild.filter(c => isolatedItems.includes(c));
+      if (validTargets.length === 1) {
+        canvas.setActiveObject(validTargets[0]);
+      } else if (validTargets.length > 1) {
+        const activeSel = new fabric.ActiveSelection(validTargets, { canvas });
+        canvas.setActiveObject(activeSel);
+      }
+    } else if (targetChild && isolatedItems.includes(targetChild)) {
+      canvas.setActiveObject(targetChild);
+    }
     canvas.requestRenderAll();
     updateSelectionState();
-    return;
+  } finally {
+    isInternalChange = false;
   }
+};
 
-  // Fully exit all isolation levels
-  canvas.getObjects().forEach((o: any) => {
-    o.set({
-      opacity: o._rootOrigOpacity !== undefined ? o._rootOrigOpacity : (o.opacity !== undefined ? o.opacity : 1),
-      selectable: o._rootOrigSelectable !== undefined ? o._rootOrigSelectable : true,
-      evented: o._rootOrigEvented !== undefined ? o._rootOrigEvented : true
+const exitGroupIsolation = () => {
+  if (!canvas || !isIsolationMode.value) return;
+
+  let localHasChanged = hasIsolationChanged.value;
+  isInternalChange = true;
+  try {
+    // Re-bundle ONLY remaining isolated items back into group (ignoring deleted items!)
+    const remainingItems = isolatedItems.filter(item => canvas?.getObjects().includes(item));
+    remainingItems.forEach(item => canvas?.remove(item));
+
+    let bundledGroup: any = null;
+    if (remainingItems.length > 1) {
+      const newGroup = new fabric.Group(remainingItems, {
+        canvas,
+        subTargetCheck: false,
+        perPixelTargetFind: true
+      });
+      const allLocked = remainingItems.length > 0 && remainingItems.every((o: any) => o.isLocked);
+      const anyLocked = remainingItems.some((o: any) => o.isLocked);
+      (newGroup as any).hasLockedChildren = anyLocked;
+      if (allLocked) {
+        (newGroup as any).isLocked = true;
+        newGroup.set({
+          lockMovementX: true,
+          lockMovementY: true,
+          lockRotation: true,
+          lockScalingX: true,
+          lockScalingY: true,
+          hasControls: false
+        });
+      }
+      canvas.add(newGroup);
+      canvas.setActiveObject(newGroup);
+      bundledGroup = newGroup;
+    } else if (remainingItems.length === 1) {
+      // Only 1 item left, leave it as an ungrouped object
+      canvas.add(remainingItems[0]);
+      canvas.setActiveObject(remainingItems[0]);
+      bundledGroup = remainingItems[0];
+    }
+
+    // If there are parent levels on the stack, step back to the previous level!
+    if (isolationStack.value.length > 0) {
+      const parentLevel = isolationStack.value.pop()!;
+      isolatedGroup = parentLevel.group;
+      // Keep items from parent level that are still on canvas, and include the newly bundled group
+      isolatedItems = parentLevel.items.filter(item => canvas?.getObjects().includes(item));
+      if (bundledGroup && !isolatedItems.includes(bundledGroup)) {
+        isolatedItems.push(bundledGroup);
+      }
+
+      // Restore interaction / opacity for parent level's objects
+      parentLevel.savedProps.forEach(sp => {
+        if (canvas?.getObjects().includes(sp.obj)) {
+          sp.obj.set({
+            opacity: sp.opacity,
+            selectable: sp.selectable,
+            evented: sp.evented
+          });
+        }
+      });
+
+      // Ensure all items belonging to this restored level are interactive and opaque
+      isolatedItems.forEach(item => {
+        item.set({
+          opacity: 1,
+          selectable: true,
+          evented: true,
+          hasControls: !(item as any).isLocked
+        });
+      });
+
+      canvas.requestRenderAll();
+      updateSelectionState();
+      return;
+    }
+
+    // Fully exit all isolation levels
+    canvas.getObjects().forEach((o: any) => {
+      o.set({
+        opacity: o._rootOrigOpacity !== undefined ? o._rootOrigOpacity : (o.opacity !== undefined ? o.opacity : 1),
+        selectable: o._rootOrigSelectable !== undefined ? o._rootOrigSelectable : true,
+        evented: o._rootOrigEvented !== undefined ? o._rootOrigEvented : true
+      });
+      delete o._rootOrigOpacity;
+      delete o._rootOrigSelectable;
+      delete o._rootOrigEvented;
+      delete o._origOpacity;
+      delete o._origSelectable;
+      delete o._origEvented;
     });
-    delete o._rootOrigOpacity;
-    delete o._rootOrigSelectable;
-    delete o._rootOrigEvented;
-    delete o._origOpacity;
-    delete o._origSelectable;
-    delete o._origEvented;
-  });
 
-  isIsolationMode.value = false;
-  isolatedGroup = null;
-  isolatedItems = [];
-  isolationStack.value = [];
-  canvas.requestRenderAll();
-  if (hasIsolationChanged.value) {
+    isIsolationMode.value = false;
+    isolatedGroup = null;
+    isolatedItems = [];
+    isolationStack.value = [];
+    canvas.requestRenderAll();
+    updateSelectionState();
+  } finally {
+    isInternalChange = false;
+  }
+  
+  if (localHasChanged) {
     hasIsolationChanged.value = false;
     saveHistoryState();
     syncToFirebase();
   }
-  updateSelectionState();
 };
 
 // Object Lock Action (Supports single objects, groups, and multi-selection ActiveSelection)
@@ -5497,6 +5561,13 @@ const ungroupObjects = () => {
 const undo = async () => {
   if (!canvas) return;
 
+  if (isIsolationMode.value) {
+    // Fully exit isolation before performing undo to prevent state corruption
+    while (isIsolationMode.value) {
+      exitGroupIsolation();
+    }
+  }
+
   // 1. Personal mode: Deterministic chronological snapshot undo
   if (!isCollabActive.value) {
     if (historyStack.value.length > 1) {
@@ -5613,6 +5684,12 @@ const undo = async () => {
 
 const redo = async () => {
   if (!canvas) return;
+
+  if (isIsolationMode.value) {
+    while (isIsolationMode.value) {
+      exitGroupIsolation();
+    }
+  }
 
   // 1. Personal mode: Deterministic chronological snapshot redo
   if (!isCollabActive.value) {
@@ -6122,7 +6199,7 @@ const handleKeydown = (e: KeyboardEvent) => {
       });
     }
     canvas?.requestRenderAll();
-    updateStickyToolbar();
+    updateFloatingToolbars();
     updateArrowToolbar();
     saveHistoryState();
     syncToFirebase();
@@ -6409,7 +6486,7 @@ const handleWhiteboardWheel = (e: WheelEvent) => {
     clampViewportPan();
     const activeObj = canvas.getActiveObject();
     if (activeObj) activeObj.setCoords();
-    updateStickyToolbar();
+    updateFloatingToolbars();
     updateArrowToolbar();
     viewportVersion.value++;
   } else if (e.altKey) {
@@ -6420,8 +6497,7 @@ const handleWhiteboardWheel = (e: WheelEvent) => {
       canvas.setViewportTransform(vpt);
       const activeObj = canvas.getActiveObject();
       if (activeObj) activeObj.setCoords();
-      updateStickyToolbar();
-      updateArrowToolbar();
+      updateFloatingToolbars();
       viewportVersion.value++;
       canvas.requestRenderAll();
     }
@@ -6433,8 +6509,7 @@ const handleWhiteboardWheel = (e: WheelEvent) => {
       canvas.setViewportTransform(vpt);
       const activeObj = canvas.getActiveObject();
       if (activeObj) activeObj.setCoords();
-      updateStickyToolbar();
-      updateArrowToolbar();
+      updateFloatingToolbars();
       viewportVersion.value++;
       canvas.requestRenderAll();
     }
@@ -6870,80 +6945,71 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- Floating Quick-Action Bar below Selected Sticky Note -->
+      <!-- Unified Floating Quick-Action Bar below Active Object -->
       <div
-        v-if="stickyToolbarPosition.visible && activeStickyNote"
-        class="absolute z-30 flex items-center gap-1.5 p-1.5 bg-slate-900/95 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl transition-all animate-in fade-in zoom-in-95 pointer-events-auto"
+        v-if="(stickyToolbarPosition.visible && activeStickyNote) || (lockToolbarPosition.visible && lockToolbarPosition.hasLocked) || (arrowToolbarPosition.visible && activeArrow && !isArrowNodeEditing)"
+        class="absolute z-35 flex items-center gap-1.5 p-1 bg-slate-900/95 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl transition-all animate-in fade-in zoom-in-95 pointer-events-auto"
         :class="{ 'opacity-15': isHoveringSend }"
         @mousedown.prevent
         :style="{
-          left: `${stickyToolbarPosition.x}px`,
-          top: `${stickyToolbarPosition.y}px`,
+          left: `${lockToolbarPosition.visible ? lockToolbarPosition.x : (stickyToolbarPosition.visible ? stickyToolbarPosition.x : arrowToolbarPosition.x)}px`,
+          top: `${lockToolbarPosition.visible ? lockToolbarPosition.y : (stickyToolbarPosition.visible ? stickyToolbarPosition.y : arrowToolbarPosition.y)}px`,
           transform: 'translate(-50%, 0)'
         }"
       >
-        <div class="flex items-center gap-1 px-1">
-          <button
-            v-for="color in stickyColors"
-            :key="color.name"
-            @mousedown.prevent
-            @click="!isObjectLocked && changeStickyNoteColor(activeStickyNote, color)"
-            :disabled="isObjectLocked"
-            class="w-4 h-4 rounded-full border border-black/20 hover:scale-125 transition transform cursor-pointer disabled:opacity-30 disabled:hover:scale-100 disabled:cursor-not-allowed"
-            :style="{ backgroundColor: color.bg }"
-            :title="isObjectLocked ? 'Note is locked' : color.name"
-          ></button>
-        </div>
-        <div class="w-px h-4 bg-slate-700"></div>
+        <!-- Unlock Button (if locked) -->
         <button
-          @mousedown.prevent
-          @click="duplicateStickyNote(activeStickyNote)"
-          class="p-1 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition cursor-pointer"
-          title="Duplicate Note"
-        >
-          <Copy class="w-3.5 h-3.5" />
-        </button>
-        <button
-          @mousedown.prevent
-          @click="toggleLockSelected"
-          class="p-1 hover:bg-slate-800 rounded-lg transition cursor-pointer"
-          :class="isObjectLocked ? 'text-amber-400 hover:text-amber-300' : 'text-slate-300 hover:text-white'"
-          :title="isObjectLocked ? 'Unlock Note (Ctrl+L)' : 'Lock Note (Ctrl+L)'"
-        >
-          <component :is="isObjectLocked ? Lock : Unlock" class="w-3.5 h-3.5" />
-        </button>
-        <button
-          @mousedown.prevent
-          @click="deleteSelected"
-          class="p-1 hover:bg-rose-950/60 text-rose-400 hover:text-rose-300 rounded-lg transition cursor-pointer"
-          title="Delete Note"
-        >
-          <Trash2 class="w-3.5 h-3.5" />
-        </button>
-      </div>
-
-      <!-- Floating Unlock Button below Locked Object or Selection -->
-      <div
-        v-if="lockToolbarPosition.visible && lockToolbarPosition.hasLocked"
-        class="absolute z-35 flex items-center p-1 bg-slate-900/95 backdrop-blur-md border border-amber-500/70 rounded-xl shadow-2xl transition-all animate-in fade-in zoom-in-95 pointer-events-auto"
-        :class="{ 'opacity-15': isHoveringSend }"
-        @mousedown.prevent
-        :style="{
-          left: `${lockToolbarPosition.x}px`,
-          top: `${lockToolbarPosition.y}px`,
-          transform: 'translate(-50%, 0)'
-        }"
-      >
-        <button
+          v-if="lockToolbarPosition.visible && lockToolbarPosition.hasLocked"
           @mousedown.prevent
           @click="unlockSelectedObjects"
+          @mouseenter="highlightLockedObjects"
+          @mouseleave="clearLockedHighlights"
           class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 hover:text-amber-200 border border-amber-500/40 text-xs font-medium transition cursor-pointer shadow-sm"
           title="Click to unlock (Ctrl+L)"
         >
           <Lock class="w-3.5 h-3.5 text-amber-400" />
           <span class="text-[11px] font-semibold">Unlock</span>
         </button>
-      </div>
+
+        <!-- Sticky Note Tools (only if unlocked) -->
+        <template v-if="stickyToolbarPosition.visible && activeStickyNote && !(lockToolbarPosition.visible && lockToolbarPosition.hasLocked)">
+          <div class="flex items-center gap-1 px-1">
+            <button
+              v-for="color in stickyColors"
+              :key="color.name"
+              @mousedown.prevent
+              @click="changeStickyNoteColor(activeStickyNote, color)"
+              class="w-4 h-4 rounded-full border border-black/20 hover:scale-125 transition transform cursor-pointer"
+              :style="{ backgroundColor: color.bg }"
+              :title="color.name"
+            ></button>
+          </div>
+          <div class="w-px h-4 bg-slate-700"></div>
+          <button
+            @mousedown.prevent
+            @click="duplicateStickyNote(activeStickyNote)"
+            class="p-1 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition cursor-pointer"
+            title="Duplicate Note"
+          >
+            <Copy class="w-3.5 h-3.5" />
+          </button>
+          <button
+            @mousedown.prevent
+            @click="toggleLockSelected"
+            class="p-1 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition cursor-pointer"
+            title="Lock Note (Ctrl+L)"
+          >
+            <Unlock class="w-3.5 h-3.5" />
+          </button>
+          <button
+            @mousedown.prevent
+            @click="deleteSelected"
+            class="p-1 hover:bg-rose-950/60 text-rose-400 hover:text-rose-300 rounded-lg transition cursor-pointer"
+            title="Delete Note"
+          >
+            <Trash2 class="w-3.5 h-3.5" />
+          </button>
+        </template>
 
       <!-- Arrow Node Editing Handles Overlay -->
       <div
@@ -7040,53 +7106,44 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- Floating Quick-Action Bar below Selected Line / Arrow -->
-      <div
-        v-if="arrowToolbarPosition.visible && activeArrow && !isArrowNodeEditing"
-        class="absolute z-30 flex items-center gap-1.5 p-1.5 bg-slate-900/95 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl transition-all animate-in fade-in zoom-in-95 pointer-events-auto whitespace-nowrap select-none"
-        :class="{ 'opacity-15': isHoveringSend }"
-        @mousedown.prevent
-        :style="{
-          left: `${arrowToolbarPosition.x}px`,
-          top: `${arrowToolbarPosition.y}px`,
-          transform: 'translate(-50%, 0)'
-        }"
-      >
-        <button
-          @mousedown.prevent
-          @click="enterArrowNodeEditing(activeArrow)"
-          class="px-2 py-1 bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-300 hover:text-white rounded-lg transition cursor-pointer flex items-center gap-1.5 text-xs font-medium whitespace-nowrap"
-          title="Edit vector line nodes (or double-click to edit)"
-        >
-          <Waypoints class="w-3.5 h-3.5 text-indigo-400" />
-          <span>Edit Nodes</span>
-        </button>
-        <div class="w-px h-4 bg-slate-700"></div>
-        <button
-          @mousedown.prevent
-          @click="duplicateArrow(activeArrow)"
-          class="p-1 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition cursor-pointer"
-          title="Duplicate (Ctrl+D)"
-        >
-          <Copy class="w-3.5 h-3.5" />
-        </button>
-        <button
-          @mousedown.prevent
-          @click="toggleLockSelected"
-          class="p-1 hover:bg-slate-800 rounded-lg transition cursor-pointer"
-          :class="isObjectLocked ? 'text-amber-400 hover:text-amber-300' : 'text-slate-300 hover:text-white'"
-          :title="isObjectLocked ? 'Unlock (Ctrl+L)' : 'Lock (Ctrl+L)'"
-        >
-          <component :is="isObjectLocked ? Lock : Unlock" class="w-3.5 h-3.5" />
-        </button>
-        <button
-          @mousedown.prevent
-          @click="deleteSelected"
-          class="p-1 hover:bg-rose-950/60 text-rose-400 hover:text-rose-300 rounded-lg transition cursor-pointer"
-          title="Delete (Del)"
-        >
-          <Trash2 class="w-3.5 h-3.5" />
-        </button>
+        <!-- Arrow Tools (only if unlocked) -->
+        <template v-if="arrowToolbarPosition.visible && activeArrow && !isArrowNodeEditing && !(lockToolbarPosition.visible && lockToolbarPosition.hasLocked)">
+          <button
+            @mousedown.prevent
+            @click="enterArrowNodeEditing(activeArrow)"
+            class="px-2 py-1 bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-300 hover:text-white rounded-lg transition cursor-pointer flex items-center gap-1.5 text-xs font-medium whitespace-nowrap"
+            title="Edit vector line nodes (or double-click to edit)"
+          >
+            <Waypoints class="w-3.5 h-3.5 text-indigo-400" />
+            <span>Edit Nodes</span>
+          </button>
+          <div class="w-px h-4 bg-slate-700"></div>
+          <button
+            @mousedown.prevent
+            @click="duplicateArrow(activeArrow)"
+            class="p-1 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition cursor-pointer"
+            title="Duplicate (Ctrl+D)"
+          >
+            <Copy class="w-3.5 h-3.5" />
+          </button>
+          <button
+            @mousedown.prevent
+            @click="toggleLockSelected"
+            class="p-1 hover:bg-slate-800 rounded-lg transition cursor-pointer"
+            :class="isObjectLocked ? 'text-amber-400 hover:text-amber-300' : 'text-slate-300 hover:text-white'"
+            :title="isObjectLocked ? 'Unlock (Ctrl+L)' : 'Lock (Ctrl+L)'"
+          >
+            <component :is="isObjectLocked ? Lock : Unlock" class="w-3.5 h-3.5" />
+          </button>
+          <button
+            @mousedown.prevent
+            @click="deleteSelected"
+            class="p-1 hover:bg-rose-950/60 text-rose-400 hover:text-rose-300 rounded-lg transition cursor-pointer"
+            title="Delete (Del)"
+          >
+            <Trash2 class="w-3.5 h-3.5" />
+          </button>
+        </template>
       </div>
     </div>
 

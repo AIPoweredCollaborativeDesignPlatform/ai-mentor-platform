@@ -450,63 +450,53 @@ const unlockSelectedObjects = () => {
   const active = canvas.getActiveObject() as any;
   if (!active) return;
 
+  const unlockItem = (item: any) => {
+    item.isLocked = false;
+    item.set({
+      lockMovementX: false,
+      lockMovementY: false,
+      lockRotation: false,
+      lockScalingX: false,
+      lockScalingY: false,
+      hasControls: true,
+      isLocked: false
+    });
+    if (item.isStickyNote || item.stickyColorConfig) {
+      setupStickyControls(item);
+    }
+    if (item.type === 'group' || item instanceof fabric.Group) {
+      item.hasLockedChildren = false;
+      const children = item.getObjects ? item.getObjects() : item._objects || [];
+      children.forEach((c: any) => unlockItem(c));
+    }
+    item.setCoords();
+  };
+
   if (active.type?.toLowerCase() === 'activeselection' || active instanceof fabric.ActiveSelection) {
     const targets = active.getObjects ? active.getObjects() : active._objects || [];
-    targets.forEach((o: any) => {
-      o.isLocked = false;
-      o.set({
-        lockMovementX: false,
-        lockMovementY: false,
-        lockRotation: false,
-        lockScalingX: false,
-        lockScalingY: false,
-        hasControls: true
-      });
-    });
-    active.set({
-      lockMovementX: false,
-      lockMovementY: false,
-      lockRotation: false,
-      lockScalingX: false,
-      lockScalingY: false,
-      hasControls: true
-    });
-  } else if ((active.type?.toLowerCase() === 'group' || active instanceof fabric.Group) && !active.isStickyNote && !(active as any).isArrow) {
+    targets.forEach((o: any) => unlockItem(o));
     active.isLocked = false;
-    (active as any).hasLockedChildren = false;
-    const children = active.getObjects ? active.getObjects() : active._objects || [];
-    children.forEach((c: any) => {
-      c.isLocked = false;
-      c.set({
-        lockMovementX: false,
-        lockMovementY: false,
-        lockRotation: false,
-        lockScalingX: false,
-        lockScalingY: false,
-        hasControls: true
-      });
-    });
     active.set({
       lockMovementX: false,
       lockMovementY: false,
       lockRotation: false,
       lockScalingX: false,
       lockScalingY: false,
-      hasControls: true
+      hasControls: true,
+      isLocked: false
     });
+    active.setControlsVisibility({
+      tl: true, tr: true, bl: true, br: true,
+      ml: true, mr: true, mt: true, mb: true, mtr: true
+    });
+    active.setCoords();
   } else {
-    active.isLocked = false;
-    active.set({
-      lockMovementX: false,
-      lockMovementY: false,
-      lockRotation: false,
-      lockScalingX: false,
-      lockScalingY: false,
-      hasControls: true
-    });
+    unlockItem(active);
   }
+
   isObjectLocked.value = false;
   lockToolbarPosition.value.visible = false;
+  lockToolbarPosition.value.hasLocked = false;
   clearLockedHighlights();
   updateSelectionState();
   updateFloatingToolbars();
@@ -1383,24 +1373,17 @@ const updateSelectionState = () => {
       lockScalingY: allLocked,
       hasControls: !allLocked
     });
-    if (hasSticky) {
-      active.setControlsVisibility({
-        tl: true, tr: true, bl: true, br: true,
-        ml: false, mr: false, mt: false, mb: false, mtr: true
-      });
-    } else {
-      active.setControlsVisibility({
-        tl: true, tr: true, bl: true, br: true,
-        ml: true, mr: true, mt: true, mb: true, mtr: true
-      });
-    }
+    // Multi-selection controls: ALWAYS enable single-axis scale handles (ml, mr, mt, mb) and rotation
+    active.setControlsVisibility({
+      tl: true, tr: true, bl: true, br: true,
+      ml: true, mr: true, mt: true, mb: true, mtr: true
+    });
   } else if (active && (active.type?.toLowerCase() === 'group' || active instanceof fabric.Group) && !active.isStickyNote && !(active as any).isArrow) {
     const targets = active.getObjects ? active.getObjects() : active._objects || [];
     const allLocked = targets.length > 0 && targets.every((o: any) => o.isLocked === true);
     const anyLocked = targets.some((o: any) => o.isLocked === true);
-    const hasSticky = targets.some((o: any) => o.isStickyNote || o.stickyColorConfig);
     isObjectLocked.value = !!active.isLocked || anyLocked;
-    const shouldFreeze = !!active.isLocked || anyLocked;
+    const shouldFreeze = !!active.isLocked || allLocked;
     active.set({
       lockMovementX: shouldFreeze,
       lockMovementY: shouldFreeze,
@@ -1408,7 +1391,11 @@ const updateSelectionState = () => {
       lockScalingX: shouldFreeze,
       lockScalingY: shouldFreeze,
       hasControls: !shouldFreeze,
-      lockUniScaling: hasSticky
+      lockUniScaling: false
+    });
+    active.setControlsVisibility({
+      tl: true, tr: true, bl: true, br: true,
+      ml: true, mr: true, mt: true, mb: true, mtr: true
     });
   } else if (active && (active.isStickyNote || active.stickyColorConfig)) {
     active.set({ lockUniScaling: true });
@@ -2756,38 +2743,10 @@ const initFabric = () => {
         }
         obj.setCoords();
       }
-    } else if (obj && (obj.type === 'activeselection' || obj.type === 'activeSelection')) {
-      const children = obj.getObjects ? obj.getObjects() : (obj._objects || []);
-      let hasSticky = false;
-      children.forEach((c: any) => {
-        if (c.isStickyNote || c.stickyColorConfig) {
-          hasSticky = true;
-          const sx = Math.abs(c.scaleX || 1);
-          const sy = Math.abs(c.scaleY || 1);
-          if (Math.abs(sx - 1) > 1e-4 || Math.abs(sy - 1) > 1e-4) {
-            const s = Math.max(sx, sy);
-            const curW = c.width || 180;
-            const curMinH = (c as any).minHeight !== undefined ? (c as any).minHeight : (c.height || 180);
-            const targetW = Math.max(80, Math.min(600, Math.round(curW * s)));
-            const targetH = Math.max(80, Math.min(600, Math.round(curMinH * s)));
-            const curFontSize = c.fontSize || 18;
-            const newFontSize = Math.max(10, Math.min(120, Math.round(curFontSize * s)));
-
-            (c as any).minHeight = targetH;
-            c.set({
-              width: targetW,
-              height: targetH,
-              fontSize: newFontSize,
-              scaleX: 1,
-              scaleY: 1
-            });
-            c.initDimensions?.();
-            c.setCoords();
-          }
-        }
-      });
-      if (hasSticky) {
-        obj.setCoords();
+    } else if (obj && (obj.type === 'activeselection' || obj.type === 'activeSelection' || obj.type === 'group')) {
+      obj.setCoords();
+      if (typeof obj.forEachObject === 'function') {
+        obj.forEachObject((c: any) => c.setCoords());
       }
     }
 
@@ -3997,16 +3956,26 @@ const initFabric = () => {
       }
     }
 
-    // 1. If group or activeSelection contains locked items, prevent accidental movement
+    // 1. If group or activeSelection contains locked items:
+    // Only freeze if ALL targets are locked. If mixed, allow moving unlocked items while keeping locked items stationary.
     if (obj.type === 'activeselection' || (obj.type === 'group' && !obj.isStickyNote)) {
       const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
-      const anyLocked = targets.some((o: any) => o.isLocked);
-      if (anyLocked) {
+      const allLocked = targets.length > 0 && targets.every((o: any) => o.isLocked);
+      if (allLocked) {
         if (obj._dragStartLeft !== undefined) obj.left = obj._dragStartLeft;
         if (obj._dragStartTop !== undefined) obj.top = obj._dragStartTop;
         obj.setCoords();
         return;
       }
+      const dx = obj.left - (obj._dragStartLeft !== undefined ? obj._dragStartLeft : obj.left);
+      const dy = obj.top - (obj._dragStartTop !== undefined ? obj._dragStartTop : obj.top);
+      targets.forEach((c: any) => {
+        if (c.isLocked && c._dragStartLocalLeft !== undefined && c._dragStartLocalTop !== undefined) {
+          c.left = c._dragStartLocalLeft - dx;
+          c.top = c._dragStartLocalTop - dy;
+          c.setCoords();
+        }
+      });
     }
 
     // 2. Strict boundary clamping: flush coordinates first to obtain true scene bounding box
@@ -4042,15 +4011,21 @@ const initFabric = () => {
     if (obj) {
       // Alt modifier: scale from center
       obj.centeredScaling = !!(e.e?.altKey);
+      obj._dragStartLeft = obj.left;
+      obj._dragStartTop = obj.top;
       
       const targets = obj.type === 'activeselection' || obj.type === 'activeSelection' || obj.type === 'group' 
         ? (obj.getObjects ? obj.getObjects() : obj._objects || []) 
         : [obj];
         
       targets.forEach((c: any) => {
+        c._dragStartLocalLeft = c.left;
+        c._dragStartLocalTop = c.top;
+        c._origScaleX = c.scaleX || 1;
+        c._origScaleY = c.scaleY || 1;
+        c._origAngle = c.angle || 0;
         if (c.isStickyNote || c.stickyColorConfig) {
            c._origBaseScale = Math.max(Math.abs(c.scaleX || 1), Math.abs(c.scaleY || 1));
-           c._origAngle = c.angle || 0;
         }
       });
     }
@@ -4091,6 +4066,12 @@ const initFabric = () => {
             const childVisualScale = uniformSelScale * Math.abs(c._origBaseScale || 1);
             c.scaleX = (c.scaleX < 0 ? -1 : 1) * (childVisualScale / selScaleX);
             c.scaleY = (c.scaleY < 0 ? -1 : 1) * (childVisualScale / selScaleY);
+          } else if (c.isLocked) {
+            // Locked objects in multi-selection should not scale
+            const origSx = c._origScaleX || 1;
+            const origSy = c._origScaleY || 1;
+            c.scaleX = (c.scaleX < 0 ? -1 : 1) * (origSx / selScaleX);
+            c.scaleY = (c.scaleY < 0 ? -1 : 1) * (origSy / selScaleY);
           }
         });
       }
@@ -4126,7 +4107,7 @@ const initFabric = () => {
     if (obj && (obj.type === 'activeselection' || obj.type === 'activeSelection' || obj.type === 'group')) {
       const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
       targets.forEach((c: any) => {
-        if (c.isStickyNote || c.stickyColorConfig) {
+        if (c.isStickyNote || c.stickyColorConfig || c.isLocked) {
           c.angle = (c._origAngle || 0) - (obj.angle || 0);
         }
       });
@@ -6968,14 +6949,14 @@ onUnmounted(() => {
         <button
           v-if="lockToolbarPosition.visible && lockToolbarPosition.hasLocked"
           @mousedown.prevent
-          @click="unlockSelectedObjects"
+          @click.stop="unlockSelectedObjects"
           @mouseenter="highlightLockedObjects"
           @mouseleave="clearLockedHighlights"
-          class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 hover:text-amber-200 border border-amber-500/40 text-xs font-medium transition cursor-pointer shadow-sm"
+          class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 hover:text-amber-200 border border-amber-500/40 text-xs font-medium transition cursor-pointer shadow-sm select-none"
           title="Click to unlock (Ctrl+L)"
         >
-          <Lock class="w-3.5 h-3.5 text-amber-400" />
-          <span class="text-[11px] font-semibold">Unlock</span>
+          <Lock class="w-3.5 h-3.5 text-amber-400 pointer-events-none" />
+          <span class="text-[11px] font-semibold pointer-events-none">Unlock</span>
         </button>
 
         <!-- Sticky Note Tools (only if unlocked) -->

@@ -263,7 +263,7 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string, expli
     await roomStore.updateCustomMessage(targetAssetId, {
       fileData: {
         type: 'image',
-        url: previewUrl,
+        url: isPrivate ? '' : previewUrl, // Private whiteboards never keep/update thumbnail
         name: 'whiteboard.jpg',
         size: 0
       },
@@ -279,7 +279,7 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string, expli
       content: isPrivate ? 'Personal Draft' : `${hostName} shared a collaborative whiteboard`,
       fileData: {
         type: 'image',
-        url: previewUrl,
+        url: isPrivate ? '' : previewUrl, // Private whiteboards never keep/update thumbnail
         name: 'whiteboard.jpg',
         size: 0
       },
@@ -1620,16 +1620,24 @@ onUnmounted(() => {
                 @click="openWhiteboardState(msg)"
               >
                 <div class="relative w-full aspect-[4/3] bg-slate-950 flex items-center justify-center overflow-hidden">
+                  <!-- Non-private with valid thumbnail URL: render image -->
                   <img
-                    v-if="msg.fileData?.url"
+                    v-if="!msg.metadata?.isPrivate && msg.fileData?.url"
                     :src="msg.fileData.url"
-                    class="w-full h-full object-cover transition duration-300"
-                    :class="[
-                      msg.metadata?.isPrivate
-                        ? 'grayscale opacity-60 contrast-75 brightness-75'
-                        : 'group-hover:scale-105'
-                    ]"
+                    class="w-full h-full object-cover transition duration-300 group-hover:scale-105"
                   />
+                  <!-- Private: thumbnail removed completely, pure gray background with Lock icon -->
+                  <div
+                    v-else-if="msg.metadata?.isPrivate"
+                    class="w-full h-full bg-slate-800 flex flex-col items-center justify-center text-slate-400 select-none p-4 text-center"
+                  >
+                    <div class="w-10 h-10 rounded-full bg-slate-700/70 border border-slate-600/50 flex items-center justify-center mb-1.5 shadow-sm">
+                      <Lock class="w-5 h-5 text-slate-300" />
+                    </div>
+                    <span class="text-[11px] font-semibold text-slate-300 tracking-wide">不公開畫布</span>
+                    <span class="text-[9px] text-slate-400 mt-0.5">縮圖已移除</span>
+                  </div>
+                  <!-- Non-private fallback when no image yet -->
                   <div v-else class="text-slate-600 flex flex-col items-center">
                     <Palette class="w-8 h-8 opacity-40" />
                   </div>
@@ -2139,7 +2147,21 @@ onUnmounted(() => {
               @click="!isManagingAssets && (openWhiteboardState(msg), isAssetsDrawerOpen = false)"
               title="Click to edit whiteboard"
             >
-              <img :src="msg.fileData?.url" class="w-full h-full object-cover group-hover:scale-105 transition duration-300 opacity-85" />
+              <img
+                v-if="!msg.metadata?.isPrivate && msg.fileData?.url"
+                :src="msg.fileData.url"
+                class="w-full h-full object-cover group-hover:scale-105 transition duration-300 opacity-85"
+              />
+              <div
+                v-else-if="msg.metadata?.isPrivate"
+                class="w-full h-full bg-slate-800 flex flex-col items-center justify-center text-slate-400 select-none p-2 text-center"
+              >
+                <Lock class="w-5 h-5 text-slate-300 mb-1" />
+                <span class="text-[9px] font-semibold text-slate-300">不公開</span>
+              </div>
+              <div v-else class="w-full h-full bg-slate-900 flex items-center justify-center text-slate-600">
+                <Palette class="w-6 h-6 opacity-40" />
+              </div>
               <!-- Badge -->
               <div class="absolute top-1 left-1 bg-indigo-950/90 text-indigo-300 px-1.5 py-0.5 rounded text-[8px] font-bold border border-indigo-500/50 backdrop-blur-sm flex items-center gap-1 z-10 shadow">
                 <Palette class="w-2.5 h-2.5 text-indigo-400" />
@@ -2269,7 +2291,21 @@ onUnmounted(() => {
                 @click="!isManagingAssets && (openWhiteboardState(msg), isAssetsDrawerOpen = false)"
                 title="Click to edit hidden whiteboard"
               >
-                <img :src="msg.fileData?.url" class="w-full h-full object-cover group-hover:scale-105 transition duration-300 opacity-70" />
+                <img
+                  v-if="!msg.metadata?.isPrivate && msg.fileData?.url"
+                  :src="msg.fileData.url"
+                  class="w-full h-full object-cover group-hover:scale-105 transition duration-300 opacity-70"
+                />
+                <div
+                  v-else-if="msg.metadata?.isPrivate"
+                  class="w-full h-full bg-slate-800 flex flex-col items-center justify-center text-slate-400 select-none p-2 text-center"
+                >
+                  <Lock class="w-5 h-5 text-slate-300 mb-1" />
+                  <span class="text-[9px] font-semibold text-slate-300">不公開</span>
+                </div>
+                <div v-else class="w-full h-full bg-slate-900 flex items-center justify-center text-slate-600">
+                  <Palette class="w-6 h-6 opacity-40" />
+                </div>
                 <!-- Badge -->
                 <div class="absolute top-1 left-1 bg-slate-950/90 text-amber-300 px-1.5 py-0.5 rounded text-[8px] font-bold border border-amber-500/50 backdrop-blur-sm flex items-center gap-1 z-10 shadow">
                   <Palette class="w-2.5 h-2.5 text-amber-400" />

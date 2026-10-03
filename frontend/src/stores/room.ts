@@ -1651,11 +1651,17 @@ export const useRoomStore = defineStore('room', () => {
 
       for (const asset of targets) {
         await updateCustomMessage(asset.id, {
+          fileData: {
+            name: 'whiteboard.jpg',
+            size: 0,
+            type: 'image',
+            url: '' // Remove thumbnail URL completely so it is cleared in Firestore
+          },
           metadata: {
             ...(asset.metadata || {}),
             isPrivate: true,
             isSharedPost: false,
-            wasPublished: true // Retain wasPublished so the card in chat stream remains visible (grayed out)
+            wasPublished: true // Retain wasPublished so the card in chat stream remains visible (pure gray card)
           }
         });
       }

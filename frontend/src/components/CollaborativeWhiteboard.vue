@@ -7893,13 +7893,13 @@ const triggerAiRedrawSketch = async (requestedTier?: 'flash' | 'pro') => {
   if (!canvas) return;
   const activeObj = canvas.getActiveObject() as any;
   if (!activeObj) {
-    displayToast('請先框選要重繪的草圖物件或手繪線條');
+    displayToast('Please select hand-drawn strokes or sketch objects first');
     return;
   }
 
   const apiKey = getStoredGeminiApiKey();
   if (!apiKey) {
-    displayToast('請先在主持人控制面板 (⚙️) 設定 Gemini API Key 以啟用 AI 功能', 4000);
+    displayToast('Please configure your Gemini API Key in Host Settings (⚙️) to use AI Redraw', 4000);
     return;
   }
 
@@ -7907,19 +7907,54 @@ const triggerAiRedrawSketch = async (requestedTier?: 'flash' | 'pro') => {
   const meetingLang = roomStore.currentRoom?.mentorConfig?.meetingLanguage || mentorStore.config?.meetingLanguage || 'zh-TW';
 
   isAiRedrawing.value = true;
-  aiRedrawLoadingMessage.value = `AI 正在深度解析草圖與意圖 (${modelTier === 'pro' ? 'Pro 精細' : 'Flash 快速'})...`;
-  displayToast(`✨ AI 草圖重繪中 (${modelTier === 'pro' ? 'Pro' : 'Flash'})，請稍候...`, 3000);
+  aiRedrawLoadingMessage.value = `Redrawing sketch into vector graphic (${modelTier === 'pro' ? 'Pro' : 'Flash'})...`;
+  // Note: Do not call displayToast here so notification banners never conflict or stagger!
 
   try {
-    // 1. Get world bounding rectangle of active selection / object
-    const br = activeObj.getBoundingRect ? activeObj.getBoundingRect(true) : {
-      left: activeObj.left || 0,
-      top: activeObj.top || 0,
-      width: (activeObj.width || 100) * (activeObj.scaleX || 1),
-      height: (activeObj.height || 100) * (activeObj.scaleY || 1)
+    // 1. Separate visual drawing objects from sticky notes & pure textboxes
+    const isNoteOrText = (o: any) => {
+      return !!(o.isStickyNote || o.stickyColorConfig || o.type === 'textbox' || o.type === 'text');
     };
 
-    // 2. Extract textual notes or annotations inside selection
+    const selectedItems: any[] = activeObj.type === 'activeselection' && activeObj.getObjects
+      ? activeObj.getObjects()
+      : [activeObj];
+
+    const graphicItems = selectedItems.filter((o) => !isNoteOrText(o));
+    const hasVisualDrawings = graphicItems.length > 0;
+
+    // 2. Compute bounding rect strictly around the visual drawing items if present
+    let br: { left: number; top: number; width: number; height: number };
+    if (hasVisualDrawings) {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      graphicItems.forEach((item: any) => {
+        const itemBr = item.getBoundingRect ? item.getBoundingRect(true) : {
+          left: item.left || 0,
+          top: item.top || 0,
+          width: (item.width || 50) * (item.scaleX || 1),
+          height: (item.height || 50) * (item.scaleY || 1)
+        };
+        minX = Math.min(minX, itemBr.left);
+        minY = Math.min(minY, itemBr.top);
+        maxX = Math.max(maxX, itemBr.left + itemBr.width);
+        maxY = Math.max(maxY, itemBr.top + itemBr.height);
+      });
+      br = {
+        left: minX,
+        top: minY,
+        width: Math.max(20, maxX - minX),
+        height: Math.max(20, maxY - minY)
+      };
+    } else {
+      br = activeObj.getBoundingRect ? activeObj.getBoundingRect(true) : {
+        left: activeObj.left || 0,
+        top: activeObj.top || 0,
+        width: (activeObj.width || 100) * (activeObj.scaleX || 1),
+        height: (activeObj.height || 100) * (activeObj.scaleY || 1)
+      };
+    }
+
+    // 3. Extract textual notes or annotations inside selection (to pass as design intent context only)
     const extractTextFromObj = (o: any): string[] => {
       const texts: string[] = [];
       if (!o) return texts;
@@ -7942,7 +7977,20 @@ const triggerAiRedrawSketch = async (requestedTier?: 'flash' | 'pro') => {
     const contextTexts = extractTextFromObj(activeObj);
     const extraContextText = contextTexts.length > 0 ? contextTexts.join('\n') : '';
 
-    // 3. Export high-res snapshot of the active selection
+    // 4. Temporarily hide sticky notes and textboxes during snapshot capture if visual drawings exist!
+    // This guarantees Gemini Vision sees ONLY the actual sketch/drawing and never a yellow sticky card!
+    const hiddenItems: Array<{ obj: any; prevVisible: boolean; prevOpacity: number }> = [];
+    if (hasVisualDrawings) {
+      selectedItems.forEach((o: any) => {
+        if (isNoteOrText(o)) {
+          hiddenItems.push({ obj: o, prevVisible: o.visible, prevOpacity: o.opacity });
+          o.set({ opacity: 0 });
+        }
+      });
+      canvas.requestRenderAll();
+    }
+
+    // 5. Export high-res snapshot of the active selection (graphic items only)
     let rawDataUrl = '';
     try {
       rawDataUrl = activeObj.toDataURL({
@@ -7951,6 +7999,14 @@ const triggerAiRedrawSketch = async (requestedTier?: 'flash' | 'pro') => {
       });
     } catch (cropErr) {
       console.warn('activeObj.toDataURL failed, fallback to canvas snapshot:', cropErr);
+    }
+
+    // Restore hidden note/text items immediately
+    if (hiddenItems.length > 0) {
+      hiddenItems.forEach(({ obj, prevVisible, prevOpacity }) => {
+        obj.set({ visible: prevVisible, opacity: prevOpacity });
+      });
+      canvas.requestRenderAll();
     }
 
     if (!rawDataUrl || rawDataUrl.length < 50) {
@@ -7966,7 +8022,7 @@ const triggerAiRedrawSketch = async (requestedTier?: 'flash' | 'pro') => {
     }
 
     if (!rawDataUrl) {
-      throw new Error('無法擷取所選草圖之圖像');
+      throw new Error('Failed to capture snapshot of selected sketch.');
     }
 
     // Ensure white background so contrast is maximum for dark or colored strokes
@@ -7990,7 +8046,7 @@ const triggerAiRedrawSketch = async (requestedTier?: 'flash' | 'pro') => {
       img.src = rawDataUrl;
     });
 
-    // 4. Call AI redraw API
+    // 6. Call AI redraw API
     const svgString = await redrawSketchToSvg(
       cleanDataUrl,
       extraContextText,
@@ -7998,17 +8054,17 @@ const triggerAiRedrawSketch = async (requestedTier?: 'flash' | 'pro') => {
       modelTier
     );
 
-    // 5. Parse generated SVG
+    // 7. Parse generated SVG
     const { objects, options } = await fabric.loadSVGFromString(svgString);
     if (!canvas) return;
     const validObjects = objects.filter((o): o is fabric.FabricObject => o !== null);
     if (!validObjects.length) {
-      throw new Error('AI 生成之向量資料無法解析');
+      throw new Error('AI generated vector output could not be parsed.');
     }
 
     const newObj = fabric.util.groupSVGElements(validObjects, options);
 
-    // 6. Proportional sizing: match roughly the original sketch's visual width
+    // 8. Proportional sizing: match roughly the original sketch's visual width
     const svgBounds = newObj.getBoundingRect ? newObj.getBoundingRect() : { width: newObj.width || 200, height: newObj.height || 200 };
     const rawSvgW = Math.max(10, svgBounds.width || newObj.width || 200);
     const rawSvgH = Math.max(10, svgBounds.height || newObj.height || 200);
@@ -8020,7 +8076,7 @@ const triggerAiRedrawSketch = async (requestedTier?: 'flash' | 'pro') => {
     const finalW = rawSvgW * targetScale;
     const finalH = rawSvgH * targetScale;
 
-    // 7. Placement: In the blank space beside the original sketch (NEVER cover the original!)
+    // 9. Placement: In the blank space beside the original sketch (NEVER cover the original!)
     // Priority: To the right with 50px gap
     let targetLeft = br.left + br.width + 50;
     let targetTop = br.top;
@@ -8047,7 +8103,7 @@ const triggerAiRedrawSketch = async (requestedTier?: 'flash' | 'pro') => {
     canvas.setActiveObject(newObj);
     newObj.setCoords();
 
-    // 8. Adjust viewport pan if necessary so both original and new SVG are visible
+    // 10. Adjust viewport pan if necessary so both original and new SVG are visible
     const zoom = canvas.getZoom();
     const vpt = canvas.viewportTransform;
     if (vpt && wrapperRef.value) {
@@ -8070,10 +8126,10 @@ const triggerAiRedrawSketch = async (requestedTier?: 'flash' | 'pro') => {
     syncToFirebase();
     updateSelectionState();
 
-    displayToast('✨ AI 草圖重繪成功！已保留原圖並於空白處建立向量圖');
+    displayToast('✨ AI Redraw complete! Vector graphic placed on canvas.');
   } catch (err: any) {
     console.error('AI Redraw Error:', err);
-    const msg = err?.suggestion || err?.message || 'AI 草圖重繪失敗，請稍後重試';
+    const msg = err?.suggestion || err?.message || 'AI Redraw failed. Please try again.';
     displayToast(`⚠️ ${msg}`, 4000);
   } finally {
     isAiRedrawing.value = false;
@@ -8481,9 +8537,24 @@ onUnmounted(() => {
       leave-from-class="opacity-100 translate-y-0"
       leave-to-class="opacity-0 -translate-y-2"
     >
-      <div v-if="showToast" class="absolute top-16 left-1/2 -translate-x-1/2 z-40 px-4 py-2 bg-slate-900/95 border border-emerald-500/60 text-emerald-300 text-xs font-semibold rounded-2xl shadow-2xl flex items-center gap-2 backdrop-blur-md">
+      <div v-if="showToast && !isAiRedrawing" class="absolute top-16 left-1/2 -translate-x-1/2 z-40 px-4 py-2 bg-slate-900/95 border border-emerald-500/60 text-emerald-300 text-xs font-semibold rounded-2xl shadow-2xl flex items-center gap-2 backdrop-blur-md">
         <Check class="w-4 h-4 text-emerald-400" />
         <span>{{ toastMsg }}</span>
+      </div>
+    </transition>
+
+    <!-- AI Redraw Progress Notification (Aligned with top notifications) -->
+    <transition
+      enter-active-class="transition duration-200 ease-out"
+      enter-from-class="opacity-0 -translate-y-2"
+      enter-to-class="opacity-100 translate-y-0"
+      leave-active-class="transition duration-150 ease-in"
+      leave-from-class="opacity-100 translate-y-0"
+      leave-to-class="opacity-0 -translate-y-2"
+    >
+      <div v-if="isAiRedrawing" class="absolute top-16 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-slate-900/95 border border-violet-500/60 text-violet-200 text-xs font-semibold rounded-2xl shadow-2xl flex items-center gap-2.5 backdrop-blur-md select-none pointer-events-none">
+        <Loader2 class="w-4 h-4 animate-spin text-fuchsia-400" />
+        <span>{{ aiRedrawLoadingMessage || 'Redrawing sketch into vector graphic...' }}</span>
       </div>
     </transition>
 
@@ -9110,11 +9181,11 @@ onUnmounted(() => {
               :disabled="isAiRedrawing"
               class="rounded-xl hover:bg-violet-100 text-violet-600 transition cursor-pointer flex items-center gap-1"
               :class="isNarrowToolbar ? 'p-1' : 'px-1.5 py-1'"
-              :title="`AI 重繪草圖為向量圖 (${mentorStore.config?.modelTier === 'pro' ? 'Pro' : 'Flash'})`"
+              :title="`AI Redraw sketch as vector (${mentorStore.config?.modelTier === 'pro' ? 'Pro' : 'Flash'})`"
             >
               <Loader2 v-if="isAiRedrawing" class="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin text-fuchsia-500" />
               <Sparkles v-else class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-violet-600" />
-              <span v-if="!isNarrowToolbar" class="text-xs font-semibold text-violet-700 hidden sm:inline">AI 重繪</span>
+              <span v-if="!isNarrowToolbar" class="text-xs font-semibold text-violet-700 hidden sm:inline">AI Redraw</span>
             </button>
             <input ref="fileInputRef" type="file" accept="image/*" class="hidden" @change="handleImageUpload" />
             <button @click="fileInputRef?.click()" :disabled="isArrowNodeEditing" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="[isNarrowToolbar ? 'p-1' : 'p-1.5', { 'opacity-40 pointer-events-none cursor-not-allowed': isArrowNodeEditing }]" title="Add Image"><ImageIcon class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
@@ -9155,7 +9226,7 @@ onUnmounted(() => {
       <template v-if="hasSelection">
         <!-- AI Redraw Sketch to SVG Options -->
         <div class="px-2.5 py-1 text-[10px] font-semibold text-violet-400 tracking-wider uppercase flex items-center justify-between">
-          <span class="flex items-center gap-1.5"><Sparkles class="w-3 h-3 text-fuchsia-400" /> AI 草圖重繪 (SVG)</span>
+          <span class="flex items-center gap-1.5"><Sparkles class="w-3 h-3 text-fuchsia-400" /> AI Redraw (SVG)</span>
           <span class="text-[9px] text-slate-400 font-mono">{{ (roomStore.currentRoom?.mentorConfig?.meetingLanguage || mentorStore.config?.meetingLanguage || 'zh-TW').toUpperCase() }}</span>
         </div>
         <button
@@ -9166,9 +9237,9 @@ onUnmounted(() => {
           <span class="flex items-center gap-2">
             <Loader2 v-if="isAiRedrawing" class="w-3.5 h-3.5 animate-spin text-fuchsia-400" />
             <Sparkles v-else class="w-3.5 h-3.5 text-fuchsia-400" />
-            重繪向量圖 (Flash 快速)
+            Redraw as Vector (Flash)
           </span>
-          <span class="text-[10px] text-fuchsia-300 font-mono">⚡ 推薦</span>
+          <span class="text-[10px] text-fuchsia-300 font-mono">⚡ Fast</span>
         </button>
         <button
           @click="triggerAiRedrawSketch('pro'); contextMenu.visible = false"
@@ -9178,9 +9249,9 @@ onUnmounted(() => {
           <span class="flex items-center gap-2">
             <Loader2 v-if="isAiRedrawing" class="w-3.5 h-3.5 animate-spin text-amber-400" />
             <Sparkles v-else class="w-3.5 h-3.5 text-amber-400" />
-            重繪向量圖 (Pro 精細)
+            Redraw as Vector (Pro)
           </span>
-          <span class="text-[10px] text-amber-300 font-mono">💎 深度</span>
+          <span class="text-[10px] text-amber-300 font-mono">💎 Refined</span>
         </button>
 
         <div class="my-1 border-t border-slate-800"></div>
@@ -9510,15 +9581,6 @@ onUnmounted(() => {
           </button>
         </div>
       </div>
-    </div>
-
-    <!-- AI Redraw Progress Notification Pill -->
-    <div
-      v-if="isAiRedrawing"
-      class="fixed top-16 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2.5 px-4 py-2 bg-slate-900/95 border border-violet-500/50 shadow-2xl rounded-full text-violet-200 text-xs backdrop-blur-md animate-in fade-in slide-in-from-top-4 select-none pointer-events-none"
-    >
-      <Loader2 class="w-4 h-4 animate-spin text-fuchsia-400" />
-      <span class="font-medium tracking-wide">{{ aiRedrawLoadingMessage || 'AI 正在解析草圖與意圖，重繪向量圖中...' }}</span>
     </div>
   </div>
 </template>

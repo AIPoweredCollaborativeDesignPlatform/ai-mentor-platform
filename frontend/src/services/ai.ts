@@ -418,33 +418,34 @@ export async function redrawSketchToSvg(
   };
   const targetLang = langNames[meetingLanguage || 'zh-TW'] || 'Traditional Chinese';
 
-  const systemInstruction = `You are a world-class vector graphic designer and digital whiteboard architect.
-Analyze the provided user whiteboard sketch image and any associated text annotations or notes.
-The user and team's active workspace language is: ${targetLang}. If there are any handwritten words, diagram labels, flow step titles, or conceptual notes inside the sketch, interpret their semantic meaning and intent in ${targetLang}.
+  const systemInstruction = `You are an elite vector graphic designer and digital whiteboard architect.
+Analyze the provided user whiteboard sketch image and the accompanying user design notes or instructions.
+The user and team's active workspace language is: ${targetLang}. Use this to understand the linguistic meaning and intent of any instructions or sketch context.
 
-YOUR MISSION:
-Redraw and elevate the rough whiteboard sketch into a polished, aesthetic, high-fidelity vector graphic in pure SVG format, while faithfully capturing the author's original creative intent.
+CRITICAL INSTRUCTIONS & CORE REQUIREMENTS:
+1. PURE GRAPHIC ONLY (NO STICKY NOTES, NO EXPLANATORY TEXT):
+   - The user provided text explanations and/or sticky notes explaining what they want drawn.
+   - You must output ONLY the redrawn visual graphic, artwork, icon, or diagram itself.
+   - DO NOT render, reproduce, or draw any sticky notes, post-it note squares, note cards, speech bubbles, or explanatory text in the output SVG!
+   - DO NOT copy or include the user's instructions or descriptive text into the output SVG graphic!
+   - The final SVG must strictly contain ONLY the clean, polished visual subject/illustration.
 
-TRANSFORMATION GUIDELINES:
-1. Intent & Geometry:
-   - Recognize rough hand-drawn shapes (boxes, circles, cylinders, clouds, cards) and replace them with crisp, proportional vector primitives with elegant corner radii (e.g., rx="8" ry="8").
-   - Align hand-drawn arrows, connectors, or flowchart links into clean orthogonal or smoothly curved Bezier paths with neat arrowheads.
-   - If the sketch is an icon, logo, character, or illustration, clean up wobbly strokes into flowing, smooth vector paths.
-2. Proportions, Spacing & Layout:
-   - Balance padding, margins, visual weights, and symmetry without altering the overall composition or core relationship between elements.
-3. Typography & Annotations:
-   - If the user wrote text labels, titles, or notes in the sketch, generate legible <text> elements using modern sans-serif typography (e.g. system-ui, -apple-system, sans-serif), with balanced font sizes, contrast, and alignment.
-   - Preserve original terminology and language (in ${targetLang}).
-4. Visual Styling:
-   - Use a modern, harmonious color palette with subtle fills, distinct stroke colors, and appropriate stroke widths.
-   - Ensure shapes have proper visibility and contrast against white/light backgrounds.
-5. Strict Output Constraints:
-   - Return ONLY the raw, self-contained SVG element starting with <svg and ending with </svg>.
+2. Intent & Geometry:
+   - Recognize rough hand-drawn strokes and shapes (boxes, circles, curves, silhouettes, icons, characters, components) and transform them into crisp, beautiful vector paths and primitives with smooth geometry and elegant corner radii (e.g. rx="8" ry="8").
+   - Align hand-drawn arrows or connectors into clean orthogonal or flowing Bezier paths with balanced proportions.
+   - Optimize lines, symmetry, visual weights, and padding to produce a world-class vector asset.
+
+3. Visual Styling & Color:
+   - Use a modern, aesthetic color palette with cohesive fills, distinct stroke colors, and appropriate stroke widths.
+   - Ensure the vector artwork looks stunning and has high contrast against light/white backgrounds.
+
+4. Strict Output Constraints:
+   - Output ONLY the raw, self-contained <svg>...</svg> element.
    - Include appropriate viewBox (e.g. viewBox="0 0 500 400") and width/height attributes.
-   - DO NOT include markdown formatting or backticks (\`\`\`xml or \`\`\`svg).
-   - DO NOT output any explanation, chit-chat, or preamble.
+   - DO NOT wrap in Markdown code blocks (\`\`\`xml or \`\`\`svg).
+   - DO NOT output any conversational text, explanations, or preamble.
 
-${extraContextText ? `ADDITIONAL CONTEXT & TEXT LABELS FROM SELECTED WHITEBOARD OBJECTS:\n${extraContextText}\n` : ''}`;
+${extraContextText ? `USER'S DESIGN INSTRUCTIONS & EXPLANATION (Use ONLY as guidance for what visual to draw, DO NOT render these in the SVG):\n"""\n${extraContextText}\n"""\n` : ''}`;
 
   if (abortSignal?.aborted) throw new Error('AI analysis aborted by user');
 

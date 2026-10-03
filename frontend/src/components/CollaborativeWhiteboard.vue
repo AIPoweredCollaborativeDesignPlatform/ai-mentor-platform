@@ -1403,6 +1403,16 @@ const duplicateArrow = (arrow: any) => {
 
 let isFilteringSelection = false;
 
+const isItemOrDescendantLocked = (obj: any): boolean => {
+  if (!obj) return false;
+  if (obj.isLocked === true || obj.hasLockedChildren === true) return true;
+  if (obj.type === 'group' || obj instanceof fabric.Group) {
+    const children = obj.getObjects ? obj.getObjects() : (obj._objects || []);
+    return children.some((c: any) => isItemOrDescendantLocked(c));
+  }
+  return false;
+};
+
 const updateSelectionState = () => {
   if (!canvas) {
     hasSelection.value = false;
@@ -1433,9 +1443,9 @@ const updateSelectionState = () => {
   );
   if (active && (active.type?.toLowerCase() === 'activeselection' || active instanceof fabric.ActiveSelection)) {
     const targets = active.getObjects ? active.getObjects() : active._objects || [];
-    const allLocked = targets.length > 0 && targets.every((o: any) => o.isLocked === true);
-    const anyLocked = targets.some((o: any) => o.isLocked === true);
-    const hasUnlocked = targets.some((o: any) => !o.isLocked);
+    const allLocked = targets.length > 0 && targets.every((o: any) => isItemOrDescendantLocked(o));
+    const anyLocked = targets.some((o: any) => isItemOrDescendantLocked(o));
+    const hasUnlocked = targets.some((o: any) => !isItemOrDescendantLocked(o));
 
     // If multi-selection contains both unlocked and locked objects, automatically eject locked objects!
     // Locked objects must never be dragged, scaled, or reverse-compensated together with unlocked objects.
@@ -1443,7 +1453,7 @@ const updateSelectionState = () => {
       if (!isFilteringSelection) {
         isFilteringSelection = true;
         try {
-          const unlockedOnly = targets.filter((o: any) => !o.isLocked);
+          const unlockedOnly = targets.filter((o: any) => !isItemOrDescendantLocked(o));
           canvas.discardActiveObject();
           if (unlockedOnly.length === 1) {
             canvas.setActiveObject(unlockedOnly[0]);
@@ -1481,11 +1491,10 @@ const updateSelectionState = () => {
     }
   } else if (active && (active.type?.toLowerCase() === 'group' || active instanceof fabric.Group) && !active.isStickyNote && !(active as any).isArrow) {
     const targets = active.getObjects ? active.getObjects() : active._objects || [];
-    const allLocked = targets.length > 0 && targets.every((o: any) => o.isLocked === true);
-    const anyLocked = targets.some((o: any) => o.isLocked === true);
-    const shouldFreeze = !!active.isLocked || (active as any).hasLockedChildren || anyLocked;
+    const hasLockedDescendant = isItemOrDescendantLocked(active);
+    const shouldFreeze = !!active.isLocked || (active as any).hasLockedChildren || hasLockedDescendant;
     isObjectLocked.value = shouldFreeze;
-    (active as any).hasLockedChildren = anyLocked;
+    (active as any).hasLockedChildren = hasLockedDescendant;
     if (shouldFreeze) {
       (active as any).isLocked = true;
     }
@@ -3103,13 +3112,20 @@ const initFabric = () => {
       delete o._dragStartLocalLeft;
       delete o._dragStartLocalTop;
       if (o.isStickyNote || o.stickyColorConfig) {
-        if (o.flipX || o.flipY || (o.scaleX && o.scaleX < 0) || (o.scaleY && o.scaleY < 0)) {
-          o.flipX = false;
-          o.flipY = false;
-          o.scaleX = Math.abs(o.scaleX || 1);
-          o.scaleY = Math.abs(o.scaleY || 1);
-          o.setCoords();
-        }
+        normalizeStickyNoteDimensions(o);
+      } else if (o.type === 'group' || o instanceof fabric.Group) {
+        const normalizeGroupChildren = (g: any) => {
+          const children = g.getObjects ? g.getObjects() : (g._objects || []);
+          children.forEach((c: any) => {
+            if (c.isStickyNote || c.stickyColorConfig || (c.type === 'textbox' && c.width === STICKY_NOTE_CONST_SIZE)) {
+              normalizeStickyNoteDimensions(c, g);
+            } else if (c.type === 'group' || c instanceof fabric.Group) {
+              normalizeGroupChildren(c);
+            }
+          });
+        };
+        normalizeGroupChildren(o);
+        o.setCoords();
       }
     });
     updateSelectionState();
@@ -4688,7 +4704,7 @@ const initFabric = () => {
     // 1. If group contains locked items, freeze moving completely to protect locked items
     if (obj.type === 'group' && !obj.isStickyNote && !(obj as any).isArrow) {
       const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
-      const anyLocked = (obj as any).isLocked || (obj as any).hasLockedChildren || targets.some((o: any) => o.isLocked);
+      const anyLocked = (obj as any).isLocked || (obj as any).hasLockedChildren || targets.some((o: any) => isItemOrDescendantLocked(o));
       if (anyLocked) {
         if (obj._dragStartLeft !== undefined) obj.left = obj._dragStartLeft;
         if (obj._dragStartTop !== undefined) obj.top = obj._dragStartTop;
@@ -4700,7 +4716,7 @@ const initFabric = () => {
     // 2. If activeSelection contains items:
     if (obj.type === 'activeselection' || obj.type === 'activeSelection') {
       const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
-      const allLocked = targets.length > 0 && targets.every((o: any) => o.isLocked);
+      const allLocked = targets.length > 0 && targets.every((o: any) => isItemOrDescendantLocked(o));
       if (allLocked) {
         if (obj._dragStartLeft !== undefined) obj.left = obj._dragStartLeft;
         if (obj._dragStartTop !== undefined) obj.top = obj._dragStartTop;
@@ -4708,7 +4724,7 @@ const initFabric = () => {
         return;
       }
 
-      const unlockedTargets = targets.filter((o: any) => !o.isLocked);
+      const unlockedTargets = targets.filter((o: any) => !isItemOrDescendantLocked(o));
       let dx = obj.left - (obj._dragStartLeft !== undefined ? obj._dragStartLeft : obj.left);
       let dy = obj.top - (obj._dragStartTop !== undefined ? obj._dragStartTop : obj.top);
 
@@ -4810,7 +4826,7 @@ const initFabric = () => {
         c._origAngle = c.angle || 0;
         const br = c.getBoundingRect ? c.getBoundingRect(true) : { left: c.left || 0, top: c.top || 0, width: c.width || 0, height: c.height || 0 };
         c._origWorldBounds = { minX: br.left, minY: br.top, maxX: br.left + br.width, maxY: br.top + br.height };
-        if (c.isLocked) {
+        if (isItemOrDescendantLocked(c)) {
           c._origLockedWorldPos = fabric.util.transformPoint(new fabric.Point(c.left, c.top), obj.calcTransformMatrix());
           c._origBaseScaleX = Math.abs(c.scaleX || 1);
           c._origBaseScaleY = Math.abs(c.scaleY || 1);
@@ -4827,10 +4843,10 @@ const initFabric = () => {
     hasObjectTransformed = true;
     const obj = e?.target;
     if (obj) {
-      // 0. If group contains ANY locked item, scaling is completely forbidden to protect locked items from displacement!
-      if (obj.type === 'group' || obj instanceof fabric.Group) {
+      // 0. If group or activeSelection contains ANY locked item (including inside groups), scaling is completely forbidden!
+      if (obj.type === 'activeselection' || obj.type === 'activeSelection' || obj.type === 'group' || obj instanceof fabric.Group) {
         const targets = obj.getObjects ? obj.getObjects() : (obj as any)._objects || [];
-        const anyLocked = (obj as any).isLocked || (obj as any).hasLockedChildren || targets.some((c: any) => c.isLocked);
+        const anyLocked = (obj as any).isLocked || (obj as any).hasLockedChildren || targets.some((c: any) => isItemOrDescendantLocked(c));
         if (anyLocked) {
           if ((obj as any)._dragStartScaleX !== undefined) obj.scaleX = (obj as any)._dragStartScaleX;
           if ((obj as any)._dragStartScaleY !== undefined) obj.scaleY = (obj as any)._dragStartScaleY;
@@ -4851,33 +4867,8 @@ const initFabric = () => {
           flipY: false,
           angle: 0
         });
-      } else if (obj.type === 'activeselection' || obj.type === 'activeSelection' || obj.type === 'group') {
-        const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
-        const rawScaleX = obj.scaleX || 1;
-        const rawScaleY = obj.scaleY || 1;
-        const selScaleX = Math.max(0.01, Math.abs(rawScaleX));
-        const selScaleY = Math.max(0.01, Math.abs(rawScaleY));
-
-        const isParentFlippedX = !!(obj.flipX || rawScaleX < 0);
-        const isParentFlippedY = !!(obj.flipY || rawScaleY < 0);
-
-        targets.forEach((c: any) => {
-          if (c.isStickyNote || c.stickyColorConfig) {
-            // Major Update: Sticky note NEVER scales, NEVER rotates, NEVER flips/mirrors.
-            // It strictly preserves visual scale 1.0, 0 rotation, flipX=false, flipY=false.
-            // Canceling parent reflection and scaling:
-            c.scaleX = 1 / selScaleX;
-            c.scaleY = 1 / selScaleY;
-            c.flipX = isParentFlippedX;
-            c.flipY = isParentFlippedY;
-            c.angle = -(obj.angle || 0);
-          } else if (c.isLocked) {
-            // Locked objects do not participate in multi-selection scaling; strictly preserve their original scale and angle
-            if (c._origBaseScaleX !== undefined) c.scaleX = c._origBaseScaleX;
-            if (c._origBaseScaleY !== undefined) c.scaleY = c._origBaseScaleY;
-            if (c._origBaseAngle !== undefined) c.angle = c._origBaseAngle;
-          }
-        });
+      } else if (obj.type === 'activeselection' || obj.type === 'activeSelection' || obj.type === 'group' || obj instanceof fabric.Group) {
+        compensateStickyNoteScaleInContainer(obj);
       }
 
       obj.setCoords();
@@ -4891,6 +4882,26 @@ const initFabric = () => {
     updateArrowToolbar();
   });
   canvas.on('object:modified', (e: any) => {
+    const obj = e?.target;
+    if (obj) {
+      if (obj.isStickyNote || obj.stickyColorConfig) {
+        normalizeStickyNoteDimensions(obj);
+      } else if (obj.type === 'activeselection' || obj.type === 'activeSelection' || obj.type === 'group' || obj instanceof fabric.Group) {
+        const normalizeContainerNotes = (container: any) => {
+          const children = container.getObjects ? container.getObjects() : (container._objects || []);
+          children.forEach((c: any) => {
+            if (c.isStickyNote || c.stickyColorConfig || (c.type === 'textbox' && c.width === STICKY_NOTE_CONST_SIZE)) {
+              normalizeStickyNoteDimensions(c, container);
+            } else if (c.type === 'group' || c instanceof fabric.Group) {
+              normalizeContainerNotes(c);
+              c.setCoords();
+            }
+          });
+        };
+        normalizeContainerNotes(obj);
+        obj.setCoords();
+      }
+    }
     updateFloatingToolbars();
     updateArrowToolbar();
   });
@@ -4908,27 +4919,21 @@ const initFabric = () => {
   canvas.on('object:rotating', (e: any) => {
     hasObjectTransformed = true;
     const obj = e?.target;
-    if (obj && (obj.type === 'activeselection' || obj.type === 'activeSelection' || obj.type === 'group')) {
+    if (obj && (obj.type === 'activeselection' || obj.type === 'activeSelection' || obj.type === 'group' || obj instanceof fabric.Group)) {
       const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
 
       // If group contains locked children, rotating is forbidden!
-      if (obj.type === 'group' || obj instanceof fabric.Group) {
-        const anyLocked = (obj as any).isLocked || (obj as any).hasLockedChildren || targets.some((c: any) => c.isLocked);
-        if (anyLocked) {
-          if ((obj as any)._dragStartAngle !== undefined) obj.angle = (obj as any)._dragStartAngle;
-          obj.setCoords();
-          canvas?.requestRenderAll();
-          return;
-        }
+      const anyLocked = (obj as any).isLocked || (obj as any).hasLockedChildren || targets.some((c: any) => isItemOrDescendantLocked(c));
+      if (anyLocked) {
+        if ((obj as any)._dragStartAngle !== undefined) obj.angle = (obj as any)._dragStartAngle;
+        if ((obj as any)._dragStartLeft !== undefined) obj.left = (obj as any)._dragStartLeft;
+        if ((obj as any)._dragStartTop !== undefined) obj.top = (obj as any)._dragStartTop;
+        obj.setCoords();
+        canvas?.requestRenderAll();
+        return;
       }
 
-      targets.forEach((c: any) => {
-        if (c.isStickyNote || c.stickyColorConfig) {
-          c.angle = -(obj.angle || 0);
-        } else if (c.isLocked) {
-          if (c._origAngle !== undefined) c.angle = c._origAngle;
-        }
-      });
+      compensateStickyNoteScaleInContainer(obj);
       canvas?.requestRenderAll();
     }
     updateLiveDrag(e);
@@ -5144,6 +5149,32 @@ const normalizeStickyNoteDimensions = (note: any, parentGroup?: any) => {
     note.angle = 0;
   }
   note.setCoords();
+};
+
+const compensateStickyNoteScaleInContainer = (container: any, parentScaleX = 1, parentScaleY = 1, parentAngle = 0, parentFlipX = false, parentFlipY = false) => {
+  if (!container) return;
+  const curScaleX = parentScaleX * Math.abs(container.scaleX || 1);
+  const curScaleY = parentScaleY * Math.abs(container.scaleY || 1);
+  const curAngle = parentAngle + (container.angle || 0);
+  const isFlipX = parentFlipX !== !!(container.flipX || (container.scaleX || 1) < 0);
+  const isFlipY = parentFlipY !== !!(container.flipY || (container.scaleY || 1) < 0);
+
+  const children = container.getObjects ? container.getObjects() : (container._objects || []);
+  children.forEach((c: any) => {
+    if (c.isStickyNote || c.stickyColorConfig || (c.type === 'textbox' && c.width === STICKY_NOTE_CONST_SIZE)) {
+      c.scaleX = 1 / Math.max(0.001, curScaleX);
+      c.scaleY = 1 / Math.max(0.001, curScaleY);
+      c.angle = -curAngle;
+      c.flipX = isFlipX;
+      c.flipY = isFlipY;
+      c.width = STICKY_NOTE_CONST_SIZE;
+      c.minHeight = STICKY_NOTE_CONST_SIZE;
+      c.setCoords();
+    } else if (c.type === 'group' || c instanceof fabric.Group) {
+      compensateStickyNoteScaleInContainer(c, curScaleX, curScaleY, curAngle, isFlipX, isFlipY);
+      c.setCoords();
+    }
+  });
 };
 
 // Rehydrate custom attributes, methods, and constraints after deserializing from JSON
@@ -6034,8 +6065,13 @@ const enterGroupIsolation = (group: fabric.Group, targetChild?: any) => {
     } else if (targetChild && isolatedItems.includes(targetChild)) {
       canvas.setActiveObject(targetChild);
     } else if (!targetChild && isolatedItems.length > 0) {
-      const activeSel = new fabric.ActiveSelection(isolatedItems, { canvas });
-      canvas.setActiveObject(activeSel);
+      const unlockedItems = isolatedItems.filter(c => !isItemOrDescendantLocked(c));
+      if (unlockedItems.length === 1) {
+        canvas.setActiveObject(unlockedItems[0]);
+      } else if (unlockedItems.length > 1) {
+        const activeSel = new fabric.ActiveSelection(unlockedItems, { canvas });
+        canvas.setActiveObject(activeSel);
+      }
     }
     canvas.requestRenderAll();
     updateSelectionState();
@@ -6047,12 +6083,24 @@ const enterGroupIsolation = (group: fabric.Group, targetChild?: any) => {
 const exitGroupIsolation = () => {
   if (!canvas || !isIsolationMode.value) return;
 
+  // 1. MUST discard any active selection or transformation FIRST!
+  // If user marquee-selected items, they are in an ActiveSelection whose children have relative coords.
+  // Discarding the active object executes ActiveSelection.onDeselect() -> removeAll(),
+  // which restores all children back to absolute canvas coordinates and unsets their group property.
+  if (canvas.getActiveObject()) {
+    canvas.discardActiveObject();
+  }
+  canvas.requestRenderAll();
+
   let localHasChanged = hasIsolationChanged.value;
   isInternalChange = true;
   try {
     // Re-bundle ONLY remaining isolated items back into group (ignoring deleted items!)
     const remainingItems = isolatedItems.filter(item => canvas?.getObjects().includes(item));
     remainingItems.forEach(item => {
+      if ((item as any).group) {
+        (item as any).group = undefined;
+      }
       if (item.isStickyNote || item.stickyColorConfig || item.type === 'textbox') {
         normalizeStickyNoteDimensions(item);
       }
@@ -6080,8 +6128,8 @@ const exitGroupIsolation = () => {
           (item as any).initialMatrix = item.calcTransformMatrix();
         }
       });
-      const allLocked = remainingItems.length > 0 && remainingItems.every((o: any) => o.isLocked);
-      const anyLocked = remainingItems.some((o: any) => o.isLocked);
+      const allLocked = remainingItems.length > 0 && remainingItems.every((o: any) => isItemOrDescendantLocked(o));
+      const anyLocked = remainingItems.some((o: any) => isItemOrDescendantLocked(o));
       (newGroup as any).hasLockedChildren = anyLocked;
       if (anyLocked) {
         (newGroup as any).isLocked = true;
@@ -6208,6 +6256,26 @@ const toggleLockSelected = () => {
       hasControls: !newLocked,
       isLocked: newLocked
     });
+    if (obj.type === 'group' || obj instanceof fabric.Group) {
+      obj.hasLockedChildren = newLocked;
+      const setChildrenLocked = (g: any) => {
+        const children = g.getObjects ? g.getObjects() : (g._objects || []);
+        children.forEach((c: any) => {
+          c.isLocked = newLocked;
+          c.hasControls = !newLocked;
+          c.lockMovementX = newLocked;
+          c.lockMovementY = newLocked;
+          c.lockRotation = newLocked;
+          c.lockScalingX = newLocked;
+          c.lockScalingY = newLocked;
+          if (c.type === 'group' || c instanceof fabric.Group) {
+            c.hasLockedChildren = newLocked;
+            setChildrenLocked(c);
+          }
+        });
+      };
+      setChildrenLocked(obj);
+    }
   });
 
   if (isMulti) {
@@ -6429,7 +6497,7 @@ const deleteSelected = () => {
   if (!activeObj) return;
 
   // 1. If the selected object is locked, reject deletion immediately
-  if (activeObj.isLocked) {
+  if (isItemOrDescendantLocked(activeObj)) {
     displayToast('Locked object cannot be deleted (Unlock with Ctrl+L first)');
     return;
   }
@@ -6437,8 +6505,8 @@ const deleteSelected = () => {
   // 2. ActiveSelection (multiple objects selected together)
   if (activeObj.type === 'activeselection') {
     const targets = activeObj.getObjects();
-    const locked = targets.filter((obj: any) => obj.isLocked === true);
-    const deletable = targets.filter((obj: any) => obj.isLocked !== true);
+    const locked = targets.filter((obj: any) => isItemOrDescendantLocked(obj));
+    const deletable = targets.filter((obj: any) => !isItemOrDescendantLocked(obj));
 
     if (locked.length > 0) {
       displayToast('Locked objects cannot be deleted (Unlock with Ctrl+L first)');
@@ -6479,7 +6547,7 @@ const deleteSelected = () => {
   // 3. User Group (fabric.Group, but NOT a sticky note, and NOT an arrow!)
   if (activeObj.type === 'group' && !activeObj.isStickyNote && !(activeObj as any).isArrow) {
     const targets = activeObj.getObjects ? activeObj.getObjects() : activeObj._objects || [];
-    const hasLocked = targets.some((obj: any) => obj.isLocked === true);
+    const hasLocked = targets.some((obj: any) => isItemOrDescendantLocked(obj));
     if (activeObj.isLocked || hasLocked) {
       displayToast('Locked group or object inside cannot be deleted (Unlock with Ctrl+L first)');
       return;
@@ -6626,7 +6694,7 @@ const groupObjects = () => {
         item.initialMatrix = item.calcTransformMatrix();
       }
     });
-    const anyLocked = items.some((item: any) => item.isLocked === true);
+    const anyLocked = items.some((item: any) => isItemOrDescendantLocked(item));
     if (anyLocked) {
       (group as any).isLocked = true;
       (group as any).hasLockedChildren = true;

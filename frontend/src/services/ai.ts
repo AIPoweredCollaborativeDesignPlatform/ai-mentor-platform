@@ -382,3 +382,146 @@ ${prompt}`;
 
   throw structuredError;
 }
+
+export async function redrawSketchToSvg(
+  base64DataUrl: string,
+  extraContextText: string = '',
+  meetingLanguage: string = 'zh-TW',
+  modelTier: 'flash' | 'pro' = 'flash',
+  abortSignal?: AbortSignal
+): Promise<string> {
+  const apiKey = getStoredGeminiApiKey();
+  if (!apiKey) {
+    const err: SvgGenerationError = {
+      isAiError: true,
+      category: 'KEY_INVALID',
+      title: 'Missing API Key',
+      suggestion: 'Please configure your Google Gemini API Key in Host Controls (⚙️).',
+      attempts: [],
+      rawMessage: 'API Key missing in local configuration.'
+    };
+    throw err;
+  }
+
+  const matches = base64DataUrl.match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/);
+  if (!matches) {
+    throw new Error('Invalid image data for sketch redraw.');
+  }
+  const mimeType = matches[1];
+  const base64Data = matches[2];
+
+  const langNames: Record<string, string> = {
+    en: 'English',
+    'zh-TW': 'Traditional Chinese (繁體中文)',
+    ja: 'Japanese (日本語)',
+    ko: 'Korean (한국어)'
+  };
+  const targetLang = langNames[meetingLanguage || 'zh-TW'] || 'Traditional Chinese';
+
+  const systemInstruction = `You are a world-class vector graphic designer and digital whiteboard architect.
+Analyze the provided user whiteboard sketch image and any associated text annotations or notes.
+The user and team's active workspace language is: ${targetLang}. If there are any handwritten words, diagram labels, flow step titles, or conceptual notes inside the sketch, interpret their semantic meaning and intent in ${targetLang}.
+
+YOUR MISSION:
+Redraw and elevate the rough whiteboard sketch into a polished, aesthetic, high-fidelity vector graphic in pure SVG format, while faithfully capturing the author's original creative intent.
+
+TRANSFORMATION GUIDELINES:
+1. Intent & Geometry:
+   - Recognize rough hand-drawn shapes (boxes, circles, cylinders, clouds, cards) and replace them with crisp, proportional vector primitives with elegant corner radii (e.g., rx="8" ry="8").
+   - Align hand-drawn arrows, connectors, or flowchart links into clean orthogonal or smoothly curved Bezier paths with neat arrowheads.
+   - If the sketch is an icon, logo, character, or illustration, clean up wobbly strokes into flowing, smooth vector paths.
+2. Proportions, Spacing & Layout:
+   - Balance padding, margins, visual weights, and symmetry without altering the overall composition or core relationship between elements.
+3. Typography & Annotations:
+   - If the user wrote text labels, titles, or notes in the sketch, generate legible <text> elements using modern sans-serif typography (e.g. system-ui, -apple-system, sans-serif), with balanced font sizes, contrast, and alignment.
+   - Preserve original terminology and language (in ${targetLang}).
+4. Visual Styling:
+   - Use a modern, harmonious color palette with subtle fills, distinct stroke colors, and appropriate stroke widths.
+   - Ensure shapes have proper visibility and contrast against white/light backgrounds.
+5. Strict Output Constraints:
+   - Return ONLY the raw, self-contained SVG element starting with <svg and ending with </svg>.
+   - Include appropriate viewBox (e.g. viewBox="0 0 500 400") and width/height attributes.
+   - DO NOT include markdown formatting or backticks (\`\`\`xml or \`\`\`svg).
+   - DO NOT output any explanation, chit-chat, or preamble.
+
+${extraContextText ? `ADDITIONAL CONTEXT & TEXT LABELS FROM SELECTED WHITEBOARD OBJECTS:\n${extraContextText}\n` : ''}`;
+
+  if (abortSignal?.aborted) throw new Error('AI analysis aborted by user');
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const modelsToTry = modelTier === 'pro'
+    ? ['gemini-2.5-pro', 'gemini-3.1-pro-preview', 'gemini-2.5-flash', ...FLASH_CORE_MODELS]
+    : ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash', ...FLASH_CORE_MODELS];
+
+  const attempts: Array<{ model: string; error: string }> = [];
+
+  for (const modelName of modelsToTry) {
+    if (abortSignal?.aborted) throw new Error('AI analysis aborted by user');
+    try {
+      const model = genAI.getGenerativeModel({ model: modelName });
+      const result = await model.generateContent([
+        systemInstruction,
+        {
+          inlineData: {
+            data: base64Data,
+            mimeType
+          }
+        }
+      ]);
+
+      if (abortSignal?.aborted) throw new Error('AI analysis aborted by user');
+
+      let text = result.response.text();
+      text = text.replace(/```xml/gi, '').replace(/```svg/gi, '').replace(/```html/gi, '').replace(/```/g, '').trim();
+
+      const svgMatch = text.match(/<svg[\s\S]*?<\/svg>/i);
+      if (!svgMatch) {
+        throw new Error('AI responded, but output did not contain a valid <svg> element.');
+      }
+      return svgMatch[0];
+    } catch (err: any) {
+      if (err?.message?.includes('aborted')) throw err;
+      const errMsg = err?.message || String(err);
+      attempts.push({ model: modelName, error: errMsg });
+      console.warn(`[Gemini Sketch Redraw] Model ${modelName} failed:`, errMsg);
+    }
+  }
+
+  const allErrorsText = attempts.map(a => `${a.model}: ${a.error}`).join(' | ');
+  let category: SvgGenerationError['category'] = 'UNKNOWN';
+  let title = 'AI Sketch Redraw Failed';
+  let suggestion = 'All fallback models failed to redraw sketch. Please check your sketch and try again.';
+
+  if (allErrorsText.includes('API_KEY_INVALID') || allErrorsText.includes('API key not valid') || allErrorsText.includes('does not have Generative Language API access')) {
+    category = 'KEY_INVALID';
+    title = 'Invalid Gemini API Key';
+    suggestion = 'Please verify your Gemini API Key in Host Controls (⚙️). Ensure it has Generative Language access.';
+  } else if (allErrorsText.includes('429') || allErrorsText.includes('Quota exceeded') || allErrorsText.includes('RESOURCE_EXHAUSTED')) {
+    category = 'QUOTA_EXCEEDED';
+    title = 'API Quota Exceeded';
+    suggestion = 'Your Gemini API key has reached its request or token quota. Please wait a moment or update your key.';
+  } else if (allErrorsText.includes('503') || allErrorsText.includes('high demand') || allErrorsText.includes('Service Unavailable')) {
+    category = 'HIGH_DEMAND';
+    title = 'Server Experiencing High Demand';
+    suggestion = 'Google Gemini servers are currently under temporary load spikes. Please retry in a few moments.';
+  } else if (allErrorsText.includes('valid <svg> element')) {
+    category = 'PARSE_ERROR';
+    title = 'SVG Format Error';
+    suggestion = 'The model did not return a valid SVG. Please try again with a cleaner selection.';
+  } else if (allErrorsText.includes('Failed to fetch') || allErrorsText.includes('NetworkError')) {
+    category = 'NETWORK';
+    title = 'Network Connection Error';
+    suggestion = 'Unable to reach Google Gemini API servers. Please check your internet connection.';
+  }
+
+  const structuredError: SvgGenerationError = {
+    isAiError: true,
+    category,
+    title,
+    suggestion,
+    attempts,
+    rawMessage: allErrorsText
+  };
+
+  throw structuredError;
+}

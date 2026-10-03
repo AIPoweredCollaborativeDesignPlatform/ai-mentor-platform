@@ -2,6 +2,7 @@
 import { ref, shallowRef, toRaw, computed, onMounted, onUnmounted, onBeforeUnmount, watch, nextTick } from 'vue';
 import { useRoomStore } from '../stores/room';
 import { useAuthStore } from '../stores/auth';
+import { useMentorStore } from '../stores/mentor';
 import * as fabric from 'fabric';
 
 // Globally disable objectCaching in Fabric 7 so scaling and zooming always render 100% crisp vector!
@@ -21,7 +22,7 @@ import {
 import { db } from '../firebase/config';
 import { doc, collection, onSnapshot, setDoc, deleteDoc, type Unsubscribe } from 'firebase/firestore';
 import type { CursorData } from '../types';
-import { generateSvgForWhiteboard } from '../services/ai';
+import { generateSvgForWhiteboard, redrawSketchToSvg, getStoredGeminiApiKey } from '../services/ai';
 
 const props = withDefaults(defineProps<{
   initialJson?: string;
@@ -76,6 +77,7 @@ const showCloseConfirmModal = ref(false);
 
 const roomStore = useRoomStore();
 const authStore = useAuthStore();
+const mentorStore = useMentorStore();
 
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 const fileInputRef = ref<HTMLInputElement | null>(null);
@@ -7884,6 +7886,201 @@ const generateAIObject = async () => {
   }
 };
 
+const isAiRedrawing = ref(false);
+const aiRedrawLoadingMessage = ref('');
+
+const triggerAiRedrawSketch = async (requestedTier?: 'flash' | 'pro') => {
+  if (!canvas) return;
+  const activeObj = canvas.getActiveObject() as any;
+  if (!activeObj) {
+    displayToast('請先框選要重繪的草圖物件或手繪線條');
+    return;
+  }
+
+  const apiKey = getStoredGeminiApiKey();
+  if (!apiKey) {
+    displayToast('請先在主持人控制面板 (⚙️) 設定 Gemini API Key 以啟用 AI 功能', 4000);
+    return;
+  }
+
+  const modelTier = requestedTier || mentorStore.config?.modelTier || 'flash';
+  const meetingLang = roomStore.currentRoom?.mentorConfig?.meetingLanguage || mentorStore.config?.meetingLanguage || 'zh-TW';
+
+  isAiRedrawing.value = true;
+  aiRedrawLoadingMessage.value = `AI 正在深度解析草圖與意圖 (${modelTier === 'pro' ? 'Pro 精細' : 'Flash 快速'})...`;
+  displayToast(`✨ AI 草圖重繪中 (${modelTier === 'pro' ? 'Pro' : 'Flash'})，請稍候...`, 3000);
+
+  try {
+    // 1. Get world bounding rectangle of active selection / object
+    const br = activeObj.getBoundingRect ? activeObj.getBoundingRect(true) : {
+      left: activeObj.left || 0,
+      top: activeObj.top || 0,
+      width: (activeObj.width || 100) * (activeObj.scaleX || 1),
+      height: (activeObj.height || 100) * (activeObj.scaleY || 1)
+    };
+
+    // 2. Extract textual notes or annotations inside selection
+    const extractTextFromObj = (o: any): string[] => {
+      const texts: string[] = [];
+      if (!o) return texts;
+      if (o.type === 'textbox' || o.text) {
+        if (typeof o.text === 'string' && o.text.trim()) {
+          texts.push(o.text.trim());
+        }
+      }
+      if (o.stickyText && typeof o.stickyText === 'string' && o.stickyText.trim()) {
+        texts.push(o.stickyText.trim());
+      }
+      const children = o.getObjects ? o.getObjects() : (o._objects || []);
+      if (Array.isArray(children)) {
+        children.forEach((c: any) => {
+          texts.push(...extractTextFromObj(c));
+        });
+      }
+      return texts;
+    };
+    const contextTexts = extractTextFromObj(activeObj);
+    const extraContextText = contextTexts.length > 0 ? contextTexts.join('\n') : '';
+
+    // 3. Export high-res snapshot of the active selection
+    let rawDataUrl = '';
+    try {
+      rawDataUrl = activeObj.toDataURL({
+        format: 'png',
+        multiplier: 2
+      });
+    } catch (cropErr) {
+      console.warn('activeObj.toDataURL failed, fallback to canvas snapshot:', cropErr);
+    }
+
+    if (!rawDataUrl || rawDataUrl.length < 50) {
+      const pad = 30;
+      rawDataUrl = canvas.toDataURL({
+        left: Math.max(0, br.left - pad),
+        top: Math.max(0, br.top - pad),
+        width: Math.min(WORKSPACE_WIDTH, br.width + pad * 2),
+        height: Math.min(WORKSPACE_HEIGHT, br.height + pad * 2),
+        format: 'png',
+        multiplier: 2
+      });
+    }
+
+    if (!rawDataUrl) {
+      throw new Error('無法擷取所選草圖之圖像');
+    }
+
+    // Ensure white background so contrast is maximum for dark or colored strokes
+    const cleanDataUrl = await new Promise<string>((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const offCanvas = document.createElement('canvas');
+        offCanvas.width = img.width;
+        offCanvas.height = img.height;
+        const ctx = offCanvas.getContext('2d');
+        if (ctx) {
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillRect(0, 0, offCanvas.width, offCanvas.height);
+          ctx.drawImage(img, 0, 0);
+          resolve(offCanvas.toDataURL('image/jpeg', 0.95));
+        } else {
+          resolve(rawDataUrl);
+        }
+      };
+      img.onerror = () => resolve(rawDataUrl);
+      img.src = rawDataUrl;
+    });
+
+    // 4. Call AI redraw API
+    const svgString = await redrawSketchToSvg(
+      cleanDataUrl,
+      extraContextText,
+      meetingLang,
+      modelTier
+    );
+
+    // 5. Parse generated SVG
+    const { objects, options } = await fabric.loadSVGFromString(svgString);
+    if (!canvas) return;
+    const validObjects = objects.filter((o): o is fabric.FabricObject => o !== null);
+    if (!validObjects.length) {
+      throw new Error('AI 生成之向量資料無法解析');
+    }
+
+    const newObj = fabric.util.groupSVGElements(validObjects, options);
+
+    // 6. Proportional sizing: match roughly the original sketch's visual width
+    const svgBounds = newObj.getBoundingRect ? newObj.getBoundingRect() : { width: newObj.width || 200, height: newObj.height || 200 };
+    const rawSvgW = Math.max(10, svgBounds.width || newObj.width || 200);
+    const rawSvgH = Math.max(10, svgBounds.height || newObj.height || 200);
+
+    const desiredW = Math.max(180, Math.min(900, br.width));
+    const targetScale = desiredW / rawSvgW;
+    newObj.scale(targetScale);
+
+    const finalW = rawSvgW * targetScale;
+    const finalH = rawSvgH * targetScale;
+
+    // 7. Placement: In the blank space beside the original sketch (NEVER cover the original!)
+    // Priority: To the right with 50px gap
+    let targetLeft = br.left + br.width + 50;
+    let targetTop = br.top;
+
+    // If placing to the right overflows workspace width, place below original sketch
+    if (targetLeft + finalW > WORKSPACE_WIDTH - 50) {
+      targetLeft = Math.max(50, br.left);
+      targetTop = br.top + br.height + 50;
+    }
+
+    // Safety boundary clamping
+    targetLeft = Math.max(50, Math.min(WORKSPACE_WIDTH - finalW - 50, targetLeft));
+    targetTop = Math.max(50, Math.min(WORKSPACE_HEIGHT - finalH - 50, targetTop));
+
+    newObj.set({
+      left: targetLeft,
+      top: targetTop,
+      originX: 'left',
+      originY: 'top',
+      perPixelTargetFind: true
+    });
+
+    canvas.add(newObj);
+    canvas.setActiveObject(newObj);
+    newObj.setCoords();
+
+    // 8. Adjust viewport pan if necessary so both original and new SVG are visible
+    const zoom = canvas.getZoom();
+    const vpt = canvas.viewportTransform;
+    if (vpt && wrapperRef.value) {
+      const viewLeft = -vpt[4] / zoom;
+      const viewTop = -vpt[5] / zoom;
+      const viewRight = viewLeft + (wrapperRef.value.clientWidth / zoom);
+      const viewBottom = viewTop + (wrapperRef.value.clientHeight / zoom);
+
+      if (targetLeft + finalW > viewRight || targetLeft < viewLeft || targetTop + finalH > viewBottom || targetTop < viewTop) {
+        const midX = (br.left + targetLeft + finalW) / 2;
+        const midY = (br.top + targetTop + finalH) / 2;
+        vpt[4] = (wrapperRef.value.clientWidth / 2) - (midX * zoom);
+        vpt[5] = (wrapperRef.value.clientHeight / 2) - (midY * zoom);
+        clampViewportPan();
+      }
+    }
+
+    canvas.requestRenderAll();
+    saveHistoryState();
+    syncToFirebase();
+    updateSelectionState();
+
+    displayToast('✨ AI 草圖重繪成功！已保留原圖並於空白處建立向量圖');
+  } catch (err: any) {
+    console.error('AI Redraw Error:', err);
+    const msg = err?.suggestion || err?.message || 'AI 草圖重繪失敗，請稍後重試';
+    displayToast(`⚠️ ${msg}`, 4000);
+  } finally {
+    isAiRedrawing.value = false;
+    aiRedrawLoadingMessage.value = '';
+  }
+};
+
 const handleContextMenuCapture = (e: MouseEvent) => {
   const target = e.target as Node;
   if (rootRef.value && (rootRef.value === target || rootRef.value.contains(target))) {
@@ -8906,6 +9103,19 @@ onUnmounted(() => {
           <div class="w-px h-4 bg-slate-200 mx-0.5 transition-opacity duration-200" :class="{ 'opacity-15': isHoveringSend }"></div>
           
           <div class="flex items-center" :class="isNarrowToolbar ? 'gap-0.5' : 'gap-0.5 sm:gap-1'">
+            <!-- AI Redraw Button -->
+            <button
+              v-if="hasSelection"
+              @click="triggerAiRedrawSketch(mentorStore.config?.modelTier === 'pro' ? 'pro' : 'flash')"
+              :disabled="isAiRedrawing"
+              class="rounded-xl hover:bg-violet-100 text-violet-600 transition cursor-pointer flex items-center gap-1"
+              :class="isNarrowToolbar ? 'p-1' : 'px-1.5 py-1'"
+              :title="`AI 重繪草圖為向量圖 (${mentorStore.config?.modelTier === 'pro' ? 'Pro' : 'Flash'})`"
+            >
+              <Loader2 v-if="isAiRedrawing" class="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin text-fuchsia-500" />
+              <Sparkles v-else class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-violet-600" />
+              <span v-if="!isNarrowToolbar" class="text-xs font-semibold text-violet-700 hidden sm:inline">AI 重繪</span>
+            </button>
             <input ref="fileInputRef" type="file" accept="image/*" class="hidden" @change="handleImageUpload" />
             <button @click="fileInputRef?.click()" :disabled="isArrowNodeEditing" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="[isNarrowToolbar ? 'p-1' : 'p-1.5', { 'opacity-40 pointer-events-none cursor-not-allowed': isArrowNodeEditing }]" title="Add Image"><ImageIcon class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
             <button @click="undo" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="[{'opacity-50 cursor-not-allowed': !canUndo}, isNarrowToolbar ? 'p-1' : 'p-1.5']" title="Undo (Ctrl+Z)" :disabled="!canUndo"><Undo2 class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
@@ -8943,6 +9153,38 @@ onUnmounted(() => {
     >
       <!-- When selection is active -->
       <template v-if="hasSelection">
+        <!-- AI Redraw Sketch to SVG Options -->
+        <div class="px-2.5 py-1 text-[10px] font-semibold text-violet-400 tracking-wider uppercase flex items-center justify-between">
+          <span class="flex items-center gap-1.5"><Sparkles class="w-3 h-3 text-fuchsia-400" /> AI 草圖重繪 (SVG)</span>
+          <span class="text-[9px] text-slate-400 font-mono">{{ (roomStore.currentRoom?.mentorConfig?.meetingLanguage || mentorStore.config?.meetingLanguage || 'zh-TW').toUpperCase() }}</span>
+        </div>
+        <button
+          @click="triggerAiRedrawSketch('flash'); contextMenu.visible = false"
+          :disabled="isAiRedrawing"
+          class="w-full flex items-center justify-between px-3 py-1.5 rounded-xl bg-violet-950/40 hover:bg-violet-900/60 text-violet-200 hover:text-white transition cursor-pointer mb-0.5 border border-violet-500/20"
+        >
+          <span class="flex items-center gap-2">
+            <Loader2 v-if="isAiRedrawing" class="w-3.5 h-3.5 animate-spin text-fuchsia-400" />
+            <Sparkles v-else class="w-3.5 h-3.5 text-fuchsia-400" />
+            重繪向量圖 (Flash 快速)
+          </span>
+          <span class="text-[10px] text-fuchsia-300 font-mono">⚡ 推薦</span>
+        </button>
+        <button
+          @click="triggerAiRedrawSketch('pro'); contextMenu.visible = false"
+          :disabled="isAiRedrawing"
+          class="w-full flex items-center justify-between px-3 py-1.5 rounded-xl bg-violet-950/40 hover:bg-violet-900/60 text-violet-200 hover:text-white transition cursor-pointer mb-1 border border-violet-500/20"
+        >
+          <span class="flex items-center gap-2">
+            <Loader2 v-if="isAiRedrawing" class="w-3.5 h-3.5 animate-spin text-amber-400" />
+            <Sparkles v-else class="w-3.5 h-3.5 text-amber-400" />
+            重繪向量圖 (Pro 精細)
+          </span>
+          <span class="text-[10px] text-amber-300 font-mono">💎 深度</span>
+        </button>
+
+        <div class="my-1 border-t border-slate-800"></div>
+
         <button
           @click="copySelection(); contextMenu.visible = false"
           class="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
@@ -9268,6 +9510,15 @@ onUnmounted(() => {
           </button>
         </div>
       </div>
+    </div>
+
+    <!-- AI Redraw Progress Notification Pill -->
+    <div
+      v-if="isAiRedrawing"
+      class="fixed top-16 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2.5 px-4 py-2 bg-slate-900/95 border border-violet-500/50 shadow-2xl rounded-full text-violet-200 text-xs backdrop-blur-md animate-in fade-in slide-in-from-top-4 select-none pointer-events-none"
+    >
+      <Loader2 class="w-4 h-4 animate-spin text-fuchsia-400" />
+      <span class="font-medium tracking-wide">{{ aiRedrawLoadingMessage || 'AI 正在解析草圖與意圖，重繪向量圖中...' }}</span>
     </div>
   </div>
 </template>

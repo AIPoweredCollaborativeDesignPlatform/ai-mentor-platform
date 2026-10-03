@@ -29,7 +29,7 @@ const props = withDefaults(defineProps<{
   activeAssetId?: string | null;
   isSharedSession?: boolean;
 }>(), {
-  isSharedSession: true
+  isSharedSession: false
 });
 
 const isCollabActive = computed(() => !!roomStore.currentRoom?.whiteboardActive && props.isSharedSession);

@@ -73,6 +73,7 @@ watch(isWhiteboardOpen, (isOpen) => {
 });
 
 const isLocalWhiteboardPublisher = ref(false);
+const isActiveWhiteboardPrivate = ref(false);
 
 const startWhiteboardResize = (e: MouseEvent) => {
   e.preventDefault();
@@ -110,18 +111,22 @@ watch(() => roomStore.currentRoom?.whiteboardActive, (isActive, wasActive) => {
   if (isActive === true) {
     isPipDismissed.value = false;
     if (roomStore.currentRoom?.whiteboardHostUid === authStore.uid) {
-      isLocalWhiteboardPublisher.value = true;
+      if (!isActiveWhiteboardPrivate.value) {
+        isLocalWhiteboardPublisher.value = true;
+      }
     }
   }
   if (wasActive === true && isActive === false) {
     if (isLocalWhiteboardPublisher.value) {
       // Keep publisher's whiteboard open seamlessly as a Personal Board!
       isLocalWhiteboardPublisher.value = false;
+      isActiveWhiteboardPrivate.value = true;
       return;
     }
     if (isJoiningSharedBoard.value && isWhiteboardOpen.value) {
       isWhiteboardOpen.value = false;
       isJoiningSharedBoard.value = false;
+      isActiveWhiteboardPrivate.value = false;
       activeWhiteboardAssetId.value = null;
       currentWhiteboardJson.value = undefined;
       roomStore.pushToast('Collaboration Ended', 'The shared whiteboard session has ended.', 'info');
@@ -130,12 +135,24 @@ watch(() => roomStore.currentRoom?.whiteboardActive, (isActive, wasActive) => {
 });
 
 const isWhiteboardSharedSession = computed(() => {
+  // 1. If explicitly marked as private, it is NEVER a shared session!
+  if (isActiveWhiteboardPrivate.value) return false;
+
+  // 2. If the active asset ID is private, it is NEVER a shared session!
+  if (activeWhiteboardAssetId.value) {
+    const asset = roomStore.currentRoom?.messages.find(m => m.id === activeWhiteboardAssetId.value);
+    if (asset?.metadata?.isPrivate) {
+      return false;
+    }
+  }
+
+  // 3. Otherwise, check if room has an active whiteboard and this user is joined/publishing
   if (!roomStore.currentRoom?.whiteboardActive) return false;
   if (isLocalWhiteboardPublisher.value) return true;
   if (isJoiningSharedBoard.value) return true;
   if (activeWhiteboardAssetId.value) {
     const asset = roomStore.currentRoom?.messages.find(m => m.id === activeWhiteboardAssetId.value);
-    if (asset && !asset.metadata?.isPrivate) {
+    if (asset && !asset.metadata?.isPrivate && (asset.metadata?.wasPublished || asset.metadata?.isSharedPost)) {
       return true;
     }
   }
@@ -151,7 +168,9 @@ const handleOpenNewWhiteboard = async () => {
     }
   }
   // Always open a clean, new blank whiteboard (entering collab is done via chat message or assets library)
+  isActiveWhiteboardPrivate.value = true;
   isJoiningSharedBoard.value = false;
+  isLocalWhiteboardPublisher.value = false;
   activeWhiteboardAssetId.value = null;
   currentWhiteboardJson.value = undefined;
   whiteboardSessionKey.value = 'wb_new_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
@@ -166,6 +185,7 @@ const handleJoinSharedWhiteboard = async () => {
       console.warn('Auto save before joining shared board error:', e);
     }
   }
+  isActiveWhiteboardPrivate.value = false;
   isJoiningSharedBoard.value = true;
   const hostUid = roomStore.currentRoom?.whiteboardHostUid;
   const existingShared = roomStore.currentRoom?.messages.find(m => 
@@ -214,9 +234,23 @@ const handleToggleHideAsset = async (msg: any) => {
 
 const handleSaveWhiteboardState = async (json: string, previewUrl: string, explicitAssetId?: string | null, isPrivateParam?: boolean) => {
   let targetAssetId = explicitAssetId || activeWhiteboardAssetId.value;
-  // Check if whiteboard is in shared session or personal session
-  const isShared = isWhiteboardSharedSession.value;
-  const isPrivate = isShared ? false : (isPrivateParam !== undefined ? isPrivateParam : true);
+  const existingMsg = targetAssetId ? roomStore.currentRoom?.messages.find(m => m.id === targetAssetId) : null;
+
+  // Strict privacy determination:
+  // If explicitly marked as private, or if the asset in database was private, or if isPrivateParam is true:
+  let isPrivate = true;
+  if (isActiveWhiteboardPrivate.value) {
+    isPrivate = true;
+  } else if (existingMsg?.metadata?.isPrivate) {
+    isPrivate = true;
+  } else if (isPrivateParam !== undefined) {
+    isPrivate = isPrivateParam;
+  } else {
+    isPrivate = !isWhiteboardSharedSession.value;
+  }
+
+  // A session is shared ONLY if it is not private AND isWhiteboardSharedSession is true
+  const isShared = !isPrivate && isWhiteboardSharedSession.value;
 
   const hostUid = roomStore.currentRoom?.whiteboardHostUid || authStore.uid;
   const hostName = roomStore.currentRoom?.whiteboardHostName || authStore.displayName || 'Host';
@@ -236,7 +270,6 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string, expli
     }
   } else {
     // Ownership verification for personal/private mode: if editing another user's asset, fork into a new personal asset
-    const existingMsg = targetAssetId ? roomStore.currentRoom?.messages.find(m => m.id === targetAssetId) : null;
     const isOwner = existingMsg ? (existingMsg.metadata?.creatorUid === authStore.uid || existingMsg.senderUid === authStore.uid) : true;
     if (targetAssetId && !isOwner) {
       targetAssetId = null;
@@ -244,8 +277,7 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string, expli
     }
   }
 
-  const existingMsg = targetAssetId ? roomStore.currentRoom?.messages.find(m => m.id === targetAssetId) : null;
-  const wasPublished = isShared ? true : (existingMsg?.metadata?.wasPublished ?? false);
+  const wasPublished = isShared ? true : false;
 
   const meta = {
     whiteboardJson: json,
@@ -294,8 +326,10 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string, expli
     }
   }
 
-  // Trigger Gemini Whiteboard Vision Background Memory Record
-  roomStore.recordWhiteboardSnapshotMemory(previewUrl, json, targetAssetId || undefined);
+  // Trigger Gemini Whiteboard Vision Background Memory Record ONLY for shared boards or deliberate captures
+  if (isShared) {
+    roomStore.recordWhiteboardSnapshotMemory(previewUrl, json, targetAssetId || undefined);
+  }
 };
 
 const retryingAiMessageId = ref<string | null>(null);
@@ -333,7 +367,12 @@ const openWhiteboardState = async (msg: any) => {
     }
   }
   // Open locally with asset JSON; DO NOT involuntarily trigger broadcast session!
-  isJoiningSharedBoard.value = false;
+  const isPrivateAsset = !!msg.metadata?.isPrivate;
+  isActiveWhiteboardPrivate.value = isPrivateAsset;
+  if (isPrivateAsset) {
+    isLocalWhiteboardPublisher.value = false;
+    isJoiningSharedBoard.value = false;
+  }
   activeWhiteboardAssetId.value = msg.id;
   currentWhiteboardJson.value = msg.metadata?.whiteboardJson || null;
   whiteboardSessionKey.value = 'wb_asset_' + msg.id + '_' + Date.now();
@@ -2109,7 +2148,7 @@ onUnmounted(() => {
           :initialJson="currentWhiteboardJson"
           :activeAssetId="activeWhiteboardAssetId"
           :isSharedSession="isWhiteboardSharedSession"
-          @close="isWhiteboardOpen = false; isJoiningSharedBoard = false; activeWhiteboardAssetId = null; currentWhiteboardJson = undefined;"
+          @close="isWhiteboardOpen = false; isJoiningSharedBoard = false; isLocalWhiteboardPublisher = false; isActiveWhiteboardPrivate = false; activeWhiteboardAssetId = null; currentWhiteboardJson = undefined;"
           @share="handleShareWhiteboard"
           @save-state="handleSaveWhiteboardState"
         />

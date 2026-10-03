@@ -69,7 +69,9 @@ const CUSTOM_PROPS = [
   'id',
   'fontSize',
   '_origEndpointCorners',
-  'hasLockedChildren'
+  'hasLockedChildren',
+  'isSvg',
+  'strokeUniform'
 ];
 
 const hasUnsavedChanges = ref(false);
@@ -83,6 +85,17 @@ const canvasRef = ref<HTMLCanvasElement | null>(null);
 const fileInputRef = ref<HTMLInputElement | null>(null);
 const wrapperRef = ref<HTMLDivElement | null>(null);
 const rootRef = ref<HTMLDivElement | null>(null);
+const lastActiveZone = ref<'whiteboard' | 'external'>('whiteboard');
+
+const handleWindowPointerDown = (e: PointerEvent) => {
+  const target = e.target as Node | null;
+  if (!target) return;
+  if (rootRef.value && (rootRef.value === target || rootRef.value.contains(target))) {
+    lastActiveZone.value = 'whiteboard';
+  } else {
+    lastActiveZone.value = 'external';
+  }
+};
 
 const whiteboardContainerWidth = ref(800);
 const isColorPickerOpen = ref(false);
@@ -3138,11 +3151,12 @@ const initFabric = () => {
     const target = e.target;
     if (target) {
       target.objectCaching = false;
-      target.strokeUniform = true;
+      const isSvgTarget = !!(target.isSvg || (typeof target.id === 'string' && target.id.includes('svg')) || target.strokeUniform === false);
+      target.strokeUniform = !isSvgTarget;
       if (typeof target.getObjects === 'function') {
         target.getObjects().forEach((o: any) => {
           o.objectCaching = false;
-          o.strokeUniform = true;
+          o.strokeUniform = !(isSvgTarget || o.isSvg || o.strokeUniform === false);
         });
       }
 
@@ -3660,6 +3674,11 @@ const initFabric = () => {
   // Unified Mouse Down
   canvas.on('mouse:down', (opt) => {
     if (!canvas) return;
+    lastActiveZone.value = 'whiteboard';
+    const sel = window.getSelection();
+    if (sel && sel.toString().trim() && sel.anchorNode && !rootRef.value?.contains(sel.anchorNode)) {
+      sel.removeAllRanges();
+    }
     const e = opt.e as MouseEvent;
     isBrushMenuOpen.value = false;
     isStickyMenuOpen.value = false;
@@ -5184,7 +5203,11 @@ const rehydrateCanvasObjects = () => {
   if (!canvas) return;
 
   const processObject = (o: any, parentGroup?: any) => {
-    o.set({ strokeUniform: true, perPixelTargetFind: true });
+    const isSvgObj = !!(o.isSvg || parentGroup?.isSvg || (typeof o.id === 'string' && o.id.includes('svg')) || o.strokeUniform === false);
+    o.set({
+      strokeUniform: !isSvgObj,
+      perPixelTargetFind: true
+    });
 
     if (!o.id) {
       o.id = (o.isArrow || o.arrowId ? (o.arrowId || 'arrow_' + Date.now()) : (o.isStickyNote ? 'note_' : 'obj_') + Date.now() + '_' + Math.random().toString(36).substring(2, 9));
@@ -5704,8 +5727,23 @@ const copySelection = async () => {
   if (!canvas) return;
   const activeObj = canvas.getActiveObject();
   if (activeObj) {
-    clipboard = await activeObj.clone(CUSTOM_PROPS);
-    displayToast('Copied (Ctrl+C)');
+    try {
+      clipboard = await activeObj.clone(CUSTOM_PROPS);
+      displayToast('Copied (Ctrl+C)');
+    } catch (err) {
+      console.warn('Direct activeObj.clone failed, attempting serialization fallback:', err);
+      try {
+        const json = activeObj.toObject(CUSTOM_PROPS);
+        const enlivened = await fabric.util.enlivenObjects([json]);
+        if (enlivened && enlivened[0]) {
+          clipboard = enlivened[0] as any;
+          displayToast('Copied (Ctrl+C)');
+        }
+      } catch (fallbackErr) {
+        console.error('Copy fallback failed:', fallbackErr);
+        displayToast('Failed to copy object');
+      }
+    }
   }
 };
 
@@ -6039,7 +6077,7 @@ const enterGroupIsolation = (group: fabric.Group, targetChild?: any) => {
         selectable: true,
         evented: true,
         perPixelTargetFind: true,
-        strokeUniform: true,
+        objectCaching: false,
         lockMovementX: !!(item as any).isLocked,
         lockMovementY: !!(item as any).isLocked,
         lockRotation: !!(item as any).isLocked,
@@ -6105,14 +6143,14 @@ const exitGroupIsolation = () => {
       }
       if (item.isStickyNote || item.stickyColorConfig || item.type === 'textbox') {
         normalizeStickyNoteDimensions(item);
-      }
-      const w = (item.width || 0) * (item.scaleX || 1);
-      const h = (item.height || 0) * (item.scaleY || 1);
-      if (item.left !== undefined) {
-        item.left = Math.max(0, Math.min(item.left, WORKSPACE_WIDTH - Math.min(w, WORKSPACE_WIDTH)));
-      }
-      if (item.top !== undefined) {
-        item.top = Math.max(0, Math.min(item.top, WORKSPACE_HEIGHT - Math.min(h, WORKSPACE_HEIGHT)));
+        const w = (item.width || 0) * (item.scaleX || 1);
+        const h = (item.height || 0) * (item.scaleY || 1);
+        if (item.left !== undefined) {
+          item.left = Math.max(0, Math.min(item.left, WORKSPACE_WIDTH - Math.min(w, WORKSPACE_WIDTH)));
+        }
+        if (item.top !== undefined) {
+          item.top = Math.max(0, Math.min(item.top, WORKSPACE_HEIGHT - Math.min(h, WORKSPACE_HEIGHT)));
+        }
       }
       item.setCoords();
       canvas?.remove(item);
@@ -6123,8 +6161,21 @@ const exitGroupIsolation = () => {
       const newGroup = new fabric.Group(remainingItems, {
         canvas,
         subTargetCheck: true,
-        perPixelTargetFind: true
+        perPixelTargetFind: true,
+        objectCaching: false
       });
+      if (isolatedGroup) {
+        (newGroup as any).id = isolatedGroup.id || ('group_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9));
+        (newGroup as any).authorUid = isolatedGroup.authorUid || authStore.uid;
+        (newGroup as any)._createdAt = isolatedGroup._createdAt || Date.now();
+        (newGroup as any)._localModifiedAt = Date.now();
+        if ((isolatedGroup as any).isSvg || (isolatedGroup.id && isolatedGroup.id.includes('svg'))) {
+          (newGroup as any).isSvg = true;
+          newGroup.set({ strokeUniform: false });
+        }
+      } else {
+        (newGroup as any).id = 'group_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
+      }
       remainingItems.forEach(item => {
         if ((item as any).isArrow) {
           (item as any).initialMatrix = item.calcTransformMatrix();
@@ -7496,10 +7547,14 @@ const handleKeydown = (e: KeyboardEvent) => {
   const isInputTarget = (targetTag === 'input' || targetTag === 'textarea') && !targetEl?.classList?.contains('fabric-canvas-textarea') && !rootRef.value?.contains(targetEl);
   if (isInputTarget) return;
 
-  // If user has highlighted text on screen outside the whiteboard (e.g. In chat), let system copy naturally
+  // Smart Focus: Check if user is interacting with text/controls outside the whiteboard
   const selection = window.getSelection();
-  if (selection && selection.toString().trim() && !rootRef.value?.contains(selection.anchorNode)) {
-    if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
+  const hasExternalSelection = !!(selection && selection.toString().trim() && selection.anchorNode && !rootRef.value?.contains(selection.anchorNode));
+
+  // If user last clicked outside the whiteboard (e.g. in Chat, Assets, Header) or currently has external text highlighted:
+  // Do NOT intercept shortcuts (Ctrl+C, Ctrl+V, Ctrl+A, Ctrl+X, Ctrl+Z, Delete, etc.) so external text/DOM works naturally!
+  if (lastActiveZone.value === 'external' || hasExternalSelection) {
+    if (e.key !== 'Escape') {
       return;
     }
   }
@@ -8054,14 +8109,47 @@ const triggerAiRedrawSketch = async () => {
     );
 
     // 7. Parse generated SVG
-    const { objects, options } = await fabric.loadSVGFromString(svgString);
+    // Ensure any open path, curve, polyline, or line with stroke has fill="none" if fill attribute is missing
+    let cleanSvg = svgString.replace(/<(path|polyline|line)\b([^>]*?)(\/?>)/gi, (match, tag, attrs, end) => {
+      if (/stroke\s*=/i.test(attrs) && !/fill\s*=/i.test(attrs)) {
+        return `<${tag} ${attrs} fill="none"${end}`;
+      }
+      return match;
+    });
+
+    const { objects, options } = await fabric.loadSVGFromString(cleanSvg);
     if (!canvas) return;
     const validObjects = objects.filter((o): o is fabric.FabricObject => o !== null);
     if (!validObjects.length) {
       throw new Error('AI generated vector output could not be parsed.');
     }
 
+    // Recursively disable objectCaching and strokeUniform so Fabric draws crisp vectors
+    // that scale proportionally when zoomed, eliminating fixed-width thick rectangle distortion
+    const configureSvgObject = (obj: any) => {
+      obj.set({
+        isSvg: true,
+        strokeUniform: false,
+        objectCaching: false,
+        perPixelTargetFind: true
+      });
+      (obj as any).isSvg = true;
+      (obj as any).strokeUniform = false;
+      // If an open curve or stroke path has a black or default fill that wasn't intended to be a solid polygon, reset fill
+      if (obj.type === 'path' && obj.stroke && (obj.fill === '#000000' || obj.fill === 'black' || obj.fill === 'rgb(0,0,0)')) {
+        const pathData = (obj.path || []).map((cmd: any[]) => cmd[0]).join('');
+        if (!/z/i.test(pathData)) {
+          obj.set({ fill: '' });
+        }
+      }
+      if (typeof obj.forEachObject === 'function') {
+        obj.forEachObject(configureSvgObject);
+      }
+    };
+    validObjects.forEach(configureSvgObject);
+
     const newObj = fabric.util.groupSVGElements(validObjects, options);
+    configureSvgObject(newObj);
 
     // 8. Proportional sizing: match roughly the original sketch's visual width
     const svgBounds = newObj.getBoundingRect ? newObj.getBoundingRect() : { width: newObj.width || 200, height: newObj.height || 200 };
@@ -8095,8 +8183,17 @@ const triggerAiRedrawSketch = async () => {
       top: targetTop,
       originX: 'left',
       originY: 'top',
-      perPixelTargetFind: true
+      perPixelTargetFind: true,
+      objectCaching: false,
+      subTargetCheck: true,
+      strokeUniform: false
     });
+    (newObj as any).id = 'group_svg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
+    (newObj as any).isSvg = true;
+    (newObj as any).strokeUniform = false;
+    (newObj as any).authorUid = authStore.uid;
+    (newObj as any)._createdAt = Date.now();
+    (newObj as any)._localModifiedAt = Date.now();
 
     canvas.add(newObj);
     canvas.setActiveObject(newObj);
@@ -8247,6 +8344,7 @@ const onWindowPointerUp = () => {
 };
 
 onMounted(() => {
+  window.addEventListener('pointerdown', handleWindowPointerDown, { capture: true });
   window.addEventListener('pointerup', onWindowPointerUp);
   window.addEventListener('keydown', handleKeydown, { capture: true });
   window.addEventListener('keyup', handleKeyup, { capture: true });
@@ -8314,6 +8412,7 @@ onUnmounted(() => {
     unsubCursors();
     unsubCursors = null;
   }
+  window.removeEventListener('pointerdown', handleWindowPointerDown, { capture: true });
   window.removeEventListener('pointerup', onWindowPointerUp);
   window.removeEventListener('keydown', handleKeydown, { capture: true });
   window.removeEventListener('keyup', handleKeyup, { capture: true });
@@ -9223,18 +9322,18 @@ onUnmounted(() => {
     >
       <!-- When selection is active -->
       <template v-if="hasSelection">
-        <!-- AI Redraw Sketch to SVG -->
-        <div class="px-2.5 py-1 text-[10px] font-semibold text-violet-400 tracking-wider uppercase flex items-center justify-between">
-          <span class="flex items-center gap-1.5"><Sparkles class="w-3 h-3 text-fuchsia-400" /> AI Redraw (SVG)</span>
-        </div>
+        <!-- AI Redraw Sketch to SVG (single direct action) -->
         <button
           @click="triggerAiRedrawSketch(); contextMenu.visible = false"
           :disabled="isAiRedrawing"
-          class="w-full flex items-center gap-2 px-3 py-1.5 rounded-xl bg-violet-950/40 hover:bg-violet-900/60 text-violet-200 hover:text-white transition cursor-pointer mb-1 border border-violet-500/20"
+          class="w-full flex items-center justify-between px-3 py-1.5 rounded-xl bg-violet-950/40 hover:bg-violet-900/60 text-violet-200 hover:text-white transition cursor-pointer mb-1 border border-violet-500/20"
         >
-          <Loader2 v-if="isAiRedrawing" class="w-3.5 h-3.5 animate-spin text-fuchsia-400" />
-          <Sparkles v-else class="w-3.5 h-3.5 text-fuchsia-400" />
-          <span>Redraw as Vector</span>
+          <span class="flex items-center gap-2">
+            <Loader2 v-if="isAiRedrawing" class="w-3.5 h-3.5 animate-spin text-fuchsia-400" />
+            <Sparkles v-else class="w-3.5 h-3.5 text-fuchsia-400" />
+            <span class="font-medium">AI Redraw (SVG)</span>
+          </span>
+          <span class="text-[10px] text-fuchsia-400/80 font-mono">AI</span>
         </button>
 
         <div class="my-1 border-t border-slate-800"></div>

@@ -438,6 +438,7 @@ CRITICAL INSTRUCTIONS & CORE REQUIREMENTS:
 3. Visual Styling & Color:
    - Use a modern, aesthetic color palette with cohesive fills, distinct stroke colors, and appropriate stroke widths.
    - Ensure the vector artwork looks stunning and has high contrast against light/white backgrounds.
+   - CRITICAL SVG RULE FOR STROKES & CURVES: For all lines, curves, strokes, connectors, arrows, and outlines, you MUST explicitly specify fill="none". Never omit fill on open paths or curves, because SVG defaults omitted fill to solid black, which turns curved lines into solid black rectangles. Only use color fills on intentional closed shapes.
 
 4. Strict Output Constraints:
    - Output ONLY the raw, self-contained <svg>...</svg> element.

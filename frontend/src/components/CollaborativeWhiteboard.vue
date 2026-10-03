@@ -7889,7 +7889,7 @@ const generateAIObject = async () => {
 const isAiRedrawing = ref(false);
 const aiRedrawLoadingMessage = ref('');
 
-const triggerAiRedrawSketch = async (requestedTier?: 'flash' | 'pro') => {
+const triggerAiRedrawSketch = async () => {
   if (!canvas) return;
   const activeObj = canvas.getActiveObject() as any;
   if (!activeObj) {
@@ -7903,11 +7903,10 @@ const triggerAiRedrawSketch = async (requestedTier?: 'flash' | 'pro') => {
     return;
   }
 
-  const modelTier = requestedTier || mentorStore.config?.modelTier || 'flash';
   const meetingLang = roomStore.currentRoom?.mentorConfig?.meetingLanguage || mentorStore.config?.meetingLanguage || 'zh-TW';
 
   isAiRedrawing.value = true;
-  aiRedrawLoadingMessage.value = `Redrawing sketch into vector graphic (${modelTier === 'pro' ? 'Pro' : 'Flash'})...`;
+  aiRedrawLoadingMessage.value = 'Redrawing sketch into vector graphic...';
   // Note: Do not call displayToast here so notification banners never conflict or stagger!
 
   try {
@@ -8051,7 +8050,7 @@ const triggerAiRedrawSketch = async (requestedTier?: 'flash' | 'pro') => {
       cleanDataUrl,
       extraContextText,
       meetingLang,
-      modelTier
+      'flash'
     );
 
     // 7. Parse generated SVG
@@ -9177,11 +9176,11 @@ onUnmounted(() => {
             <!-- AI Redraw Button -->
             <button
               v-if="hasSelection"
-              @click="triggerAiRedrawSketch(mentorStore.config?.modelTier === 'pro' ? 'pro' : 'flash')"
+              @click="triggerAiRedrawSketch"
               :disabled="isAiRedrawing"
               class="rounded-xl hover:bg-violet-100 text-violet-600 transition cursor-pointer flex items-center gap-1"
               :class="isNarrowToolbar ? 'p-1' : 'px-1.5 py-1'"
-              :title="`AI Redraw sketch as vector (${mentorStore.config?.modelTier === 'pro' ? 'Pro' : 'Flash'})`"
+              title="AI Redraw sketch as vector"
             >
               <Loader2 v-if="isAiRedrawing" class="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin text-fuchsia-500" />
               <Sparkles v-else class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-violet-600" />
@@ -9224,34 +9223,18 @@ onUnmounted(() => {
     >
       <!-- When selection is active -->
       <template v-if="hasSelection">
-        <!-- AI Redraw Sketch to SVG Options -->
+        <!-- AI Redraw Sketch to SVG -->
         <div class="px-2.5 py-1 text-[10px] font-semibold text-violet-400 tracking-wider uppercase flex items-center justify-between">
           <span class="flex items-center gap-1.5"><Sparkles class="w-3 h-3 text-fuchsia-400" /> AI Redraw (SVG)</span>
-          <span class="text-[9px] text-slate-400 font-mono">{{ (roomStore.currentRoom?.mentorConfig?.meetingLanguage || mentorStore.config?.meetingLanguage || 'zh-TW').toUpperCase() }}</span>
         </div>
         <button
-          @click="triggerAiRedrawSketch('flash'); contextMenu.visible = false"
+          @click="triggerAiRedrawSketch(); contextMenu.visible = false"
           :disabled="isAiRedrawing"
-          class="w-full flex items-center justify-between px-3 py-1.5 rounded-xl bg-violet-950/40 hover:bg-violet-900/60 text-violet-200 hover:text-white transition cursor-pointer mb-0.5 border border-violet-500/20"
+          class="w-full flex items-center gap-2 px-3 py-1.5 rounded-xl bg-violet-950/40 hover:bg-violet-900/60 text-violet-200 hover:text-white transition cursor-pointer mb-1 border border-violet-500/20"
         >
-          <span class="flex items-center gap-2">
-            <Loader2 v-if="isAiRedrawing" class="w-3.5 h-3.5 animate-spin text-fuchsia-400" />
-            <Sparkles v-else class="w-3.5 h-3.5 text-fuchsia-400" />
-            Redraw as Vector (Flash)
-          </span>
-          <span class="text-[10px] text-fuchsia-300 font-mono">⚡ Fast</span>
-        </button>
-        <button
-          @click="triggerAiRedrawSketch('pro'); contextMenu.visible = false"
-          :disabled="isAiRedrawing"
-          class="w-full flex items-center justify-between px-3 py-1.5 rounded-xl bg-violet-950/40 hover:bg-violet-900/60 text-violet-200 hover:text-white transition cursor-pointer mb-1 border border-violet-500/20"
-        >
-          <span class="flex items-center gap-2">
-            <Loader2 v-if="isAiRedrawing" class="w-3.5 h-3.5 animate-spin text-amber-400" />
-            <Sparkles v-else class="w-3.5 h-3.5 text-amber-400" />
-            Redraw as Vector (Pro)
-          </span>
-          <span class="text-[10px] text-amber-300 font-mono">💎 Refined</span>
+          <Loader2 v-if="isAiRedrawing" class="w-3.5 h-3.5 animate-spin text-fuchsia-400" />
+          <Sparkles v-else class="w-3.5 h-3.5 text-fuchsia-400" />
+          <span>Redraw as Vector</span>
         </button>
 
         <div class="my-1 border-t border-slate-800"></div>

@@ -450,9 +450,8 @@ ${extraContextText ? `USER'S DESIGN INSTRUCTIONS & EXPLANATION (Use ONLY as guid
   if (abortSignal?.aborted) throw new Error('AI analysis aborted by user');
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const modelsToTry = modelTier === 'pro'
-    ? ['gemini-2.5-pro', 'gemini-3.1-pro-preview', 'gemini-2.5-flash', ...FLASH_CORE_MODELS]
-    : ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash', ...FLASH_CORE_MODELS];
+  // Whiteboard AI Redraw strictly uses fast Gemini Flash models
+  const modelsToTry = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash', ...FLASH_CORE_MODELS];
 
   const attempts: Array<{ model: string; error: string }> = [];
 

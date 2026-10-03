@@ -264,7 +264,6 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string, expli
       },
       metadata: meta
     });
-    currentWhiteboardJson.value = json;
   } else {
     // Create new whiteboard asset under appropriate owner
     const newId = await roomStore.sendCustomMessage({
@@ -283,7 +282,6 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string, expli
     });
     if (newId) {
       activeWhiteboardAssetId.value = newId;
-      currentWhiteboardJson.value = json;
       targetAssetId = newId;
       if (whiteboardRef.value) {
         (whiteboardRef.value as any).setCurrentAssetId?.(newId);

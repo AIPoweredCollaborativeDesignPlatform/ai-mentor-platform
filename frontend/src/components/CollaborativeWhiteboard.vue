@@ -5530,36 +5530,11 @@ const loadDocument = async (json?: string) => {
   }
 };
 
-watch([() => props.activeAssetId, () => props.initialJson], async ([newId, newJson], [oldId, oldJson]) => {
-  if (newId !== oldId || newJson !== oldJson) {
-    // 1. If this is merely assigning an asset ID to the current active whiteboard session (e.g. from initial auto-save),
-    // or if currentAssetId already matches newId, update currentAssetId and DO NOT reload or wipe the canvas!
-    if ((!oldId && newId) || (newId && newId === currentAssetId.value)) {
-      currentAssetId.value = newId;
-      // Only reload if the parent explicitly provided a different, non-empty JSON
-      if (newJson && newJson !== oldJson && canvas) {
-        await loadDocument(newJson);
-      }
-      return;
-    }
-
-    // 2. Genuine asset switch (from one asset to a different asset)
-    if (newId !== oldId && hasUnsavedChanges.value && canvas && !isBlankCanvasWithoutHistory()) {
-      try {
-        const json = getSerializedCanvasJson();
-        const dataUrl = getCanvasSnapshot(0.7);
-        emit('save-state', json, dataUrl, oldId, !isCollabActive.value);
-        hasUnsavedChanges.value = false;
-      } catch (e) {
-        console.warn('Auto-save on asset switch error:', e);
-      }
-    }
+// Keep currentAssetId synced with props.activeAssetId when parent assigns an ID
+// (e.g. when a new whiteboard is saved for the first time)
+watch(() => props.activeAssetId, (newId) => {
+  if (newId && newId !== currentAssetId.value) {
     currentAssetId.value = newId;
-
-    // 3. Only load document if a valid newJson is actually provided and different!
-    if (canvas && newJson && newJson !== oldJson) {
-      await loadDocument(newJson);
-    }
   }
 });
 
@@ -7484,8 +7459,10 @@ function triggerDebouncedAutoSave(delay = 800) {
     return;
   }
   const activeObj = canvas.getActiveObject() as any;
-  if (activeObj?.isEditing) {
-    // Defer auto-save while typing/editing in a note or textbox
+  if (activeObj?.isEditing || (canvas as any)?._currentTransform || isDragging) {
+    // Defer auto-save while typing, transforming (scaling/rotating/moving), or dragging
+    if (autoSaveDebounceTimer) clearTimeout(autoSaveDebounceTimer);
+    autoSaveDebounceTimer = setTimeout(() => triggerDebouncedAutoSave(500), 500);
     return;
   }
   hasUnsavedChanges.value = true;
@@ -7493,6 +7470,12 @@ function triggerDebouncedAutoSave(delay = 800) {
   if (autoSaveDebounceTimer) clearTimeout(autoSaveDebounceTimer);
   autoSaveDebounceTimer = setTimeout(async () => {
     try {
+      // Re-check deferral condition at timeout execution
+      const currentActiveObj = canvas?.getActiveObject() as any;
+      if (currentActiveObj?.isEditing || (canvas as any)?._currentTransform || isDragging) {
+        triggerDebouncedAutoSave(500);
+        return;
+      }
       if (!navigator.onLine) {
         saveStatus.value = 'offline';
         await triggerAutoSaveAsAsset();

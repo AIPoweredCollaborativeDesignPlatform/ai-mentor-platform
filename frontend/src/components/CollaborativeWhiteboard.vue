@@ -162,6 +162,8 @@ const nodeMarqueeRect = ref<{ x1: number; y1: number; x2: number; y2: number }>(
 const isDraggingNode = ref(false);
 const showNodeHelp = ref(false);
 const viewportVersion = ref(0);
+const isCtrlMarqueeActive = ref(false);
+const ctrlMarqueeRect = ref<{ x1: number; y1: number; x2: number; y2: number }>({ x1: 0, y1: 0, x2: 0, y2: 0 });
 let liveArrowPreview: any = null;
 let arrowPreviewRafId: number | null = null;
 
@@ -3129,17 +3131,18 @@ const initFabric = () => {
     if (target && !isInternalChange) {
       const id = target.id || target.arrowId;
       if (id) {
+        const isSticky = (target as any).isStickyNote || (target as any).stickyColorConfig || target.type === 'textbox';
         objectTransformBefore = {
           targetId: id,
           props: {
             left: target.left,
             top: target.top,
-            scaleX: target.scaleX,
-            scaleY: target.scaleY,
-            angle: target.angle,
-            width: target.width,
+            scaleX: isSticky ? 1 : target.scaleX,
+            scaleY: isSticky ? 1 : target.scaleY,
+            angle: isSticky ? 0 : target.angle,
+            width: isSticky ? STICKY_NOTE_CONST_SIZE : target.width,
             height: target.height,
-            minHeight: (target as any).minHeight,
+            minHeight: isSticky ? STICKY_NOTE_CONST_SIZE : (target as any).minHeight,
             fontSize: target.fontSize
           }
         };
@@ -3218,8 +3221,8 @@ const initFabric = () => {
           });
           c.setCoords();
         } else if (c.isLocked && c._origLockedWorldPos) {
-          const origSx = Math.abs(c._origScaleX || 1);
-          const origSy = Math.abs(c._origScaleY || 1);
+          const origSx = c._origBaseScaleX !== undefined ? c._origBaseScaleX : Math.abs(c._origScaleX || 1);
+          const origSy = c._origBaseScaleY !== undefined ? c._origBaseScaleY : Math.abs(c._origScaleY || 1);
           const invSel = fabric.util.invertTransform(obj.calcTransformMatrix());
           const localPos = fabric.util.transformPoint(c._origLockedWorldPos, invSel);
           c.set({
@@ -3227,7 +3230,7 @@ const initFabric = () => {
             scaleY: origSy / selScaleY,
             flipX: isParentFlippedX,
             flipY: isParentFlippedY,
-            angle: (c._origAngle || 0) - (obj.angle || 0),
+            angle: (c._origBaseAngle !== undefined ? c._origBaseAngle : (c._origAngle || 0)) - (obj.angle || 0),
             left: localPos.x,
             top: localPos.y
           });
@@ -3241,7 +3244,7 @@ const initFabric = () => {
       obj.setCoords();
       targets.forEach((c: any) => {
         if (c.isLocked) {
-          c._origLockedWorldPos = fabric.util.transformPoint({ x: c.left, y: c.top } as any, obj.calcTransformMatrix());
+          c._origLockedWorldPos = fabric.util.transformPoint(new fabric.Point(c.left, c.top), obj.calcTransformMatrix());
         }
       });
       canvas?.requestRenderAll();
@@ -3251,6 +3254,7 @@ const initFabric = () => {
     const syncArrowTransform = (arrowObj: any) => {
       if (isArrowNodeEditing.value) return;
       if (!arrowObj || !(arrowObj as any).isArrow || !Array.isArray((arrowObj as any).arrowPoints)) return;
+      if (arrowObj.isLocked) return;
       try {
         if (!canvas) return;
         const M0 = (arrowObj as any).initialMatrix || arrowObj.calcTransformMatrix();
@@ -3324,6 +3328,7 @@ const initFabric = () => {
 
     const syncAllArrowsRecursively = (target: any) => {
       if (!target) return;
+      if ((target as any).isLocked) return;
       if ((target as any).isArrow) {
         syncArrowTransform(target);
       }
@@ -3491,6 +3496,22 @@ const initFabric = () => {
     if (!canvas) return;
     const e = opt.e as MouseEvent;
     if (e.button !== 0) return; // left click only
+
+    // Ctrl key interaction under ANY tool: intercept immediately before freeDrawingBrush captures any points!
+    if (e.ctrlKey || e.metaKey) {
+      if (canvas.isDrawingMode || isDrawingMode.value) {
+        canvas.isDrawingMode = false;
+        canvas.clearContext(canvas.contextTop);
+        if ((canvas.freeDrawingBrush as any)?._points) {
+          (canvas.freeDrawingBrush as any)._points = [];
+        }
+        (canvas.freeDrawingBrush as any)?._reset?.();
+      }
+      if (pencilHoldTimer) {
+        clearTimeout(pencilHoldTimer);
+        pencilHoldTimer = null;
+      }
+    }
 
     const found = canvas.findTarget(e);
     const hitTarget = opt.target || (found as any)?.target || null;
@@ -3945,6 +3966,15 @@ const initFabric = () => {
       const dist = Math.hypot(curScene.x - ctrlMouseDownPoint.x, curScene.y - ctrlMouseDownPoint.y);
       if (dist > 4) {
         isCtrlMarqueeDragging = true;
+        const p1 = fabric.util.transformPoint(new fabric.Point(ctrlMouseDownPoint.x, ctrlMouseDownPoint.y), canvas.viewportTransform);
+        const p2 = fabric.util.transformPoint(new fabric.Point(curScene.x, curScene.y), canvas.viewportTransform);
+        ctrlMarqueeRect.value = {
+          x1: Math.min(p1.x, p2.x),
+          y1: Math.min(p1.y, p2.y),
+          x2: Math.max(p1.x, p2.x),
+          y2: Math.max(p1.y, p2.y)
+        };
+        isCtrlMarqueeActive.value = true;
       }
       return;
     }
@@ -4170,12 +4200,17 @@ const initFabric = () => {
       ctrlHitChild = null;
       ctrlHitRegularObject = null;
       isCtrlMarqueeDragging = false;
+      isCtrlMarqueeActive.value = false;
       if (!canvas) return;
 
       const restoreToolModes = () => {
         if (!canvas) return;
         if (currentTool.value === 'pencil') {
           canvas.isDrawingMode = true;
+          if ((canvas.freeDrawingBrush as any)?._points) {
+            (canvas.freeDrawingBrush as any)._points = [];
+          }
+          (canvas.freeDrawingBrush as any)?._reset?.();
         }
         canvas.selection = currentTool.value === 'select';
       };
@@ -4654,6 +4689,8 @@ const initFabric = () => {
           const localPos = fabric.util.transformPoint(c._origLockedWorldPos, invSel);
           c.left = localPos.x;
           c.top = localPos.y;
+          if (c._origBaseScaleX !== undefined) c.scaleX = c._origBaseScaleX;
+          if (c._origBaseScaleY !== undefined) c.scaleY = c._origBaseScaleY;
           c.setCoords();
         }
       });
@@ -4713,8 +4750,10 @@ const initFabric = () => {
         const br = c.getBoundingRect ? c.getBoundingRect(true) : { left: c.left || 0, top: c.top || 0, width: c.width || 0, height: c.height || 0 };
         c._origWorldBounds = { minX: br.left, minY: br.top, maxX: br.left + br.width, maxY: br.top + br.height };
         if (c.isLocked) {
-          const wm = c.calcTransformMatrix();
-          c._origLockedWorldPos = new fabric.Point(wm[4], wm[5]);
+          c._origLockedWorldPos = fabric.util.transformPoint(new fabric.Point(c.left, c.top), obj.calcTransformMatrix());
+          c._origBaseScaleX = Math.abs(c.scaleX || 1);
+          c._origBaseScaleY = Math.abs(c.scaleY || 1);
+          c._origBaseAngle = c.angle || 0;
         }
         if (c.isStickyNote || c.stickyColorConfig) {
            c._origBaseScale = Math.max(Math.abs(c.scaleX || 1), Math.abs(c.scaleY || 1));
@@ -4758,13 +4797,13 @@ const initFabric = () => {
             c.angle = -(obj.angle || 0);
           } else if (c.isLocked) {
             // Locked objects in multi-selection must not scale, mirror, rotate, or move!
-            const origSx = Math.abs(c._origScaleX || 1);
-            const origSy = Math.abs(c._origScaleY || 1);
+            const origSx = c._origBaseScaleX !== undefined ? c._origBaseScaleX : Math.abs(c._origScaleX || 1);
+            const origSy = c._origBaseScaleY !== undefined ? c._origBaseScaleY : Math.abs(c._origScaleY || 1);
             c.scaleX = origSx / selScaleX;
             c.scaleY = origSy / selScaleY;
             c.flipX = isParentFlippedX;
             c.flipY = isParentFlippedY;
-            c.angle = (c._origAngle || 0) - (obj.angle || 0);
+            c.angle = (c._origBaseAngle !== undefined ? c._origBaseAngle : (c._origAngle || 0)) - (obj.angle || 0);
 
             if (c._origLockedWorldPos) {
               const invSel = fabric.util.invertTransform(obj.calcTransformMatrix());
@@ -5128,7 +5167,18 @@ const saveHistoryState = () => {
   // If in isolation mode, record isolated items state in isolation undo stack!
   if (isIsolationMode.value) {
     if (isolatedItems.length > 0) {
-      const state = JSON.stringify(isolatedItems.map(i => i.toObject(CUSTOM_PROPS)));
+      const state = JSON.stringify(isolatedItems.map(i => {
+        if (i.group && (i.group.type === 'activeselection' || i.group.type === 'activeSelection')) {
+          const wm = i.calcTransformMatrix();
+          const objData = i.toObject(CUSTOM_PROPS);
+          const center = new fabric.Point(wm[4], wm[5]);
+          const leftTop = i.translateToOriginPoint ? i.translateToOriginPoint(center, 'center', i.originX || 'left', i.originY || 'top') : center;
+          objData.left = leftTop.x;
+          objData.top = leftTop.y;
+          return objData;
+        }
+        return i.toObject(CUSTOM_PROPS);
+      }));
       if (isolationUndoStack.value.length === 0 || isolationUndoStack.value[isolationUndoStack.value.length - 1] !== state) {
         isolationUndoStack.value.push(state);
         if (isolationUndoStack.value.length > 50) isolationUndoStack.value.shift();
@@ -5899,13 +5949,27 @@ const exitGroupIsolation = () => {
     // Re-bundle ONLY remaining isolated items back into group (ignoring deleted items!)
     const remainingItems = isolatedItems.filter(item => canvas?.getObjects().includes(item));
     remainingItems.forEach(item => {
-      if (item.isStickyNote || item.stickyColorConfig) {
+      if (item.isStickyNote || item.stickyColorConfig || item.type === 'textbox') {
+        item.isStickyNote = true;
         item.width = STICKY_NOTE_CONST_SIZE;
         item.minHeight = STICKY_NOTE_CONST_SIZE;
-        item.height = Math.max(item.height || 0, STICKY_NOTE_CONST_SIZE);
+        item.scaleX = 1;
+        item.scaleY = 1;
+        item.flipX = false;
+        item.flipY = false;
         applyStickyNoteMethods(item);
         item.initDimensions?.();
+        item.height = Math.max(item.height || 0, STICKY_NOTE_CONST_SIZE);
       }
+      const w = (item.width || 0) * (item.scaleX || 1);
+      const h = (item.height || 0) * (item.scaleY || 1);
+      if (item.left !== undefined) {
+        item.left = Math.max(0, Math.min(item.left, WORKSPACE_WIDTH - Math.min(w, WORKSPACE_WIDTH)));
+      }
+      if (item.top !== undefined) {
+        item.top = Math.max(0, Math.min(item.top, WORKSPACE_HEIGHT - Math.min(h, WORKSPACE_HEIGHT)));
+      }
+      item.setCoords();
       canvas?.remove(item);
     });
 
@@ -6560,6 +6624,14 @@ const undo = async () => {
         const enlivened = await fabric.util.enlivenObjects(parsedItems);
         isolatedItems = enlivened as fabric.FabricObject[];
         isolatedItems.forEach(item => {
+          const w = (item.width || 0) * (item.scaleX || 1);
+          const h = (item.height || 0) * (item.scaleY || 1);
+          if (item.left !== undefined) {
+            item.left = Math.max(0, Math.min(item.left, WORKSPACE_WIDTH - Math.min(w, WORKSPACE_WIDTH)));
+          }
+          if (item.top !== undefined) {
+            item.top = Math.max(0, Math.min(item.top, WORKSPACE_HEIGHT - Math.min(h, WORKSPACE_HEIGHT)));
+          }
           item.set({
             opacity: 1,
             selectable: true,
@@ -6581,12 +6653,15 @@ const undo = async () => {
             (item as any).isStickyNote = true;
             (item as any).width = STICKY_NOTE_CONST_SIZE;
             (item as any).minHeight = STICKY_NOTE_CONST_SIZE;
-            (item as any).height = Math.max((item as any).height || 0, STICKY_NOTE_CONST_SIZE);
+            (item as any).scaleX = 1;
+            (item as any).scaleY = 1;
+            (item as any).flipX = false;
+            (item as any).flipY = false;
             applyStickyNoteMethods(item);
             item.initDimensions?.();
             (item as any).height = Math.max((item as any).height || 0, STICKY_NOTE_CONST_SIZE);
-            item.setCoords();
           }
+          item.setCoords();
           cv.add(item);
         });
         if (isolatedItems.length === 1) {
@@ -6700,11 +6775,25 @@ const undo = async () => {
               afterProps: item.beforeProps
             });
             found.set(item.beforeProps);
-            if ((found as any).isStickyNote || (found as any).stickyColorConfig) {
-              if (item.beforeProps.minHeight !== undefined) {
-                (found as any).minHeight = item.beforeProps.minHeight;
-              }
+            if ((found as any).isStickyNote || (found as any).stickyColorConfig || found.type === 'textbox') {
+              (found as any).isStickyNote = true;
+              (found as any).width = STICKY_NOTE_CONST_SIZE;
+              (found as any).minHeight = STICKY_NOTE_CONST_SIZE;
+              (found as any).scaleX = 1;
+              (found as any).scaleY = 1;
+              (found as any).flipX = false;
+              (found as any).flipY = false;
+              applyStickyNoteMethods(found);
               (found as any).initDimensions?.();
+              (found as any).height = Math.max((found as any).height || 0, STICKY_NOTE_CONST_SIZE);
+            }
+            if (found.left !== undefined) {
+              const w = (found.width || 0) * (found.scaleX || 1);
+              found.left = Math.max(0, Math.min(found.left, WORKSPACE_WIDTH - Math.min(w, WORKSPACE_WIDTH)));
+            }
+            if (found.top !== undefined) {
+              const h = (found.height || 0) * (found.scaleY || 1);
+              found.top = Math.max(0, Math.min(found.top, WORKSPACE_HEIGHT - Math.min(h, WORKSPACE_HEIGHT)));
             }
             found.setCoords();
           }
@@ -6753,6 +6842,14 @@ const redo = async () => {
         const enlivened = await fabric.util.enlivenObjects(parsedItems);
         isolatedItems = enlivened as fabric.FabricObject[];
         isolatedItems.forEach(item => {
+          const w = (item.width || 0) * (item.scaleX || 1);
+          const h = (item.height || 0) * (item.scaleY || 1);
+          if (item.left !== undefined) {
+            item.left = Math.max(0, Math.min(item.left, WORKSPACE_WIDTH - Math.min(w, WORKSPACE_WIDTH)));
+          }
+          if (item.top !== undefined) {
+            item.top = Math.max(0, Math.min(item.top, WORKSPACE_HEIGHT - Math.min(h, WORKSPACE_HEIGHT)));
+          }
           item.set({
             opacity: 1,
             selectable: true,
@@ -6774,12 +6871,15 @@ const redo = async () => {
             (item as any).isStickyNote = true;
             (item as any).width = STICKY_NOTE_CONST_SIZE;
             (item as any).minHeight = STICKY_NOTE_CONST_SIZE;
-            (item as any).height = Math.max((item as any).height || 0, STICKY_NOTE_CONST_SIZE);
+            (item as any).scaleX = 1;
+            (item as any).scaleY = 1;
+            (item as any).flipX = false;
+            (item as any).flipY = false;
             applyStickyNoteMethods(item);
             item.initDimensions?.();
             (item as any).height = Math.max((item as any).height || 0, STICKY_NOTE_CONST_SIZE);
-            item.setCoords();
           }
+          item.setCoords();
           cv.add(item);
         });
         if (isolatedItems.length === 1) {
@@ -6897,11 +6997,25 @@ const redo = async () => {
               afterProps: item.beforeProps
             });
             found.set(item.beforeProps);
-            if ((found as any).isStickyNote || (found as any).stickyColorConfig) {
-              if (item.beforeProps.minHeight !== undefined) {
-                (found as any).minHeight = item.beforeProps.minHeight;
-              }
+            if ((found as any).isStickyNote || (found as any).stickyColorConfig || found.type === 'textbox') {
+              (found as any).isStickyNote = true;
+              (found as any).width = STICKY_NOTE_CONST_SIZE;
+              (found as any).minHeight = STICKY_NOTE_CONST_SIZE;
+              (found as any).scaleX = 1;
+              (found as any).scaleY = 1;
+              (found as any).flipX = false;
+              (found as any).flipY = false;
+              applyStickyNoteMethods(found);
               (found as any).initDimensions?.();
+              (found as any).height = Math.max((found as any).height || 0, STICKY_NOTE_CONST_SIZE);
+            }
+            if (found.left !== undefined) {
+              const w = (found.width || 0) * (found.scaleX || 1);
+              found.left = Math.max(0, Math.min(found.left, WORKSPACE_WIDTH - Math.min(w, WORKSPACE_WIDTH)));
+            }
+            if (found.top !== undefined) {
+              const h = (found.height || 0) * (found.scaleY || 1);
+              found.top = Math.max(0, Math.min(found.top, WORKSPACE_HEIGHT - Math.min(h, WORKSPACE_HEIGHT)));
             }
             found.setCoords();
           }
@@ -8304,6 +8418,18 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
+
+      <!-- Ctrl Marquee Selection Box Overlay -->
+      <div
+        v-if="isCtrlMarqueeActive"
+        class="absolute border border-sky-400 bg-sky-500/15 pointer-events-none z-30 rounded-sm"
+        :style="{
+          left: `${ctrlMarqueeRect.x1}px`,
+          top: `${ctrlMarqueeRect.y1}px`,
+          width: `${Math.max(0, ctrlMarqueeRect.x2 - ctrlMarqueeRect.x1)}px`,
+          height: `${Math.max(0, ctrlMarqueeRect.y2 - ctrlMarqueeRect.y1)}px`
+        }"
+      ></div>
     </div>
 
     <!-- Floating Unified Toolbar (Bottom Center) -->

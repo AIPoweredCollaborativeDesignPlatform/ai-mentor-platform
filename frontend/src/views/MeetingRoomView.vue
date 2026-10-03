@@ -130,11 +130,12 @@ watch(() => roomStore.currentRoom?.whiteboardActive, (isActive, wasActive) => {
 });
 
 const isWhiteboardSharedSession = computed(() => {
+  if (!roomStore.currentRoom?.whiteboardActive) return false;
   if (isLocalWhiteboardPublisher.value) return true;
   if (isJoiningSharedBoard.value) return true;
   if (activeWhiteboardAssetId.value) {
     const asset = roomStore.currentRoom?.messages.find(m => m.id === activeWhiteboardAssetId.value);
-    if (asset?.metadata?.isSharedPost || (asset && !asset.metadata?.isPrivate)) {
+    if (asset && !asset.metadata?.isPrivate) {
       return true;
     }
   }
@@ -226,7 +227,7 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string, expli
       const existingShared = roomStore.currentRoom?.messages.find(m => 
         m.type === 'whiteboard_state' && 
         (!hostUid || m.metadata?.creatorUid === hostUid || m.senderUid === hostUid) && 
-        (m.metadata?.isSharedPost || !m.metadata?.isPrivate)
+        !m.metadata?.isPrivate
       );
       if (existingShared) {
         targetAssetId = existingShared.id;
@@ -243,10 +244,14 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string, expli
     }
   }
 
+  const existingMsg = targetAssetId ? roomStore.currentRoom?.messages.find(m => m.id === targetAssetId) : null;
+  const wasPublished = isShared ? true : (existingMsg?.metadata?.wasPublished ?? false);
+
   const meta = {
     whiteboardJson: json,
     isPrivate,
     isSharedPost: isShared,
+    wasPublished,
     creatorUid: isShared ? hostUid : authStore.uid,
     creatorName: isShared ? hostName : (authStore.displayName || 'Participant'),
     creatorAvatar: isShared ? (roomStore.currentRoom?.participants[hostUid]?.avatar || '🎨') : (authStore.avatar || '🎨'),
@@ -342,7 +347,14 @@ const allPublicAlbumItems = computed(() => {
   if (!roomStore.currentRoom?.messages) return [];
   const items = roomStore.currentRoom.messages.filter(m => {
     if (m.type === 'whiteboard_state') {
-      if (m.metadata?.isPrivate && !m.metadata?.isSharedPost) return false;
+      // Must NOT be private!
+      if (m.metadata?.isPrivate) return false;
+      // Must be a published/shared whiteboard
+      if (!m.metadata?.wasPublished && !m.metadata?.isSharedPost) return false;
+      // Exclude redundant pointer duplicates
+      if (m.metadata?.assetId && roomStore.currentRoom?.messages.some(other => other.id === m.metadata.assetId)) {
+        return false;
+      }
     } else if (m.type !== 'ai_asset' && !(m.type === 'file' && m.fileData?.type === 'image')) {
       return false;
     }
@@ -360,6 +372,10 @@ const allPersonalAlbumItems = computed(() => {
       if (!isMine) return false;
       // Must be private draft! If it's shared/public, it lives strictly in Public Assets
       if (!m.metadata?.isPrivate) return false;
+      // Exclude redundant pointer duplicates
+      if (m.metadata?.assetId && roomStore.currentRoom?.messages.some(other => other.id === m.metadata.assetId)) {
+        return false;
+      }
       return true;
     }
     return false;
@@ -424,13 +440,12 @@ const visibleChatMessages = computed(() => {
 
     // Filter out routine auto-save whiteboard capsules and private drafts from chat, keep only deliberate share posts
     if (m.type === 'whiteboard_state') {
-      if (m.metadata?.isPrivate && !m.metadata?.isSharedPost) {
+      // Exclude redundant pointer cards
+      if (m.metadata?.assetId && roomStore.currentRoom?.messages.some(other => other.id === m.metadata.assetId)) {
         return false;
       }
-      if (m.content?.includes('Personal Draft')) {
-        return false;
-      }
-      if (m.metadata?.isAutoSave && !m.metadata?.isSharedPost) {
+      // Routine personal drafts that were never published should never clutter the chat stream
+      if (!m.metadata?.wasPublished && (m.content?.includes('Personal Draft') || m.metadata?.isPrivate)) {
         return false;
       }
     }

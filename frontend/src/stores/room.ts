@@ -1507,8 +1507,8 @@ export const useRoomStore = defineStore('room', () => {
 
   let whiteboardSyncTimer: any = null;
 
-  const startWhiteboardSession = async (initialJson?: string, thumbnail?: string, existingAssetId?: string | null) => {
-    if (!currentRoom.value || !db) return;
+  const startWhiteboardSession = async (initialJson?: string, thumbnail?: string, existingAssetId?: string | null): Promise<string | null | undefined> => {
+    if (!currentRoom.value || !db) return null;
     const hostName = authStore.displayName || 'Participant';
     try {
       const payload: any = {
@@ -1520,9 +1520,26 @@ export const useRoomStore = defineStore('room', () => {
       if (thumbnail) payload.whiteboardThumbnail = thumbnail;
       await updateDoc(doc(db, 'rooms', currentRoom.value.roomId), payload);
 
+      // Clean up any historical duplicate pointer messages created earlier
+      const allMyBoards = currentRoom.value.messages.filter(m => 
+        m.type === 'whiteboard_state' && 
+        (m.metadata?.creatorUid === authStore.uid || m.senderUid === authStore.uid)
+      );
+      for (const m of allMyBoards) {
+        if (m.metadata?.assetId && allMyBoards.some(other => other.id === m.metadata.assetId)) {
+          await deleteDoc(doc(db, 'rooms', currentRoom.value.roomId, 'messages', m.id)).catch(() => {});
+        }
+      }
+
       if (existingAssetId) {
-        // Move existing asset from Personal to Public in assets drawer
+        // Upgrade existing personal asset to public shared whiteboard!
+        // 1. Set isPrivate: false, wasPublished: true, isSharedPost: true
+        // 2. Update content from 'Personal Draft' to `${hostName} shared a collaborative whiteboard`
+        // 3. Set timestamp to Date.now() so it appears as a fresh card at the bottom of the chat!
+        // NO SECOND MESSAGE IS CREATED!
         await updateCustomMessage(existingAssetId, {
+          content: `${hostName} shared a collaborative whiteboard`,
+          timestamp: Date.now(),
           fileData: thumbnail ? {
             type: 'image',
             url: thumbnail,
@@ -1532,40 +1549,42 @@ export const useRoomStore = defineStore('room', () => {
           metadata: {
             whiteboardJson: initialJson || '',
             isPrivate: false,
+            wasPublished: true,
             isSharedPost: true,
             creatorUid: authStore.uid,
             creatorName: hostName
           }
         });
+        return existingAssetId;
+      } else {
+        // Send a single whiteboard share card message to the chat stream
+        const newId = await sendCustomMessage({
+          senderUid: authStore.uid,
+          senderName: hostName,
+          senderAvatar: authStore.avatar || '🎨',
+          content: `${hostName} shared a collaborative whiteboard`,
+          type: 'whiteboard_state',
+          fileData: {
+            type: 'image',
+            url: thumbnail || '',
+            name: 'whiteboard.jpg',
+            size: 0
+          },
+          metadata: {
+            whiteboardJson: initialJson || '',
+            isPrivate: false,
+            wasPublished: true,
+            isSharedPost: true,
+            creatorUid: authStore.uid,
+            creatorName: hostName
+          }
+        });
+        return newId;
       }
-
-      // ALWAYS send a brand new whiteboard share card message to the chat stream!
-      // This guarantees that whether the user is alone or with others,
-      // a fresh message with the whiteboard card and thumbnail appears at the bottom of the chat!
-      await sendCustomMessage({
-        senderUid: authStore.uid,
-        senderName: hostName,
-        senderAvatar: authStore.avatar || '🎨',
-        content: `${hostName} shared a collaborative whiteboard`,
-        type: 'whiteboard_state',
-        fileData: {
-          type: 'image',
-          url: thumbnail || '',
-          name: 'whiteboard.jpg',
-          size: 0
-        },
-        metadata: {
-          whiteboardJson: initialJson || '',
-          isPrivate: false,
-          isSharedPost: true,
-          creatorUid: authStore.uid,
-          creatorName: hostName,
-          assetId: existingAssetId || null
-        }
-      });
     } catch (e) {
       console.error('Failed to start whiteboard:', e);
       alert('Failed to publish whiteboard: ' + ((e as any).message || String(e)));
+      return null;
     }
   };
 
@@ -1600,7 +1619,7 @@ export const useRoomStore = defineStore('room', () => {
     }
   };
 
-  const makeWhiteboardPrivate = async () => {
+  const makeWhiteboardPrivate = async (targetAssetId?: string | null) => {
     if (!currentRoom.value || !db) return;
     try {
       await updateDoc(doc(db, 'rooms', currentRoom.value.roomId), {
@@ -1611,18 +1630,32 @@ export const useRoomStore = defineStore('room', () => {
         whiteboardThumbnail: null
       });
 
-      // Move shared whiteboard back to host's Personal collection (clean out from Public area!)
-      const publicSharedAssets = currentRoom.value.messages.filter(m => 
+      // Find all whiteboard messages created by user that are currently in this room
+      const allMyBoards = currentRoom.value.messages.filter(m => 
         m.type === 'whiteboard_state' && 
-        !m.metadata?.isPrivate && 
         (m.metadata?.creatorUid === authStore.uid || m.senderUid === authStore.uid)
       );
-      for (const asset of publicSharedAssets) {
+
+      // Clean up any duplicate pointer messages created earlier with metadata.assetId
+      for (const m of allMyBoards) {
+        if (m.metadata?.assetId && allMyBoards.some(other => other.id === m.metadata.assetId)) {
+          await deleteDoc(doc(db, 'rooms', currentRoom.value.roomId, 'messages', m.id)).catch(() => {});
+        }
+      }
+
+      // Filter target assets to make private
+      const targets = allMyBoards.filter(m => 
+        !m.metadata?.assetId && 
+        (m.id === targetAssetId || (!targetAssetId && !m.metadata?.isPrivate))
+      );
+
+      for (const asset of targets) {
         await updateCustomMessage(asset.id, {
           metadata: {
             ...(asset.metadata || {}),
             isPrivate: true,
-            isSharedPost: true
+            isSharedPost: false,
+            wasPublished: true // Retain wasPublished so the card in chat stream remains visible (grayed out)
           }
         });
       }

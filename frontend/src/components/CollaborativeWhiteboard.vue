@@ -7197,11 +7197,14 @@ const handleCancelCloseModal = () => {
   showCloseConfirmModal.value = false;
 };
 
-const handlePublish = () => {
+const handlePublish = async () => {
   if (!canvas) return;
   const json = getSerializedCanvasJson();
   const thumbnail = getCanvasSnapshot(0.3);
-  roomStore.startWhiteboardSession(json, thumbnail, currentAssetId.value);
+  const assignedId = await roomStore.startWhiteboardSession(json, thumbnail, currentAssetId.value);
+  if (assignedId && !currentAssetId.value) {
+    currentAssetId.value = assignedId;
+  }
   displayToast('Whiteboard published for team collaboration');
 };
 
@@ -7214,7 +7217,8 @@ const handleConfirmMakePrivate = async () => {
 
   isConvertingToPrivate.value = true;
   try {
-    await roomStore.makeWhiteboardPrivate();
+    await roomStore.makeWhiteboardPrivate(currentAssetId.value);
+    await triggerAutoSaveAsAsset();
   } catch (e) {
     console.error('Failed to make private:', e);
   } finally {

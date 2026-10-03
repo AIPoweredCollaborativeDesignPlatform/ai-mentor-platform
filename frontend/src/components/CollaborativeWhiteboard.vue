@@ -67,7 +67,8 @@ const CUSTOM_PROPS = [
   'authorUid',
   'id',
   'fontSize',
-  '_origEndpointCorners'
+  '_origEndpointCorners',
+  'hasLockedChildren'
 ];
 
 const hasUnsavedChanges = ref(false);
@@ -1482,8 +1483,12 @@ const updateSelectionState = () => {
     const targets = active.getObjects ? active.getObjects() : active._objects || [];
     const allLocked = targets.length > 0 && targets.every((o: any) => o.isLocked === true);
     const anyLocked = targets.some((o: any) => o.isLocked === true);
-    isObjectLocked.value = !!active.isLocked || anyLocked;
-    const shouldFreeze = !!active.isLocked || allLocked;
+    const shouldFreeze = !!active.isLocked || (active as any).hasLockedChildren || anyLocked;
+    isObjectLocked.value = shouldFreeze;
+    (active as any).hasLockedChildren = anyLocked;
+    if (shouldFreeze) {
+      (active as any).isLocked = true;
+    }
     active.set({
       lockMovementX: shouldFreeze,
       lockMovementY: shouldFreeze,
@@ -1494,10 +1499,17 @@ const updateSelectionState = () => {
       lockUniScaling: false,
       lockScalingFlip: true
     });
-    active.setControlsVisibility({
-      tl: true, tr: true, bl: true, br: true,
-      ml: true, mr: true, mt: true, mb: true, mtr: true
-    });
+    if (!shouldFreeze) {
+      active.setControlsVisibility({
+        tl: true, tr: true, bl: true, br: true,
+        ml: true, mr: true, mt: true, mb: true, mtr: true
+      });
+    } else {
+      active.setControlsVisibility({
+        tl: false, tr: false, bl: false, br: false,
+        ml: false, mr: false, mt: false, mb: false, mtr: false
+      });
+    }
   } else if (active && (active.isStickyNote || active.stickyColorConfig)) {
     active.set({
       lockUniScaling: true,
@@ -4673,9 +4685,20 @@ const initFabric = () => {
       }
     }
 
-    // 1. If group or activeSelection contains locked items:
-    // Only freeze if ALL targets are locked. If mixed, allow moving unlocked items while keeping locked items stationary.
-    if (obj.type === 'activeselection' || (obj.type === 'group' && !obj.isStickyNote)) {
+    // 1. If group contains locked items, freeze moving completely to protect locked items
+    if (obj.type === 'group' && !obj.isStickyNote && !(obj as any).isArrow) {
+      const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
+      const anyLocked = (obj as any).isLocked || (obj as any).hasLockedChildren || targets.some((o: any) => o.isLocked);
+      if (anyLocked) {
+        if (obj._dragStartLeft !== undefined) obj.left = obj._dragStartLeft;
+        if (obj._dragStartTop !== undefined) obj.top = obj._dragStartTop;
+        obj.setCoords();
+        return;
+      }
+    }
+
+    // 2. If activeSelection contains items:
+    if (obj.type === 'activeselection' || obj.type === 'activeSelection') {
       const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
       const allLocked = targets.length > 0 && targets.every((o: any) => o.isLocked);
       if (allLocked) {
@@ -4771,6 +4794,9 @@ const initFabric = () => {
       obj.centeredScaling = !!(e.e?.altKey);
       obj._dragStartLeft = obj.left;
       obj._dragStartTop = obj.top;
+      obj._dragStartScaleX = obj.scaleX || 1;
+      obj._dragStartScaleY = obj.scaleY || 1;
+      obj._dragStartAngle = obj.angle || 0;
       
       const targets = obj.type === 'activeselection' || obj.type === 'activeSelection' || obj.type === 'group' 
         ? (obj.getObjects ? obj.getObjects() : obj._objects || []) 
@@ -4801,6 +4827,21 @@ const initFabric = () => {
     hasObjectTransformed = true;
     const obj = e?.target;
     if (obj) {
+      // 0. If group contains ANY locked item, scaling is completely forbidden to protect locked items from displacement!
+      if (obj.type === 'group' || obj instanceof fabric.Group) {
+        const targets = obj.getObjects ? obj.getObjects() : (obj as any)._objects || [];
+        const anyLocked = (obj as any).isLocked || (obj as any).hasLockedChildren || targets.some((c: any) => c.isLocked);
+        if (anyLocked) {
+          if ((obj as any)._dragStartScaleX !== undefined) obj.scaleX = (obj as any)._dragStartScaleX;
+          if ((obj as any)._dragStartScaleY !== undefined) obj.scaleY = (obj as any)._dragStartScaleY;
+          if ((obj as any)._dragStartLeft !== undefined) obj.left = (obj as any)._dragStartLeft;
+          if ((obj as any)._dragStartTop !== undefined) obj.top = (obj as any)._dragStartTop;
+          obj.setCoords();
+          canvas?.requestRenderAll();
+          return;
+        }
+      }
+
       // 1. Single sticky note: scaling is completely disabled
       if (obj.isStickyNote || obj.stickyColorConfig) {
         obj.set({
@@ -4869,6 +4910,18 @@ const initFabric = () => {
     const obj = e?.target;
     if (obj && (obj.type === 'activeselection' || obj.type === 'activeSelection' || obj.type === 'group')) {
       const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
+
+      // If group contains locked children, rotating is forbidden!
+      if (obj.type === 'group' || obj instanceof fabric.Group) {
+        const anyLocked = (obj as any).isLocked || (obj as any).hasLockedChildren || targets.some((c: any) => c.isLocked);
+        if (anyLocked) {
+          if ((obj as any)._dragStartAngle !== undefined) obj.angle = (obj as any)._dragStartAngle;
+          obj.setCoords();
+          canvas?.requestRenderAll();
+          return;
+        }
+      }
+
       targets.forEach((c: any) => {
         if (c.isStickyNote || c.stickyColorConfig) {
           c.angle = -(obj.angle || 0);
@@ -5042,11 +5095,62 @@ const applyStickyNoteMethods = (note: any) => {
   setupStickyControls(note);
 };
 
+const normalizeStickyNoteDimensions = (note: any, parentGroup?: any) => {
+  if (!note) return;
+  note.isStickyNote = true;
+  if (note.text === 'Type note here...' || note.text === 'Type here...') {
+    note.text = '';
+  }
+  note.width = STICKY_NOTE_CONST_SIZE;
+  note.minHeight = STICKY_NOTE_CONST_SIZE;
+  note.textAlign = 'center';
+  note.splitByGrapheme = true;
+  note.lockUniScaling = true;
+  note.hasRotatingPoint = false;
+  note.objectCaching = false;
+  note.perPixelTargetFind = false;
+  applyStickyNoteMethods(note);
+  note.initDimensions?.();
+  note.height = Math.max(note.height || 0, STICKY_NOTE_CONST_SIZE);
+
+  const group = parentGroup || note.group;
+  if (group && (group.type === 'group' || group instanceof fabric.Group)) {
+    let accScaleX = 1;
+    let accScaleY = 1;
+    let accAngle = 0;
+    let isFlipX = false;
+    let isFlipY = false;
+    let curr = group;
+    while (curr) {
+      const sx = curr.scaleX || 1;
+      const sy = curr.scaleY || 1;
+      accScaleX *= Math.abs(sx);
+      accScaleY *= Math.abs(sy);
+      if (curr.flipX || sx < 0) isFlipX = !isFlipX;
+      if (curr.flipY || sy < 0) isFlipY = !isFlipY;
+      accAngle += (curr.angle || 0);
+      curr = curr.group;
+    }
+    note.scaleX = 1 / (accScaleX || 1);
+    note.scaleY = 1 / (accScaleY || 1);
+    note.flipX = isFlipX;
+    note.flipY = isFlipY;
+    note.angle = -accAngle;
+  } else {
+    note.scaleX = 1;
+    note.scaleY = 1;
+    note.flipX = false;
+    note.flipY = false;
+    note.angle = 0;
+  }
+  note.setCoords();
+};
+
 // Rehydrate custom attributes, methods, and constraints after deserializing from JSON
 const rehydrateCanvasObjects = () => {
   if (!canvas) return;
 
-  const processObject = (o: any) => {
+  const processObject = (o: any, parentGroup?: any) => {
     o.set({ strokeUniform: true, perPixelTargetFind: true });
 
     if (!o.id) {
@@ -5070,25 +5174,7 @@ const rehydrateCanvasObjects = () => {
     }
 
     if (o.isStickyNote || (o.type === 'textbox' && (o.stickyColorConfig || o.backgroundColor))) {
-      o.isStickyNote = true;
-      if (o.text === 'Type note here...' || o.text === 'Type here...') {
-        o.text = '';
-      }
-      o.width = STICKY_NOTE_CONST_SIZE;
-      o.minHeight = STICKY_NOTE_CONST_SIZE;
-      o.height = Math.max(o.height || 0, STICKY_NOTE_CONST_SIZE);
-      o.scaleX = 1;
-      o.scaleY = 1;
-      o.textAlign = 'center';
-      o.splitByGrapheme = true;
-      o.lockUniScaling = true;
-      o.hasRotatingPoint = false;
-      o.objectCaching = false;
-      o.perPixelTargetFind = false;
-      applyStickyNoteMethods(o);
-      o.initDimensions?.();
-      o.height = Math.max(o.height || 0, STICKY_NOTE_CONST_SIZE);
-      o.setCoords();
+      normalizeStickyNoteDimensions(o, parentGroup);
     }
 
     if ((o as any).isArrow) {
@@ -5137,16 +5223,41 @@ const rehydrateCanvasObjects = () => {
         lockScalingY: true,
         hasControls: false
       });
+      if (o.setControlsVisibility) {
+        o.setControlsVisibility({
+          tl: false, tr: false, bl: false, br: false,
+          ml: false, mr: false, mt: false, mb: false, mtr: false
+        });
+      }
     }
 
     // Recursively process group children (so nested sticky notes inside groups receive methods and dimensions)
     if (o.type === 'group' || o instanceof fabric.Group) {
       const groupChildren = o.getObjects ? o.getObjects() : (o._objects || []);
-      groupChildren.forEach((child: any) => processObject(child));
+      const anyLocked = groupChildren.some((child: any) => child.isLocked === true);
+      (o as any).hasLockedChildren = anyLocked;
+      if (o.isLocked || anyLocked) {
+        (o as any).isLocked = true;
+        o.set({
+          lockMovementX: true,
+          lockMovementY: true,
+          lockRotation: true,
+          lockScalingX: true,
+          lockScalingY: true,
+          hasControls: false
+        });
+        if (o.setControlsVisibility) {
+          o.setControlsVisibility({
+            tl: false, tr: false, bl: false, br: false,
+            ml: false, mr: false, mt: false, mb: false, mtr: false
+          });
+        }
+      }
+      groupChildren.forEach((child: any) => processObject(child, o));
     }
   };
 
-  canvas.getObjects().forEach(processObject);
+  canvas.getObjects().forEach((o: any) => processObject(o));
 };
 
 const syncNodeEditingStateAfterReload = () => {
@@ -5596,45 +5707,32 @@ const pasteSelection = async (targetPoint?: { x: number; y: number }) => {
     });
 
     if (obj.isStickyNote || (obj.type === 'textbox' && (obj.stickyColorConfig || obj.backgroundColor))) {
-      obj.isStickyNote = true;
-      obj.width = STICKY_NOTE_CONST_SIZE;
-      obj.minHeight = STICKY_NOTE_CONST_SIZE;
-      obj.height = Math.max(obj.height || 0, STICKY_NOTE_CONST_SIZE);
-      obj.scaleX = 1;
-      obj.scaleY = 1;
-      obj.textAlign = 'center';
-      obj.splitByGrapheme = true;
-      obj.lockUniScaling = true;
-      obj.hasRotatingPoint = false;
+      normalizeStickyNoteDimensions(obj);
       obj.set({
         perPixelTargetFind: false,
         selectable: true,
         evented: true
       });
-      applyStickyNoteMethods(obj);
-      obj.initDimensions?.();
-      obj.height = Math.max(obj.height || 0, STICKY_NOTE_CONST_SIZE);
-      obj.setCoords();
     }
 
     if (obj.type === 'group' || obj instanceof fabric.Group) {
       const children = obj.getObjects ? obj.getObjects() : (obj as any)._objects || [];
+      const anyLocked = children.some((child: any) => child.isLocked === true);
+      (obj as any).hasLockedChildren = anyLocked;
+      if (obj.isLocked || anyLocked) {
+        (obj as any).isLocked = true;
+        obj.set({
+          lockMovementX: true,
+          lockMovementY: true,
+          lockRotation: true,
+          lockScalingX: true,
+          lockScalingY: true,
+          hasControls: false
+        });
+      }
       children.forEach((child: any) => {
         if (child.isStickyNote || (child.type === 'textbox' && (child.stickyColorConfig || child.backgroundColor))) {
-          child.isStickyNote = true;
-          child.width = STICKY_NOTE_CONST_SIZE;
-          child.minHeight = STICKY_NOTE_CONST_SIZE;
-          child.height = Math.max(child.height || 0, STICKY_NOTE_CONST_SIZE);
-          child.scaleX = 1;
-          child.scaleY = 1;
-          child.textAlign = 'center';
-          child.splitByGrapheme = true;
-          child.lockUniScaling = true;
-          child.hasRotatingPoint = false;
-          applyStickyNoteMethods(child);
-          child.initDimensions?.();
-          child.height = Math.max(child.height || 0, STICKY_NOTE_CONST_SIZE);
-          child.setCoords();
+          normalizeStickyNoteDimensions(child, obj);
         }
       });
     }
@@ -5956,16 +6054,7 @@ const exitGroupIsolation = () => {
     const remainingItems = isolatedItems.filter(item => canvas?.getObjects().includes(item));
     remainingItems.forEach(item => {
       if (item.isStickyNote || item.stickyColorConfig || item.type === 'textbox') {
-        item.isStickyNote = true;
-        item.width = STICKY_NOTE_CONST_SIZE;
-        item.minHeight = STICKY_NOTE_CONST_SIZE;
-        item.scaleX = 1;
-        item.scaleY = 1;
-        item.flipX = false;
-        item.flipY = false;
-        applyStickyNoteMethods(item);
-        item.initDimensions?.();
-        item.height = Math.max(item.height || 0, STICKY_NOTE_CONST_SIZE);
+        normalizeStickyNoteDimensions(item);
       }
       const w = (item.width || 0) * (item.scaleX || 1);
       const h = (item.height || 0) * (item.scaleY || 1);
@@ -5994,7 +6083,7 @@ const exitGroupIsolation = () => {
       const allLocked = remainingItems.length > 0 && remainingItems.every((o: any) => o.isLocked);
       const anyLocked = remainingItems.some((o: any) => o.isLocked);
       (newGroup as any).hasLockedChildren = anyLocked;
-      if (allLocked) {
+      if (anyLocked) {
         (newGroup as any).isLocked = true;
         newGroup.set({
           lockMovementX: true,
@@ -6004,6 +6093,12 @@ const exitGroupIsolation = () => {
           lockScalingY: true,
           hasControls: false
         });
+        if (newGroup.setControlsVisibility) {
+          newGroup.setControlsVisibility({
+            tl: false, tr: false, bl: false, br: false,
+            ml: false, mr: false, mt: false, mb: false, mtr: false
+          });
+        }
       }
       canvas.add(newGroup);
       canvas.setActiveObject(newGroup);
@@ -6125,6 +6220,20 @@ const toggleLockSelected = () => {
       hasControls: !newLocked,
       isLocked: newLocked
     });
+    activeObj.hasLockedChildren = newLocked;
+    if (activeObj.setControlsVisibility) {
+      if (!newLocked) {
+        activeObj.setControlsVisibility({
+          tl: true, tr: true, bl: true, br: true,
+          ml: true, mr: true, mt: true, mb: true, mtr: true
+        });
+      } else {
+        activeObj.setControlsVisibility({
+          tl: false, tr: false, bl: false, br: false,
+          ml: false, mr: false, mt: false, mb: false, mtr: false
+        });
+      }
+    }
   }
 
   const targetIds = targets.map((o: any) => o.id || o.arrowId).filter(Boolean);
@@ -6517,6 +6626,25 @@ const groupObjects = () => {
         item.initialMatrix = item.calcTransformMatrix();
       }
     });
+    const anyLocked = items.some((item: any) => item.isLocked === true);
+    if (anyLocked) {
+      (group as any).isLocked = true;
+      (group as any).hasLockedChildren = true;
+      group.set({
+        lockMovementX: true,
+        lockMovementY: true,
+        lockRotation: true,
+        lockScalingX: true,
+        lockScalingY: true,
+        hasControls: false
+      });
+      if (group.setControlsVisibility) {
+        group.setControlsVisibility({
+          tl: false, tr: false, bl: false, br: false,
+          ml: false, mr: false, mt: false, mb: false, mtr: false
+        });
+      }
+    }
     canvas.add(group);
     canvas.setActiveObject(group);
     canvas.requestRenderAll();
@@ -6544,9 +6672,23 @@ const ungroupObjects = () => {
         item.initialMatrix = item.calcTransformMatrix();
       }
       if (item.isStickyNote || item.stickyColorConfig) {
-        item.minHeight = item.minHeight || 180;
-        applyStickyNoteMethods(item);
-        item.initDimensions?.();
+        normalizeStickyNoteDimensions(item);
+      }
+      if (item.isLocked) {
+        item.set({
+          lockMovementX: true,
+          lockMovementY: true,
+          lockRotation: true,
+          lockScalingX: true,
+          lockScalingY: true,
+          hasControls: false
+        });
+        if (item.setControlsVisibility) {
+          item.setControlsVisibility({
+            tl: false, tr: false, bl: false, br: false,
+            ml: false, mr: false, mt: false, mb: false, mtr: false
+          });
+        }
       }
       canvas?.add(item);
     });
@@ -6578,9 +6720,23 @@ const ungroupObjects = () => {
           item.initialMatrix = item.calcTransformMatrix();
         }
         if (item.isStickyNote || item.stickyColorConfig) {
-          item.minHeight = item.minHeight || 180;
-          applyStickyNoteMethods(item);
-          item.initDimensions?.();
+          normalizeStickyNoteDimensions(item);
+        }
+        if (item.isLocked) {
+          item.set({
+            lockMovementX: true,
+            lockMovementY: true,
+            lockRotation: true,
+            lockScalingX: true,
+            lockScalingY: true,
+            hasControls: false
+          });
+          if (item.setControlsVisibility) {
+            item.setControlsVisibility({
+              tl: false, tr: false, bl: false, br: false,
+              ml: false, mr: false, mt: false, mb: false, mtr: false
+            });
+          }
         }
         canvas?.add(item);
         allResultingItems.push(item);
@@ -6656,16 +6812,15 @@ const undo = async () => {
             (item as any).initialMatrix = item.calcTransformMatrix();
           }
           if ((item as any).isStickyNote || item.type === 'textbox') {
-            (item as any).isStickyNote = true;
-            (item as any).width = STICKY_NOTE_CONST_SIZE;
-            (item as any).minHeight = STICKY_NOTE_CONST_SIZE;
-            (item as any).scaleX = 1;
-            (item as any).scaleY = 1;
-            (item as any).flipX = false;
-            (item as any).flipY = false;
-            applyStickyNoteMethods(item);
-            item.initDimensions?.();
-            (item as any).height = Math.max((item as any).height || 0, STICKY_NOTE_CONST_SIZE);
+            normalizeStickyNoteDimensions(item);
+          }
+          if (item.type === 'group' || item instanceof fabric.Group) {
+            const children = item.getObjects ? item.getObjects() : (item as any)._objects || [];
+            children.forEach((c: any) => {
+              if (c.isStickyNote || c.type === 'textbox') {
+                normalizeStickyNoteDimensions(c, item);
+              }
+            });
           }
           item.setCoords();
           cv.add(item);
@@ -6782,16 +6937,7 @@ const undo = async () => {
             });
             found.set(item.beforeProps);
             if ((found as any).isStickyNote || (found as any).stickyColorConfig || found.type === 'textbox') {
-              (found as any).isStickyNote = true;
-              (found as any).width = STICKY_NOTE_CONST_SIZE;
-              (found as any).minHeight = STICKY_NOTE_CONST_SIZE;
-              (found as any).scaleX = 1;
-              (found as any).scaleY = 1;
-              (found as any).flipX = false;
-              (found as any).flipY = false;
-              applyStickyNoteMethods(found);
-              (found as any).initDimensions?.();
-              (found as any).height = Math.max((found as any).height || 0, STICKY_NOTE_CONST_SIZE);
+              normalizeStickyNoteDimensions(found, (found as any).group);
             }
             if (found.left !== undefined) {
               const w = (found.width || 0) * (found.scaleX || 1);
@@ -6874,16 +7020,15 @@ const redo = async () => {
             (item as any).initialMatrix = item.calcTransformMatrix();
           }
           if ((item as any).isStickyNote || item.type === 'textbox') {
-            (item as any).isStickyNote = true;
-            (item as any).width = STICKY_NOTE_CONST_SIZE;
-            (item as any).minHeight = STICKY_NOTE_CONST_SIZE;
-            (item as any).scaleX = 1;
-            (item as any).scaleY = 1;
-            (item as any).flipX = false;
-            (item as any).flipY = false;
-            applyStickyNoteMethods(item);
-            item.initDimensions?.();
-            (item as any).height = Math.max((item as any).height || 0, STICKY_NOTE_CONST_SIZE);
+            normalizeStickyNoteDimensions(item);
+          }
+          if (item.type === 'group' || item instanceof fabric.Group) {
+            const children = item.getObjects ? item.getObjects() : (item as any)._objects || [];
+            children.forEach((c: any) => {
+              if (c.isStickyNote || c.type === 'textbox') {
+                normalizeStickyNoteDimensions(c, item);
+              }
+            });
           }
           item.setCoords();
           cv.add(item);
@@ -7004,16 +7149,7 @@ const redo = async () => {
             });
             found.set(item.beforeProps);
             if ((found as any).isStickyNote || (found as any).stickyColorConfig || found.type === 'textbox') {
-              (found as any).isStickyNote = true;
-              (found as any).width = STICKY_NOTE_CONST_SIZE;
-              (found as any).minHeight = STICKY_NOTE_CONST_SIZE;
-              (found as any).scaleX = 1;
-              (found as any).scaleY = 1;
-              (found as any).flipX = false;
-              (found as any).flipY = false;
-              applyStickyNoteMethods(found);
-              (found as any).initDimensions?.();
-              (found as any).height = Math.max((found as any).height || 0, STICKY_NOTE_CONST_SIZE);
+              normalizeStickyNoteDimensions(found, (found as any).group);
             }
             if (found.left !== undefined) {
               const w = (found.width || 0) * (found.scaleX || 1);

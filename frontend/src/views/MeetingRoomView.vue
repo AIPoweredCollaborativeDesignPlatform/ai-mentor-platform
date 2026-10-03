@@ -306,8 +306,8 @@ const handleRetryAiMessage = async (messageId: string) => {
 const openWhiteboardState = async (msg: any) => {
   if (msg.type !== 'whiteboard_state') return;
   const isHost = roomStore.currentRoom?.whiteboardHostUid === authStore.uid || msg.metadata?.creatorUid === authStore.uid || msg.senderUid === authStore.uid;
-  if (!roomStore.currentRoom?.whiteboardActive && !isHost && msg.metadata?.isPrivate && !msg.metadata?.isSharedPost) {
-    roomStore.pushToast('Access Restricted', 'This whiteboard is private.', 'warning');
+  if (msg.metadata?.isPrivate && !isHost) {
+    roomStore.pushToast('Access Restricted', '此畫布已設為不公開（僅限建立者開啟）', 'warning');
     return;
   }
   if (roomStore.currentRoom?.whiteboardActive && (msg.metadata?.isSharedPost || !msg.metadata?.isPrivate)) {
@@ -1594,11 +1594,13 @@ onUnmounted(() => {
               <!-- Embedded Whiteboard Share Card -->
               <div
                 v-else-if="msg.type === 'whiteboard_state'"
-                class="mt-2 rounded-xl overflow-hidden shadow-lg relative border transition max-w-[210px] sm:max-w-[250px] bg-slate-900 select-none"
+                class="mt-2 rounded-xl overflow-hidden shadow-lg relative border transition max-w-[210px] sm:max-w-[250px] bg-slate-900 select-none cursor-pointer group"
                 :class="[
-                  (msg.metadata?.isPrivate && !msg.metadata?.isSharedPost && msg.senderUid !== authStore.uid && msg.metadata?.creatorUid !== authStore.uid)
-                    ? 'opacity-60 cursor-not-allowed border-slate-800'
-                    : 'cursor-pointer group hover:border-indigo-500 border-indigo-500/40'
+                  msg.metadata?.isPrivate
+                    ? 'border-slate-800 bg-slate-950/80 hover:border-slate-700'
+                    : (roomStore.currentRoom?.whiteboardActive && (msg.metadata?.isSharedPost || !msg.metadata?.isPrivate))
+                      ? 'border-emerald-500/40 hover:border-emerald-400 shadow-emerald-950/20'
+                      : 'border-indigo-500/40 hover:border-indigo-500'
                 ]"
                 @click="openWhiteboardState(msg)"
               >
@@ -1608,8 +1610,8 @@ onUnmounted(() => {
                     :src="msg.fileData.url"
                     class="w-full h-full object-cover transition duration-300"
                     :class="[
-                      (msg.metadata?.isPrivate && !msg.metadata?.isSharedPost && msg.senderUid !== authStore.uid && msg.metadata?.creatorUid !== authStore.uid)
-                        ? 'grayscale brightness-75'
+                      msg.metadata?.isPrivate
+                        ? 'grayscale opacity-60 contrast-75 brightness-75'
                         : 'group-hover:scale-105'
                     ]"
                   />
@@ -1617,16 +1619,13 @@ onUnmounted(() => {
                     <Palette class="w-8 h-8 opacity-40" />
                   </div>
 
-                  <!-- Locked Overlay for non-hosts when explicitly private draft -->
+                  <!-- Private Badge (Top Right) -->
                   <div
-                    v-if="msg.metadata?.isPrivate && !msg.metadata?.isSharedPost && msg.senderUid !== authStore.uid && msg.metadata?.creatorUid !== authStore.uid"
-                    class="absolute inset-0 bg-slate-950/80 flex flex-col items-center justify-center p-2 text-center backdrop-blur-xs"
+                    v-if="msg.metadata?.isPrivate"
+                    class="absolute top-1.5 right-1.5 z-10 px-2 py-0.5 rounded-full bg-slate-900/90 border border-slate-700/80 text-slate-400 text-[9px] font-bold shadow flex items-center gap-1 backdrop-blur-xs"
                   >
-                    <div class="w-7 h-7 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center mb-1">
-                      <Lock class="w-3.5 h-3.5 text-amber-400" />
-                    </div>
-                    <span class="text-[10px] font-bold text-slate-200 leading-tight">Private Draft</span>
-                    <span class="text-[8px] text-slate-400">Creator access only</span>
+                    <Lock class="w-2.5 h-2.5 text-slate-400" />
+                    <span>不公開</span>
                   </div>
 
                   <!-- Active Live Badge (Top Right) -->
@@ -1638,14 +1637,13 @@ onUnmounted(() => {
                     <span>Live</span>
                   </div>
 
-                  <!-- Active Join Hover Action -->
+                  <!-- Active Join / Open Hover Action -->
                   <div
-                    v-if="!msg.metadata?.isPrivate || msg.metadata?.isSharedPost || msg.senderUid === authStore.uid || msg.metadata?.creatorUid === authStore.uid"
                     class="absolute inset-0 flex items-center justify-center bg-indigo-950/60 opacity-0 group-hover:opacity-100 transition z-10"
                   >
                     <span class="bg-indigo-600 hover:bg-indigo-500 text-white px-2.5 py-1 rounded-lg text-xs font-bold shadow-lg flex items-center gap-1.5 transition">
                       <Palette class="w-3.5 h-3.5" />
-                      {{ roomStore.currentRoom?.whiteboardActive ? 'Join Canvas' : 'Open Whiteboard' }}
+                      {{ msg.metadata?.isPrivate ? '開啟私有畫布' : (roomStore.currentRoom?.whiteboardActive ? '加入協作畫布' : '開啟畫布') }}
                     </span>
                   </div>
                 </div>
@@ -1655,7 +1653,11 @@ onUnmounted(() => {
                   <span class="text-slate-300 font-medium truncate max-w-[140px]">
                     {{ msg.metadata?.creatorName || msg.senderName }}'s Board
                   </span>
-                  <span v-if="roomStore.currentRoom?.whiteboardActive && (msg.metadata?.isSharedPost || !msg.metadata?.isPrivate)" class="text-emerald-400 font-semibold text-[9px] shrink-0">
+                  <span v-if="msg.metadata?.isPrivate" class="text-slate-500 font-semibold text-[9px] shrink-0 flex items-center gap-1">
+                    <Lock class="w-2.5 h-2.5" />
+                    不公開
+                  </span>
+                  <span v-else-if="roomStore.currentRoom?.whiteboardActive && (msg.metadata?.isSharedPost || !msg.metadata?.isPrivate)" class="text-emerald-400 font-semibold text-[9px] shrink-0">
                     Active
                   </span>
                   <span v-else class="text-slate-500 text-[9px] shrink-0">

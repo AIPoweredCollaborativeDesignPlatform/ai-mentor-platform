@@ -1521,7 +1521,7 @@ export const useRoomStore = defineStore('room', () => {
       await updateDoc(doc(db, 'rooms', currentRoom.value.roomId), payload);
 
       if (existingAssetId) {
-        // Move existing asset from Personal to Public (NO DUPLICATION!)
+        // Move existing asset from Personal to Public in assets drawer
         await updateCustomMessage(existingAssetId, {
           fileData: thumbnail ? {
             type: 'image',
@@ -1537,29 +1537,32 @@ export const useRoomStore = defineStore('room', () => {
             creatorName: hostName
           }
         });
-      } else {
-        // Send whiteboard share card to chat
-        await sendCustomMessage({
-          senderUid: authStore.uid,
-          senderName: hostName,
-          senderAvatar: authStore.avatar || '🎨',
-          content: `${hostName} shared a collaborative whiteboard`,
-          type: 'whiteboard_state',
-          fileData: {
-            type: 'image',
-            url: thumbnail || '',
-            name: 'whiteboard.jpg',
-            size: 0
-          },
-          metadata: {
-            whiteboardJson: initialJson || '',
-            isPrivate: false,
-            isSharedPost: true,
-            creatorUid: authStore.uid,
-            creatorName: hostName
-          }
-        });
       }
+
+      // ALWAYS send a brand new whiteboard share card message to the chat stream!
+      // This guarantees that whether the user is alone or with others,
+      // a fresh message with the whiteboard card and thumbnail appears at the bottom of the chat!
+      await sendCustomMessage({
+        senderUid: authStore.uid,
+        senderName: hostName,
+        senderAvatar: authStore.avatar || '🎨',
+        content: `${hostName} shared a collaborative whiteboard`,
+        type: 'whiteboard_state',
+        fileData: {
+          type: 'image',
+          url: thumbnail || '',
+          name: 'whiteboard.jpg',
+          size: 0
+        },
+        metadata: {
+          whiteboardJson: initialJson || '',
+          isPrivate: false,
+          isSharedPost: true,
+          creatorUid: authStore.uid,
+          creatorName: hostName,
+          assetId: existingAssetId || null
+        }
+      });
     } catch (e) {
       console.error('Failed to start whiteboard:', e);
       alert('Failed to publish whiteboard: ' + ((e as any).message || String(e)));

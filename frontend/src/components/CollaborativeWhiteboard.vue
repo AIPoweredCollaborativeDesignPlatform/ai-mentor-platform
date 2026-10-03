@@ -1400,6 +1400,8 @@ const duplicateArrow = (arrow: any) => {
   }
 };
 
+let isFilteringSelection = false;
+
 const updateSelectionState = () => {
   if (!canvas) {
     hasSelection.value = false;
@@ -1432,7 +1434,30 @@ const updateSelectionState = () => {
     const targets = active.getObjects ? active.getObjects() : active._objects || [];
     const allLocked = targets.length > 0 && targets.every((o: any) => o.isLocked === true);
     const anyLocked = targets.some((o: any) => o.isLocked === true);
-    const hasSticky = targets.some((o: any) => o.isStickyNote || o.stickyColorConfig);
+    const hasUnlocked = targets.some((o: any) => !o.isLocked);
+
+    // If multi-selection contains both unlocked and locked objects, automatically eject locked objects!
+    // Locked objects must never be dragged, scaled, or reverse-compensated together with unlocked objects.
+    if (hasUnlocked && anyLocked) {
+      if (!isFilteringSelection) {
+        isFilteringSelection = true;
+        try {
+          const unlockedOnly = targets.filter((o: any) => !o.isLocked);
+          canvas.discardActiveObject();
+          if (unlockedOnly.length === 1) {
+            canvas.setActiveObject(unlockedOnly[0]);
+          } else if (unlockedOnly.length > 1) {
+            const newSel = new fabric.ActiveSelection(unlockedOnly, { canvas });
+            canvas.setActiveObject(newSel);
+          }
+          canvas.requestRenderAll();
+        } finally {
+          isFilteringSelection = false;
+        }
+        return;
+      }
+    }
+
     isObjectLocked.value = anyLocked;
     active.set({
       lockMovementX: allLocked,
@@ -1442,11 +1467,17 @@ const updateSelectionState = () => {
       lockScalingY: allLocked,
       hasControls: !allLocked
     });
-    // Multi-selection controls: ALWAYS enable single-axis scale handles (ml, mr, mt, mb) and rotation
-    active.setControlsVisibility({
-      tl: true, tr: true, bl: true, br: true,
-      ml: true, mr: true, mt: true, mb: true, mtr: true
-    });
+    if (!allLocked) {
+      active.setControlsVisibility({
+        tl: true, tr: true, bl: true, br: true,
+        ml: true, mr: true, mt: true, mb: true, mtr: true
+      });
+    } else {
+      active.setControlsVisibility({
+        tl: false, tr: false, bl: false, br: false,
+        ml: false, mr: false, mt: false, mb: false, mtr: false
+      });
+    }
   } else if (active && (active.type?.toLowerCase() === 'group' || active instanceof fabric.Group) && !active.isStickyNote && !(active as any).isArrow) {
     const targets = active.getObjects ? active.getObjects() : active._objects || [];
     const allLocked = targets.length > 0 && targets.every((o: any) => o.isLocked === true);
@@ -4327,10 +4358,14 @@ const initFabric = () => {
           }
         });
 
-        if (matchedObjs.length === 1) {
-          canvas.setActiveObject(matchedObjs[0]);
-        } else if (matchedObjs.length > 1) {
-          const activeSel = new fabric.ActiveSelection(matchedObjs, { canvas });
+        // Filter out locked objects if unlocked objects are also in the marquee selection
+        const unlockedObjs = matchedObjs.filter((o: any) => !o.isLocked);
+        const finalMatched = unlockedObjs.length > 0 ? unlockedObjs : matchedObjs;
+
+        if (finalMatched.length === 1) {
+          canvas.setActiveObject(finalMatched[0]);
+        } else if (finalMatched.length > 1) {
+          const activeSel = new fabric.ActiveSelection(finalMatched, { canvas });
           canvas.setActiveObject(activeSel);
         } else {
           canvas.discardActiveObject();
@@ -4796,21 +4831,10 @@ const initFabric = () => {
             c.flipY = isParentFlippedY;
             c.angle = -(obj.angle || 0);
           } else if (c.isLocked) {
-            // Locked objects in multi-selection must not scale, mirror, rotate, or move!
-            const origSx = c._origBaseScaleX !== undefined ? c._origBaseScaleX : Math.abs(c._origScaleX || 1);
-            const origSy = c._origBaseScaleY !== undefined ? c._origBaseScaleY : Math.abs(c._origScaleY || 1);
-            c.scaleX = origSx / selScaleX;
-            c.scaleY = origSy / selScaleY;
-            c.flipX = isParentFlippedX;
-            c.flipY = isParentFlippedY;
-            c.angle = (c._origBaseAngle !== undefined ? c._origBaseAngle : (c._origAngle || 0)) - (obj.angle || 0);
-
-            if (c._origLockedWorldPos) {
-              const invSel = fabric.util.invertTransform(obj.calcTransformMatrix());
-              const localPos = fabric.util.transformPoint(c._origLockedWorldPos, invSel);
-              c.left = localPos.x;
-              c.top = localPos.y;
-            }
+            // Locked objects do not participate in multi-selection scaling; strictly preserve their original scale and angle
+            if (c._origBaseScaleX !== undefined) c.scaleX = c._origBaseScaleX;
+            if (c._origBaseScaleY !== undefined) c.scaleY = c._origBaseScaleY;
+            if (c._origBaseAngle !== undefined) c.angle = c._origBaseAngle;
           }
         });
       }
@@ -4849,14 +4873,7 @@ const initFabric = () => {
         if (c.isStickyNote || c.stickyColorConfig) {
           c.angle = -(obj.angle || 0);
         } else if (c.isLocked) {
-          c.angle = (c._origAngle || 0) - (obj.angle || 0);
-          if (c._origLockedWorldPos) {
-            const invSel = fabric.util.invertTransform(obj.calcTransformMatrix());
-            const localPos = fabric.util.transformPoint(c._origLockedWorldPos, invSel);
-            c.left = localPos.x;
-            c.top = localPos.y;
-            c.setCoords();
-          }
+          if (c._origAngle !== undefined) c.angle = c._origAngle;
         }
       });
       canvas?.requestRenderAll();

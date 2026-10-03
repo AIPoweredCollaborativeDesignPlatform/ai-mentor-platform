@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, shallowRef, toRaw, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
+import { ref, shallowRef, toRaw, computed, onMounted, onUnmounted, onBeforeUnmount, watch, nextTick } from 'vue';
 import { useRoomStore } from '../stores/room';
 import { useAuthStore } from '../stores/auth';
 import * as fabric from 'fabric';
@@ -40,9 +40,6 @@ const emit = defineEmits<{
 }>();
 
 const currentAssetId = ref<string | null | undefined>(props.activeAssetId);
-watch(() => props.activeAssetId, (newId) => {
-  currentAssetId.value = newId;
-});
 
 // Custom properties that must be preserved across JSON serialization
 const CUSTOM_PROPS = [
@@ -835,6 +832,13 @@ const commitEditingArrowPoints = () => {
       canvas.remove(rawOld);
       canvas.add(finalArrow);
     }
+    if (isIsolationMode.value) {
+      const isoIdx = isolatedItems.indexOf(rawOld);
+      if (isoIdx !== -1) {
+        isolatedItems[isoIdx] = finalArrow;
+        hasIsolationChanged.value = true;
+      }
+    }
     editingArrow.value = finalArrow;
     if (Array.isArray((finalArrow as any).arrowPoints)) {
       editingArrowPoints.value = (finalArrow as any).arrowPoints.map((p: any) => ({ x: p.x, y: p.y }));
@@ -1230,6 +1234,13 @@ const straightenEditingArrow = () => {
       canvas.remove(rawOld);
       canvas.add(updatedObj);
     }
+    if (isIsolationMode.value) {
+      const isoIdx = isolatedItems.indexOf(rawOld);
+      if (isoIdx !== -1) {
+        isolatedItems[isoIdx] = updatedObj;
+        hasIsolationChanged.value = true;
+      }
+    }
     editingArrow.value = updatedObj;
     canvas.requestRenderAll();
     saveHistoryState();
@@ -1311,6 +1322,13 @@ const straightenSelectedArrow = (arrow: any) => {
     if (curIdx !== -1) {
       canvas.remove(arrow);
       canvas.insertAt(curIdx, updatedObj);
+      if (isIsolationMode.value) {
+        const isoIdx = isolatedItems.indexOf(arrow);
+        if (isoIdx !== -1) {
+          isolatedItems[isoIdx] = updatedObj;
+          hasIsolationChanged.value = true;
+        }
+      }
       updatedObj.setCoords();
       canvas.setActiveObject(updatedObj);
       canvas.requestRenderAll();
@@ -1367,6 +1385,10 @@ const duplicateArrow = (arrow: any) => {
   if (newObj) {
     (newObj as any).arrowId = Math.random().toString(36).substring(2, 9);
     canvas.add(newObj);
+    if (isIsolationMode.value && !isolatedItems.includes(newObj)) {
+      isolatedItems.push(newObj);
+      hasIsolationChanged.value = true;
+    }
     canvas.setActiveObject(newObj);
     canvas.requestRenderAll();
     saveHistoryState();
@@ -2489,7 +2511,7 @@ const createSmoothedShape = (pts: Array<{ x: number; y: number }>) => {
 };
 
 const onPencilHoldDetected = () => {
-  if (!canvas || (!isDrawingMode.value && currentTool.value !== 'arrow') || pencilStrokePoints.length < 5) return;
+  if (!canvas || !isDrawingMode.value || currentTool.value === 'arrow' || pencilStrokePoints.length < 5) return;
   isPencilHolding = true;
   hasFlattenedShapeInCurrentStroke = true;
 
@@ -2569,50 +2591,9 @@ const initFabric = () => {
     uniformScaling: false
   });
 
-  // Patch ActiveSelection._drawBorders to always envelop all children (including stationary locked items)
-  // and guarantee border thickness is doubled (borderScaleFactor = 2)
-  const origDrawBorders = fabric.ActiveSelection.prototype._drawBorders;
-  fabric.ActiveSelection.prototype._drawBorders = function(ctx: CanvasRenderingContext2D, options: any) {
-    if (this._objects && this._objects.length > 0) {
-      const invSel = fabric.util.invertTransform(this.calcTransformMatrix());
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      let hasValidCoords = false;
-
-      this._objects.forEach((c: any) => {
-        if (!c || !c.visible) return;
-        const cm = c.calcTransformMatrix();
-        const w = (c.width || 0), h = (c.height || 0);
-        const pts = [
-          new fabric.Point(-w / 2, -h / 2),
-          new fabric.Point(w / 2, -h / 2),
-          new fabric.Point(w / 2, h / 2),
-          new fabric.Point(-w / 2, h / 2)
-        ].map(p => fabric.util.transformPoint(p, cm))
-         .map(wp => fabric.util.transformPoint(wp, invSel));
-
-        pts.forEach(p => {
-          hasValidCoords = true;
-          minX = Math.min(minX, p.x);
-          minY = Math.min(minY, p.y);
-          maxX = Math.max(maxX, p.x);
-          maxY = Math.max(maxY, p.y);
-        });
-      });
-
-      if (hasValidCoords && isFinite(minX) && isFinite(minY)) {
-        const pad = (this.padding || 0);
-        const strokeW = (this.borderScaleFactor || 2) / (this.canvas ? this.canvas.getZoom() : 1);
-        ctx.save();
-        ctx.strokeStyle = this.borderColor || 'rgb(178,204,255)';
-        ctx.lineWidth = strokeW;
-        (this as any)._setLineDash(ctx, this.borderDashArray);
-        ctx.strokeRect(minX - pad, minY - pad, (maxX - minX) + 2 * pad, (maxY - minY) + 2 * pad);
-        ctx.restore();
-        return;
-      }
-    }
-    origDrawBorders.call(this, ctx, options);
-  };
+  fabric.FabricObject.ownDefaults.borderScaleFactor = 2;
+  (fabric.Group as any).ownDefaults.borderScaleFactor = 2;
+  (fabric.ActiveSelection as any).ownDefaults.borderScaleFactor = 2;
 
   (canvas as any).centeredKey = 'altKey';
   (canvas as any).uniScaleKey = 'shiftKey';
@@ -2941,6 +2922,27 @@ const initFabric = () => {
             ctx.stroke();
             ctx.restore();
           }
+        } else if (target.type === 'textbox' || target.type === 'text' || target.type === 'i-text') {
+          const w = target.width || 40;
+          const h = target.height || 40;
+          ctx.lineWidth = 4;
+          ctx.strokeRect(-w / 2, -h / 2, w, h);
+
+          if (target.backgroundColor && target.backgroundColor !== 'transparent') {
+            ctx.save();
+            ctx.shadowBlur = 0;
+            ctx.shadowColor = 'transparent';
+            ctx.fillStyle = target.backgroundColor;
+            ctx.fillRect(-w / 2, -h / 2, w, h);
+            ctx.restore();
+          }
+
+          // Re-render text cleanly so characters are crisp and unobscured
+          ctx.save();
+          ctx.shadowBlur = 0;
+          ctx.shadowColor = 'transparent';
+          target._render?.(ctx);
+          ctx.restore();
         } else {
           const w = target.width || 40;
           const h = target.height || 40;
@@ -3235,6 +3237,14 @@ const initFabric = () => {
       if (typeof obj.forEachObject === 'function') {
         obj.forEachObject((c: any) => c.setCoords());
       }
+      (obj as any).triggerLayout?.();
+      obj.setCoords();
+      targets.forEach((c: any) => {
+        if (c.isLocked) {
+          c._origLockedWorldPos = fabric.util.transformPoint({ x: c.left, y: c.top } as any, obj.calcTransformMatrix());
+        }
+      });
+      canvas?.requestRenderAll();
     }
 
     // Reconstruct arrow with fixed pristine arrowhead size, preserved points, and vector crispness
@@ -3291,6 +3301,13 @@ const initFabric = () => {
             if (idx !== -1) {
               canvas.remove(arrowObj);
               canvas.insertAt(idx, newArrow);
+              if (isIsolationMode.value) {
+                const isoIdx = isolatedItems.indexOf(arrowObj);
+                if (isoIdx !== -1) {
+                  isolatedItems[isoIdx] = newArrow;
+                  hasIsolationChanged.value = true;
+                }
+              }
               newArrow.setCoords();
               if (canvas.getActiveObject() === arrowObj) {
                 canvas.setActiveObject(newArrow);
@@ -3305,15 +3322,19 @@ const initFabric = () => {
       }
     };
 
-    if (obj) {
-      if (obj.type === 'activeselection' || obj.type === 'activeSelection') {
-        const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
-        targets.forEach((child: any) => {
-          if ((child as any).isArrow) syncArrowTransform(child);
-        });
-      } else if ((obj as any).isArrow) {
-        syncArrowTransform(obj);
+    const syncAllArrowsRecursively = (target: any) => {
+      if (!target) return;
+      if ((target as any).isArrow) {
+        syncArrowTransform(target);
       }
+      if (target.type === 'activeselection' || target.type === 'activeSelection' || target.type === 'group' || target instanceof fabric.Group) {
+        const children = target.getObjects ? target.getObjects() : (target._objects || []);
+        children.forEach((child: any) => syncAllArrowsRecursively(child));
+      }
+    };
+
+    if (obj) {
+      syncAllArrowsRecursively(obj);
     }
 
     if (isArrowNodeEditing.value && editingArrow.value && obj === editingArrow.value) {
@@ -3551,6 +3572,7 @@ const initFabric = () => {
   let ctrlMouseDownPoint: { x: number; y: number } | null = null;
   let ctrlHitGroup: fabric.Group | null = null;
   let ctrlHitChild: any = null;
+  let ctrlHitRegularObject: any = null;
   let isCtrlMarqueeDragging = false;
 
   // Unified Mouse Down
@@ -3606,8 +3628,13 @@ const initFabric = () => {
 
     const scenePoint = canvas.getScenePoint(e);
 
-    // Ctrl+Click / Ctrl+Marquee on group sub-object: directly enter group isolation mode (supports nested groups)
-    if ((e.ctrlKey || e.metaKey) && currentTool.value === 'select') {
+    // Ctrl+Click / Ctrl+Marquee: direct object selection or group isolation under ANY tool
+    if (e.ctrlKey || e.metaKey) {
+      isMouseDown = true;
+      if (canvas.isDrawingMode) {
+        canvas.isDrawingMode = false;
+      }
+      canvas.selection = true;
       const hitTarget = opt.target || (canvas.findTarget(e) as any)?.target || canvas.findTarget(e) || null;
       let group: fabric.Group | null = null;
       let hitChild: any = null;
@@ -3677,14 +3704,18 @@ const initFabric = () => {
         ctrlMouseDownPoint = { x: scenePoint.x, y: scenePoint.y };
         ctrlHitGroup = group;
         ctrlHitChild = hitChild;
+        ctrlHitRegularObject = null;
         isCtrlMarqueeDragging = false;
         (canvas as any)._currentTransform = null;
+        return;
       } else {
         isCtrlInteracting = true;
         ctrlMouseDownPoint = { x: scenePoint.x, y: scenePoint.y };
         ctrlHitGroup = null;
         ctrlHitChild = null;
+        ctrlHitRegularObject = (hitTarget && hitTarget !== (canvas as any).clipPath) ? hitTarget : null;
         isCtrlMarqueeDragging = false;
+        return;
       }
     }
 
@@ -3752,10 +3783,10 @@ const initFabric = () => {
       isQuickShapeResizing = false;
       quickShapeActiveObj = null;
       pendingQuickShape = null;
-      if (pencilHoldTimer) clearTimeout(pencilHoldTimer);
-      pencilHoldTimer = setTimeout(() => {
-        onPencilHoldDetected();
-      }, 650);
+      if (pencilHoldTimer) {
+        clearTimeout(pencilHoldTimer);
+        pencilHoldTimer = null;
+      }
     }
 
     // Sticky Note tool: smart switch if clicked on existing object, else spawn sticky note on empty space
@@ -3798,6 +3829,10 @@ const initFabric = () => {
         perPixelTargetFind: true
       });
       canvas.add(text);
+      if (isIsolationMode.value && !isolatedItems.includes(text)) {
+        isolatedItems.push(text);
+        hasIsolationChanged.value = true;
+      }
       canvas.setActiveObject(text);
       saveHistoryState();
       syncToFirebase();
@@ -3901,6 +3936,16 @@ const initFabric = () => {
       lastPosY = e.clientY;
       updateArrowToolbar();
       viewportVersion.value++;
+      return;
+    }
+
+    // Ctrl marquee drag detection: blocks other tools from executing while holding Ctrl
+    if (isCtrlInteracting && ctrlMouseDownPoint) {
+      const curScene = canvas.getScenePoint(e);
+      const dist = Math.hypot(curScene.x - ctrlMouseDownPoint.x, curScene.y - ctrlMouseDownPoint.y);
+      if (dist > 4) {
+        isCtrlMarqueeDragging = true;
+      }
       return;
     }
 
@@ -4117,12 +4162,23 @@ const initFabric = () => {
       const wasMarquee = isCtrlMarqueeDragging && startPt;
       const targetGroup = ctrlHitGroup;
       const singleChild = ctrlHitChild;
+      const singleRegular = ctrlHitRegularObject;
 
       isCtrlInteracting = false;
       ctrlMouseDownPoint = null;
       ctrlHitGroup = null;
       ctrlHitChild = null;
+      ctrlHitRegularObject = null;
       isCtrlMarqueeDragging = false;
+      if (!canvas) return;
+
+      const restoreToolModes = () => {
+        if (!canvas) return;
+        if (currentTool.value === 'pencil') {
+          canvas.isDrawingMode = true;
+        }
+        canvas.selection = currentTool.value === 'select';
+      };
 
       if (wasMarquee && startPt) {
         const endPt = canvas.getScenePoint(opt.e);
@@ -4200,13 +4256,70 @@ const initFabric = () => {
           });
 
           if (matchedChildren.length > 0) {
+            restoreToolModes();
             enterGroupIsolation(groupToIsolate, matchedChildren);
             return;
           }
         }
+
+        // Marquee select regular canvas / isolated objects
+        const availableObjs = isIsolationMode.value
+          ? isolatedItems.filter((o: any) => o.visible !== false && o.selectable !== false)
+          : canvas.getObjects().filter((o: any) => o.visible !== false && o.selectable !== false && o !== (canvas as any).clipPath);
+
+        const matchedObjs: any[] = [];
+        availableObjs.forEach((obj: any) => {
+          const m = obj.calcTransformMatrix();
+          let minX = -((obj.width || 0) / 2);
+          let maxX = ((obj.width || 0) / 2);
+          let minY = -((obj.height || 0) / 2);
+          let maxY = ((obj.height || 0) / 2);
+          if (obj.originX === 'left') { minX = 0; maxX = obj.width || 0; }
+          if (obj.originY === 'top') { minY = 0; maxY = obj.height || 0; }
+          const sceneCorners = [
+            fabric.util.transformPoint({ x: minX, y: minY } as any, m),
+            fabric.util.transformPoint({ x: maxX, y: minY } as any, m),
+            fabric.util.transformPoint({ x: maxX, y: maxY } as any, m),
+            fabric.util.transformPoint({ x: minX, y: maxY } as any, m)
+          ];
+          const objMinX = Math.min(...sceneCorners.map((p: any) => p.x));
+          const objMaxX = Math.max(...sceneCorners.map((p: any) => p.x));
+          const objMinY = Math.min(...sceneCorners.map((p: any) => p.y));
+          const objMaxY = Math.max(...sceneCorners.map((p: any) => p.y));
+
+          if (objMaxX >= boxLeft && objMinX <= boxRight && objMaxY >= boxTop && objMinY <= boxBottom) {
+            matchedObjs.push(obj);
+          }
+        });
+
+        if (matchedObjs.length === 1) {
+          canvas.setActiveObject(matchedObjs[0]);
+        } else if (matchedObjs.length > 1) {
+          const activeSel = new fabric.ActiveSelection(matchedObjs, { canvas });
+          canvas.setActiveObject(activeSel);
+        } else {
+          canvas.discardActiveObject();
+        }
+        canvas.requestRenderAll();
+        updateSelectionState();
+        restoreToolModes();
+        return;
       } else {
         if (targetGroup) {
+          restoreToolModes();
           enterGroupIsolation(targetGroup, singleChild || undefined);
+          return;
+        } else if (singleRegular) {
+          canvas.setActiveObject(singleRegular);
+          canvas.requestRenderAll();
+          updateSelectionState();
+          restoreToolModes();
+          return;
+        } else {
+          canvas.discardActiveObject();
+          canvas.requestRenderAll();
+          updateSelectionState();
+          restoreToolModes();
           return;
         }
       }
@@ -4299,6 +4412,10 @@ const initFabric = () => {
             perPixelTargetFind: true
           });
           canvas.add(finalArrow);
+          if (isIsolationMode.value && !isolatedItems.includes(finalArrow)) {
+            isolatedItems.push(finalArrow);
+            hasIsolationChanged.value = true;
+          }
           finalArrow.setCoords();
           canvas.requestRenderAll();
           saveHistoryState();
@@ -4397,6 +4514,10 @@ const initFabric = () => {
         if (localUserUndoStack.value.length > 50) localUserUndoStack.value.shift();
         localUserRedoStack.value = [];
         drawingObject.setCoords();
+        if (isIsolationMode.value && !isolatedItems.includes(drawingObject)) {
+          isolatedItems.push(drawingObject);
+          hasIsolationChanged.value = true;
+        }
         canvas.setActiveObject(drawingObject);
         canvas.requestRenderAll();
         saveHistoryState();
@@ -4739,18 +4860,11 @@ const initFabric = () => {
 
   // Load initial state or set up clean baseline
   if (props.initialJson) {
-    historyStack.value = [];
-    redoStack.value = [];
-    loadFromFirebase(props.initialJson);
-    hasUnsavedChanges.value = false;
+    loadDocument(props.initialJson);
   } else if (isCollabActive.value && roomStore.currentRoom?.whiteboardState) {
-    historyStack.value = [];
-    redoStack.value = [];
-    loadFromFirebase(roomStore.currentRoom.whiteboardState);
+    loadDocument(roomStore.currentRoom.whiteboardState);
   } else {
-    historyStack.value = [];
-    redoStack.value = [];
-    saveHistoryState(); // Initial baseline state only for brand-new whiteboard!
+    loadDocument(); // Clean baseline state for brand-new whiteboard!
   }
 };
 
@@ -5311,10 +5425,77 @@ watch(isCurrentUserMuted, (muted) => {
   }
 });
 
-watch(() => props.initialJson, (newJson) => {
-  if (newJson && canvas) {
-    loadFromFirebase(newJson);
+const loadDocument = async (json?: string) => {
+  if (!canvas) return;
+  isInternalChange = true;
+  try {
+    // 1. Exit node editing and clear selection
+    exitArrowNodeEditing();
+    canvas.discardActiveObject();
+
+    // 2. Clear canvas completely to eliminate strokes leaking across different whiteboards
+    canvas.clear();
+    canvas.backgroundColor = '';
+
+    // 3. Reset all undo/redo, isolation, and local tracking stacks
+    historyStack.value = [];
+    redoStack.value = [];
+    localUserUndoStack.value = [];
+    localUserRedoStack.value = [];
+    isolatedItems = [];
+    isolationStack.value = [];
+    isolationUndoStack.value = [];
+    isolationRedoStack.value = [];
+    isIsolationMode.value = false;
+    hasIsolationChanged.value = false;
+    pencilStrokePoints = [];
+    liveArrowPreview = null;
+    drawingObject = null;
+    pendingRemoteState = null;
+    lastSyncedJson = '';
+
+    // 4. Load JSON if provided
+    if (json && typeof json === 'string' && json.trim()) {
+      await canvas.loadFromJSON(json);
+      rehydrateCanvasObjects();
+      syncNodeEditingStateAfterReload();
+      canvas.calcViewportBoundaries();
+      canvas.getObjects().forEach(o => o.setCoords());
+      historyStack.value = [json];
+    } else {
+      // Clean baseline for a blank new whiteboard
+      saveHistoryState();
+    }
+
+    canvas.requestRenderAll();
+    viewportVersion.value++;
     hasUnsavedChanges.value = false;
+  } catch (err) {
+    console.error('Failed to load whiteboard document:', err);
+    saveHistoryState();
+    canvas.requestRenderAll();
+    hasUnsavedChanges.value = false;
+  } finally {
+    isInternalChange = false;
+  }
+};
+
+watch([() => props.activeAssetId, () => props.initialJson], async ([newId, newJson], [oldId, oldJson]) => {
+  if (newId !== oldId || newJson !== oldJson) {
+    if (newId !== oldId && hasUnsavedChanges.value && canvas && !isBlankCanvasWithoutHistory()) {
+      try {
+        const json = getSerializedCanvasJson();
+        const dataUrl = getCanvasSnapshot(0.7);
+        emit('save-state', json, dataUrl, oldId, !isCollabActive.value);
+        hasUnsavedChanges.value = false;
+      } catch (e) {
+        console.warn('Auto-save on asset switch error:', e);
+      }
+    }
+    currentAssetId.value = newId;
+    if (canvas) {
+      await loadDocument(newJson);
+    }
   }
 });
 
@@ -5448,8 +5629,8 @@ const pasteSelection = async (targetPoint?: { x: number; y: number }) => {
   }
 
   if (clonedObj.type === 'activeSelection' || clonedObj.type === 'activeselection') {
-    clonedObj.canvas = canvas;
-    clonedObj.forEachObject((obj: any) => {
+    const items = (clonedObj as fabric.ActiveSelection).removeAll();
+    items.forEach((obj: any) => {
       preparePastedObject(obj);
       canvas?.add(obj);
       if (isIsolationMode.value && !isolatedItems.includes(obj)) {
@@ -5457,7 +5638,9 @@ const pasteSelection = async (targetPoint?: { x: number; y: number }) => {
         hasIsolationChanged.value = true;
       }
     });
-    clonedObj.setCoords();
+    const newActiveSel = new fabric.ActiveSelection(items, { canvas });
+    canvas.setActiveObject(newActiveSel);
+    newActiveSel.setCoords();
   } else {
     preparePastedObject(clonedObj);
     canvas.add(clonedObj);
@@ -5465,6 +5648,7 @@ const pasteSelection = async (targetPoint?: { x: number; y: number }) => {
       isolatedItems.push(clonedObj);
       hasIsolationChanged.value = true;
     }
+    canvas.setActiveObject(clonedObj);
   }
 
   if (pastedItemsForUndo.length > 0) {
@@ -5476,7 +5660,6 @@ const pasteSelection = async (targetPoint?: { x: number; y: number }) => {
     localUserRedoStack.value = [];
   }
 
-  canvas.setActiveObject(clonedObj);
   canvas.requestRenderAll();
   saveHistoryState();
   syncToFirebase();
@@ -5525,6 +5708,10 @@ const spawnStickyNote = (x: number, y: number, colorCfg = selectedStickyColor.va
   note.initDimensions();
 
   canvas.add(note);
+  if (isIsolationMode.value && !isolatedItems.includes(note)) {
+    isolatedItems.push(note);
+    hasIsolationChanged.value = true;
+  }
   canvas.setActiveObject(note);
   canvas.requestRenderAll();
   saveHistoryState();
@@ -5673,6 +5860,9 @@ const enterGroupIsolation = (group: fabric.Group, targetChild?: any) => {
         lockScalingY: !!(item as any).isLocked,
         hasControls: !(item as any).isLocked
       });
+      if ((item as any).isArrow) {
+        (item as any).initialMatrix = item.calcTransformMatrix();
+      }
       canvas?.add(item);
     });
 
@@ -5725,6 +5915,11 @@ const exitGroupIsolation = () => {
         canvas,
         subTargetCheck: true,
         perPixelTargetFind: true
+      });
+      remainingItems.forEach(item => {
+        if ((item as any).isArrow) {
+          (item as any).initialMatrix = item.calcTransformMatrix();
+        }
       });
       const allLocked = remainingItems.length > 0 && remainingItems.every((o: any) => o.isLocked);
       const anyLocked = remainingItems.some((o: any) => o.isLocked);
@@ -5941,6 +6136,10 @@ const insertPastedText = (text: string, point?: { x: number; y: number }) => {
     perPixelTargetFind: true
   });
   canvas.add(textObj);
+  if (isIsolationMode.value && !isolatedItems.includes(textObj)) {
+    isolatedItems.push(textObj);
+    hasIsolationChanged.value = true;
+  }
   canvas.setActiveObject(textObj);
   canvas.requestRenderAll();
   saveHistoryState();
@@ -5968,6 +6167,10 @@ const insertPastedImage = (fileOrBlob: Blob, point?: { x: number; y: number }) =
         perPixelTargetFind: true
       });
       canvas.add(img);
+      if (isIsolationMode.value && !isolatedItems.includes(img)) {
+        isolatedItems.push(img);
+        hasIsolationChanged.value = true;
+      }
       canvas.setActiveObject(img);
       canvas.requestRenderAll();
       saveHistoryState();
@@ -6239,6 +6442,11 @@ const groupObjects = () => {
       subTargetCheck: true,
       perPixelTargetFind: true
     });
+    items.forEach((item: any) => {
+      if (item.isArrow) {
+        item.initialMatrix = item.calcTransformMatrix();
+      }
+    });
     canvas.add(group);
     canvas.setActiveObject(group);
     canvas.requestRenderAll();
@@ -6262,6 +6470,9 @@ const ungroupObjects = () => {
     canvas.remove(activeObj);
     items.forEach((item: any) => {
       item.set({ selectable: true, evented: true, perPixelTargetFind: true });
+      if (item.isArrow) {
+        item.initialMatrix = item.calcTransformMatrix();
+      }
       if (item.isStickyNote || item.stickyColorConfig) {
         item.minHeight = item.minHeight || 180;
         applyStickyNoteMethods(item);
@@ -6293,6 +6504,9 @@ const ungroupObjects = () => {
       canvas?.remove(g);
       items.forEach((item: any) => {
         item.set({ selectable: true, evented: true, perPixelTargetFind: true });
+        if (item.isArrow) {
+          item.initialMatrix = item.calcTransformMatrix();
+        }
         if (item.isStickyNote || item.stickyColorConfig) {
           item.minHeight = item.minHeight || 180;
           applyStickyNoteMethods(item);
@@ -6335,6 +6549,8 @@ const undo = async () => {
         const cv = canvas;
         if (!cv) return;
 
+        cv.discardActiveObject();
+
         // Remove current isolated items from canvas
         isolatedItems.forEach(item => {
           cv.remove(item);
@@ -6358,6 +6574,9 @@ const undo = async () => {
             lockScalingY: !!(item as any).isLocked,
             hasControls: !(item as any).isLocked
           });
+          if ((item as any).isArrow) {
+            (item as any).initialMatrix = item.calcTransformMatrix();
+          }
           if ((item as any).isStickyNote || item.type === 'textbox') {
             (item as any).isStickyNote = true;
             (item as any).width = STICKY_NOTE_CONST_SIZE;
@@ -6370,6 +6589,12 @@ const undo = async () => {
           }
           cv.add(item);
         });
+        if (isolatedItems.length === 1) {
+          cv.setActiveObject(isolatedItems[0]);
+        } else if (isolatedItems.length > 1) {
+          const activeSel = new fabric.ActiveSelection(isolatedItems, { canvas: cv });
+          cv.setActiveObject(activeSel);
+        }
         hasIsolationChanged.value = true;
         cv.requestRenderAll();
         updateSelectionState();
@@ -6517,6 +6742,8 @@ const redo = async () => {
         const cv = canvas;
         if (!cv) return;
 
+        cv.discardActiveObject();
+
         // Remove current isolated items from canvas
         isolatedItems.forEach(item => {
           cv.remove(item);
@@ -6540,6 +6767,9 @@ const redo = async () => {
             lockScalingY: !!(item as any).isLocked,
             hasControls: !(item as any).isLocked
           });
+          if ((item as any).isArrow) {
+            (item as any).initialMatrix = item.calcTransformMatrix();
+          }
           if ((item as any).isStickyNote || item.type === 'textbox') {
             (item as any).isStickyNote = true;
             (item as any).width = STICKY_NOTE_CONST_SIZE;
@@ -6552,6 +6782,12 @@ const redo = async () => {
           }
           cv.add(item);
         });
+        if (isolatedItems.length === 1) {
+          cv.setActiveObject(isolatedItems[0]);
+        } else if (isolatedItems.length > 1) {
+          const activeSel = new fabric.ActiveSelection(isolatedItems, { canvas: cv });
+          cv.setActiveObject(activeSel);
+        }
         hasIsolationChanged.value = true;
         cv.requestRenderAll();
         updateSelectionState();
@@ -7170,7 +7406,8 @@ defineExpose({
   handleConfirmMakePrivate,
   getCanvasSnapshot,
   setCurrentAssetId: (id: string) => { currentAssetId.value = id; },
-  getCanvasJson: () => getSerializedCanvasJson()
+  getCanvasJson: () => getSerializedCanvasJson(),
+  loadDocument
 });
 
 // --- AI Generator ---
@@ -7461,6 +7698,23 @@ watch(isCollabActive, (active) => {
     removeMyCursor();
     smoothedCursors.value = {};
     remoteCursors.value = {};
+  }
+});
+
+onBeforeUnmount(() => {
+  if (autoSaveDebounceTimer) {
+    clearTimeout(autoSaveDebounceTimer);
+    autoSaveDebounceTimer = null;
+  }
+  if (hasUnsavedChanges.value && canvas && !isBlankCanvasWithoutHistory()) {
+    try {
+      const json = getSerializedCanvasJson();
+      const dataUrl = getCanvasSnapshot(0.7);
+      emit('save-state', json, dataUrl, currentAssetId.value, !isCollabActive.value);
+      hasUnsavedChanges.value = false;
+    } catch (e) {
+      console.warn('Auto-save on unmount error:', e);
+    }
   }
 });
 

@@ -58,6 +58,7 @@ const isWhiteboardOpen = ref(false);
 const whiteboardRef = ref<any>(null);
 const activeWhiteboardAssetId = ref<string | null>(null);
 const currentWhiteboardJson = ref<string | undefined>(undefined);
+const whiteboardSessionKey = ref<string>('wb_init_' + Date.now());
 const whiteboardWidth = ref<number | null>(null);
 const isResizingWhiteboard = ref(false);
 const isPipDismissed = ref(false);
@@ -140,15 +141,30 @@ const isWhiteboardSharedSession = computed(() => {
   return false;
 });
 
-const handleOpenNewWhiteboard = () => {
+const handleOpenNewWhiteboard = async () => {
+  if (isWhiteboardOpen.value && whiteboardRef.value?.hasUnsavedChanges) {
+    try {
+      await whiteboardRef.value?.triggerAutoSaveAsAsset();
+    } catch (e) {
+      console.warn('Auto save before new whiteboard error:', e);
+    }
+  }
   // Always open a clean, new blank whiteboard (entering collab is done via chat message or assets library)
   isJoiningSharedBoard.value = false;
   activeWhiteboardAssetId.value = null;
   currentWhiteboardJson.value = undefined;
+  whiteboardSessionKey.value = 'wb_new_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
   isWhiteboardOpen.value = true;
 };
 
-const handleJoinSharedWhiteboard = () => {
+const handleJoinSharedWhiteboard = async () => {
+  if (isWhiteboardOpen.value && whiteboardRef.value?.hasUnsavedChanges) {
+    try {
+      await whiteboardRef.value?.triggerAutoSaveAsAsset();
+    } catch (e) {
+      console.warn('Auto save before joining shared board error:', e);
+    }
+  }
   isJoiningSharedBoard.value = true;
   const hostUid = roomStore.currentRoom?.whiteboardHostUid;
   const existingShared = roomStore.currentRoom?.messages.find(m => 
@@ -158,6 +174,7 @@ const handleJoinSharedWhiteboard = () => {
   );
   activeWhiteboardAssetId.value = existingShared?.id || null;
   currentWhiteboardJson.value = roomStore.currentRoom?.whiteboardState || existingShared?.metadata?.whiteboardJson || undefined;
+  whiteboardSessionKey.value = 'wb_shared_' + (existingShared?.id || roomStore.currentRoom?.roomId || Date.now());
   isWhiteboardOpen.value = true;
 };
 
@@ -286,7 +303,7 @@ const handleRetryAiMessage = async (messageId: string) => {
   }
 };
 
-const openWhiteboardState = (msg: any) => {
+const openWhiteboardState = async (msg: any) => {
   if (msg.type !== 'whiteboard_state') return;
   const isHost = roomStore.currentRoom?.whiteboardHostUid === authStore.uid || msg.metadata?.creatorUid === authStore.uid || msg.senderUid === authStore.uid;
   if (!roomStore.currentRoom?.whiteboardActive && !isHost && msg.metadata?.isPrivate && !msg.metadata?.isSharedPost) {
@@ -294,13 +311,25 @@ const openWhiteboardState = (msg: any) => {
     return;
   }
   if (roomStore.currentRoom?.whiteboardActive && (msg.metadata?.isSharedPost || !msg.metadata?.isPrivate)) {
-    handleJoinSharedWhiteboard();
+    await handleJoinSharedWhiteboard();
     return;
+  }
+  // If already viewing this exact asset on open whiteboard, no need to reload
+  if (isWhiteboardOpen.value && activeWhiteboardAssetId.value === msg.id && !isJoiningSharedBoard.value) {
+    return;
+  }
+  if (isWhiteboardOpen.value && whiteboardRef.value?.hasUnsavedChanges) {
+    try {
+      await whiteboardRef.value?.triggerAutoSaveAsAsset();
+    } catch (e) {
+      console.warn('Auto save before opening asset error:', e);
+    }
   }
   // Open locally with asset JSON; DO NOT involuntarily trigger broadcast session!
   isJoiningSharedBoard.value = false;
   activeWhiteboardAssetId.value = msg.id;
   currentWhiteboardJson.value = msg.metadata?.whiteboardJson || null;
+  whiteboardSessionKey.value = 'wb_asset_' + msg.id + '_' + Date.now();
   isWhiteboardOpen.value = true;
 };
 
@@ -2011,6 +2040,7 @@ onUnmounted(() => {
       >
         <CollaborativeWhiteboard
           ref="whiteboardRef"
+          :key="whiteboardSessionKey"
           :initialJson="currentWhiteboardJson"
           :activeAssetId="activeWhiteboardAssetId"
           :isSharedSession="isWhiteboardSharedSession"

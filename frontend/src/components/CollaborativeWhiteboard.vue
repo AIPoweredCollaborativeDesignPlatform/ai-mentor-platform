@@ -9108,7 +9108,7 @@ onUnmounted(() => {
         { 'opacity-40 pointer-events-none select-none': isCurrentUserMuted }
       ]"
     >
-      <!-- AI Input -->
+      <!-- AI Input / Redraw Container (Fixed width guarantees rock-solid toolbar stability) -->
       <div
         class="flex flex-col gap-1.5 transition-opacity duration-200 shrink-0"
         :class="[
@@ -9116,6 +9116,7 @@ onUnmounted(() => {
           isStackedToolbar ? 'w-[220px] max-w-[92vw]' : 'w-[150px] sm:w-[200px]'
         ]"
       >
+        <!-- State 1: SVG Generation from Text in progress -->
         <div v-if="isGeneratingSvg" class="h-9 sm:h-10 px-3 bg-slate-900/95 text-sky-400 text-xs font-medium rounded-2xl flex items-center justify-between gap-2 border border-slate-700 shadow-xl">
           <span class="flex items-center gap-1.5 min-w-0 truncate">
             <Loader2 class="w-3.5 h-3.5 animate-spin text-sky-400 shrink-0" />
@@ -9128,9 +9129,34 @@ onUnmounted(() => {
             Stop
           </button>
         </div>
+
+        <!-- State 2: AI Sketch Redraw in progress -->
+        <div v-else-if="isAiRedrawing" class="h-9 sm:h-10 px-3 bg-slate-900/95 text-violet-300 text-xs font-medium rounded-2xl flex items-center justify-between gap-2 border border-violet-700/60 shadow-xl">
+          <span class="flex items-center gap-1.5 min-w-0 truncate">
+            <Loader2 class="w-3.5 h-3.5 animate-spin text-fuchsia-400 shrink-0" />
+            <span class="truncate">Redrawing...</span>
+          </span>
+          <span class="text-[10px] text-violet-300/80 font-mono">SVG</span>
+        </div>
+
+        <!-- State 3: Object selected -> Text input box transforms into AI Redraw button -->
+        <button
+          v-else-if="hasSelection"
+          @click="triggerAiRedrawSketch"
+          :disabled="isArrowNodeEditing"
+          class="h-9 sm:h-10 px-3 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 active:scale-[0.98] text-white rounded-2xl shadow-xl flex items-center justify-center gap-1.5 text-xs font-semibold transition cursor-pointer border border-violet-400/30"
+          :class="{ 'opacity-40 pointer-events-none cursor-not-allowed': isArrowNodeEditing }"
+          title="AI Redraw selected sketch as vector (SVG)"
+        >
+          <Sparkles class="w-3.5 h-3.5 text-yellow-300 shrink-0" />
+          <span class="truncate">AI Redraw</span>
+          <span class="text-[10px] px-1 py-0.2 bg-white/20 rounded font-mono font-normal shrink-0">SVG</span>
+        </button>
+
+        <!-- State 4: Default -> Text input AI vector generation form -->
         <form v-else @submit.prevent="generateAIObject" class="flex items-center h-9 sm:h-10 bg-white/95 rounded-2xl shadow-xl border border-slate-200 p-1" :class="{ 'opacity-40 pointer-events-none cursor-not-allowed': isArrowNodeEditing }">
           <input :disabled="isArrowNodeEditing" v-model="aiPrompt" type="text" :placeholder="isStackedToolbar ? 'AI Vector icon, chart...' : 'AI Vector...'" class="flex-1 bg-transparent px-2 py-1 text-xs focus:outline-none text-slate-700 placeholder-slate-400 min-w-0" />
-          <button type="submit" :disabled="!aiPrompt.trim() || isArrowNodeEditing" class="p-1 sm:p-1.5 rounded-xl bg-indigo-100 text-indigo-600 hover:bg-indigo-200 transition disabled:opacity-50 disabled:cursor-not-allowed shrink-0 cursor-pointer">
+          <button type="submit" :disabled="!aiPrompt.trim() || isArrowNodeEditing" class="p-1 sm:p-1.5 rounded-xl bg-indigo-100 text-indigo-600 hover:bg-indigo-200 transition disabled:opacity-50 disabled:cursor-not-allowed shrink-0 cursor-pointer" title="Generate AI Vector">
             <Sparkles class="w-3.5 h-3.5" />
           </button>
         </form>
@@ -9272,19 +9298,6 @@ onUnmounted(() => {
           <div class="w-px h-4 bg-slate-200 mx-0.5 transition-opacity duration-200" :class="{ 'opacity-15': isHoveringSend }"></div>
           
           <div class="flex items-center" :class="isNarrowToolbar ? 'gap-0.5' : 'gap-0.5 sm:gap-1'">
-            <!-- AI Redraw Button -->
-            <button
-              v-if="hasSelection"
-              @click="triggerAiRedrawSketch"
-              :disabled="isAiRedrawing"
-              class="rounded-xl hover:bg-violet-100 text-violet-600 transition cursor-pointer flex items-center gap-1"
-              :class="isNarrowToolbar ? 'p-1' : 'px-1.5 py-1'"
-              title="AI Redraw sketch as vector"
-            >
-              <Loader2 v-if="isAiRedrawing" class="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin text-fuchsia-500" />
-              <Sparkles v-else class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-violet-600" />
-              <span v-if="!isNarrowToolbar" class="text-xs font-semibold text-violet-700 hidden sm:inline">AI Redraw</span>
-            </button>
             <input ref="fileInputRef" type="file" accept="image/*" class="hidden" @change="handleImageUpload" />
             <button @click="fileInputRef?.click()" :disabled="isArrowNodeEditing" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="[isNarrowToolbar ? 'p-1' : 'p-1.5', { 'opacity-40 pointer-events-none cursor-not-allowed': isArrowNodeEditing }]" title="Add Image"><ImageIcon class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
             <button @click="undo" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="[{'opacity-50 cursor-not-allowed': !canUndo}, isNarrowToolbar ? 'p-1' : 'p-1.5']" title="Undo (Ctrl+Z)" :disabled="!canUndo"><Undo2 class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>

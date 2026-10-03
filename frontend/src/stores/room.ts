@@ -180,6 +180,9 @@ export const useRoomStore = defineStore('room', () => {
         const snap = await getDoc(doc(db, 'rooms', roomId));
         if (snap.exists()) {
           const data = snap.data() as RoomData;
+          if ((data as any).deletedAt) {
+            return { exists: false };
+          }
           return { exists: true, roomName: data.roomName };
         }
       } catch (e) {
@@ -190,6 +193,9 @@ export const useRoomStore = defineStore('room', () => {
     if (local) {
       try {
         const data = JSON.parse(local);
+        if (data.deletedAt) {
+          return { exists: false };
+        }
         return { exists: true, roomName: data.roomName };
       } catch {}
     }

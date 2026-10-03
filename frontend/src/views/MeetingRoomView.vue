@@ -1043,8 +1043,8 @@ onMounted(async () => {
   // 1. Verify meeting exists
   const check = await roomStore.checkRoomExists(pin);
   if (!check.exists) {
-    roomStore.pushToast('Meeting Not Found', `Meeting room ${pin} does not exist.`, 'error');
-    router.replace('/');
+    roomStore.pushToast('Meeting Not Found', `Meeting room ${pin} does not exist or has been deleted.`, 'error');
+    router.replace(authStore.isGoogleLinked ? '/dashboard' : '/');
     return;
   }
 

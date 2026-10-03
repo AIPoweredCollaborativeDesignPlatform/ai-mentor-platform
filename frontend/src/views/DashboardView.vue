@@ -3,9 +3,12 @@ import { useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import {
   doc,
+  getDoc,
+  setDoc,
   getDocs,
   deleteDoc,
   updateDoc,
+  arrayRemove,
   collection,
   query,
   where,
@@ -27,7 +30,8 @@ import {
   Check,
   CheckCheck,
   RefreshCw,
-  Loader2
+  Loader2,
+  AlertTriangle
 } from 'lucide-vue-next';
 
 import { ref, onMounted } from 'vue';
@@ -45,17 +49,21 @@ interface RoomHistoryItem {
   assetsCount: number;
   preview?: string;
   timestamp: number;
+  hostUid?: string;
+  isHost?: boolean;
+  deletedAt?: number | null;
 }
 
 const historyRooms = ref<RoomHistoryItem[]>([]);
 const trashRooms = ref<RoomHistoryItem[]>([]);
 
-
 const isManageMode = ref(false);
 const isTrashView = ref(false);
 const selectedRooms = ref(new Set<string>());
 const showDeleteModal = ref(false);
+const showPermanentDeleteModal = ref(false);
 const trashNotification = ref('');
+let trashNotificationTimer: any = null;
 const isLoading = ref(false);
 const isRefreshing = ref(false);
 
@@ -70,11 +78,21 @@ const toggleSelect = (pin: string) => {
 };
 
 const toggleSelectAll = () => {
-  if (selectedRooms.value.size === historyRooms.value.length) {
+  const currentList = isTrashView.value ? trashRooms.value : historyRooms.value;
+  if (currentList.length === 0) {
+    selectedRooms.value = new Set();
+    return;
+  }
+  if (selectedRooms.value.size === currentList.length) {
     selectedRooms.value = new Set();
   } else {
-    selectedRooms.value = new Set(historyRooms.value.map((r) => r.pin));
+    selectedRooms.value = new Set(currentList.map((r) => r.pin));
   }
+};
+
+const toggleTrashView = () => {
+  isTrashView.value = !isTrashView.value;
+  selectedRooms.value = new Set();
 };
 
 const cancelManageMode = () => {
@@ -90,7 +108,7 @@ const loadDashboardData = async () => {
     if (key && key.startsWith('ai_room_')) {
       try {
         const item = JSON.parse(localStorage.getItem(key) || '{}');
-        const isMyRoom = item.hostUid === authStore.uid || item.participants?.[authStore.uid];
+        const isMyRoom = item.hostUid === authStore.uid || item.participants?.[authStore.uid] || item.role === 'host' || item.role === 'participant';
         if (isMyRoom && item.pin) {
           localMap.set(item.pin, item);
         }
@@ -117,6 +135,8 @@ const loadDashboardData = async () => {
       if (previewText.length > 50) previewText = previewText.substring(0, 50) + '...';
     }
 
+    const isHost = item.hostUid === authStore.uid || item.role === 'host';
+
     initialRooms.push({
       id: item.roomId || `room_${pin}`,
       pin,
@@ -131,7 +151,10 @@ const loadDashboardData = async () => {
       members: Object.keys(item.participants || {}).filter((k) => item.participants[k].status === 'approved').length || 1,
       assetsCount: item.assetsCount || item.messages?.filter((m: any) => m.type === 'ai_asset')?.length || 0,
       preview: previewText,
-      timestamp: lastActive
+      timestamp: lastActive,
+      hostUid: item.hostUid || '',
+      isHost,
+      deletedAt: item.deletedAt || null
     });
 
     if (item.messages) {
@@ -154,8 +177,8 @@ const loadDashboardData = async () => {
   });
 
   initialRooms.sort((a, b) => b.timestamp - a.timestamp);
-  historyRooms.value = initialRooms.filter(r => !(localMap.get(r.pin)?.deletedAt));
-  trashRooms.value = initialRooms.filter(r => localMap.get(r.pin)?.deletedAt);
+  historyRooms.value = initialRooms.filter(r => !r.deletedAt);
+  trashRooms.value = initialRooms.filter(r => !!r.deletedAt);
 
 
   // 2. Fetch remote rooms from Firestore (Multi-device synchronization)
@@ -175,7 +198,7 @@ const loadDashboardData = async () => {
       snapHost.forEach((d) => {
         const data = d.data();
         const pin = data.pin || d.id.replace('room_', '');
-        remoteRoomsMap.set(pin, { ...data, roomId: d.id, pin });
+        remoteRoomsMap.set(pin, { ...data, roomId: d.id, pin, isHost: true });
       });
     } catch (e) {
       console.warn('qHost failed:', e);
@@ -192,7 +215,7 @@ const loadDashboardData = async () => {
         const data = d.data();
         const pin = data.pin || d.id.replace('room_', '');
         if (!remoteRoomsMap.has(pin)) {
-          remoteRoomsMap.set(pin, { ...data, roomId: d.id, pin });
+          remoteRoomsMap.set(pin, { ...data, roomId: d.id, pin, isHost: data.hostUid === authStore.uid });
         }
       });
     } catch (e) {
@@ -200,15 +223,42 @@ const loadDashboardData = async () => {
     }
 
     // Query C: User personal room index
+    const userRoomOverrides = new Map<string, any>();
     try {
       const snapUser = await getDocs(collection(db, 'users', authStore.uid, 'rooms'));
-      snapUser.forEach((d) => {
+      for (const d of snapUser.docs) {
         const data = d.data();
         const pin = data.pin || d.id.replace('room_', '');
+        const roomId = d.id;
+        userRoomOverrides.set(pin, { ...data, roomId, pin });
+
+        // If not discovered by Query A or B, verify if the room document actually exists
         if (!remoteRoomsMap.has(pin)) {
-          remoteRoomsMap.set(pin, { ...data, roomId: d.id, pin });
+          try {
+            const rSnap = await getDoc(doc(db, 'rooms', roomId));
+            if (!rSnap.exists()) {
+              // Dead orphaned room! Clean up user reference and local storage
+              await deleteDoc(doc(db, 'users', authStore.uid, 'rooms', roomId)).catch(() => {});
+              localStorage.removeItem(`ai_room_${pin}`);
+              continue;
+            }
+            const rData = rSnap.data();
+            const isUserHost = rData.hostUid === authStore.uid;
+            const isUserParticipant = rData.participantUids?.includes(authStore.uid);
+            if (!isUserHost && !isUserParticipant) {
+              // User is no longer a member of this room
+              await deleteDoc(doc(db, 'users', authStore.uid, 'rooms', roomId)).catch(() => {});
+              localStorage.removeItem(`ai_room_${pin}`);
+              continue;
+            }
+            remoteRoomsMap.set(pin, { ...rData, roomId, pin, isHost: isUserHost });
+          } catch (e) {
+            // Cannot read room doc, clean up
+            await deleteDoc(doc(db, 'users', authStore.uid, 'rooms', roomId)).catch(() => {});
+            localStorage.removeItem(`ai_room_${pin}`);
+          }
         }
-      });
+      }
     } catch (e) {
       console.warn('snapUser failed:', e);
     }
@@ -280,6 +330,11 @@ const loadDashboardData = async () => {
         // subcollection message query might be restricted if not joined yet
       }
 
+      // Determine deletedAt taking personal override into account
+      const userOverride = userRoomOverrides.get(pin);
+      const isHost = roomData.hostUid === authStore.uid || roomData.isHost;
+      const roomDeletedAt = roomData.deletedAt || userOverride?.deletedAt || (localMap.get(pin)?.deletedAt) || null;
+
       // Sync to local storage cache so next load is instantaneous
       const cached = localMap.get(pin) || {};
       const updatedCache = {
@@ -289,9 +344,11 @@ const loadDashboardData = async () => {
         roomName: roomData.roomName || roomData.title || `Meeting (${pin})`,
         roomEmoji: roomData.roomEmoji || cached.roomEmoji || '💡',
         hostUid: roomData.hostUid || cached.hostUid || '',
+        isHost,
         lastActive,
         createdAt: roomData.createdAt || cached.createdAt || Date.now(),
-        assetsCount
+        assetsCount,
+        deletedAt: roomDeletedAt
       };
       localStorage.setItem(`ai_room_${pin}`, JSON.stringify(updatedCache));
 
@@ -311,7 +368,10 @@ const loadDashboardData = async () => {
           (roomData.participants ? Object.keys(roomData.participants).length : 1),
         assetsCount,
         preview: previewText,
-        timestamp: lastActive
+        timestamp: lastActive,
+        hostUid: roomData.hostUid || '',
+        isHost,
+        deletedAt: roomDeletedAt
       });
     }
 
@@ -325,8 +385,8 @@ const loadDashboardData = async () => {
     });
 
     mergedRooms.sort((a, b) => b.timestamp - a.timestamp);
-    historyRooms.value = mergedRooms.filter(r => !(remoteRoomsMap.get(r.pin)?.deletedAt));
-    trashRooms.value = mergedRooms.filter(r => remoteRoomsMap.get(r.pin)?.deletedAt);
+    historyRooms.value = mergedRooms.filter(r => !r.deletedAt);
+    trashRooms.value = mergedRooms.filter(r => !!r.deletedAt);
   } catch (err) {
     console.error('Failed to sync cloud rooms:', err);
   } finally {
@@ -350,142 +410,172 @@ onMounted(async () => {
   await loadDashboardData();
 });
 
-
 const confirmDelete = async () => {
   const pinsToDelete = Array.from(selectedRooms.value);
+  if (pinsToDelete.length === 0) return;
   const count = pinsToDelete.length;
 
+  // 1. Immediately close modal and exit manage mode so UI is instantly responsive
+  showDeleteModal.value = false;
+  isManageMode.value = false;
+  selectedRooms.value = new Set();
+
+  // 2. Optimistic UI update: move from historyRooms to trashRooms
+  const moved = historyRooms.value
+    .filter((r) => pinsToDelete.includes(r.pin))
+    .map((r) => ({ ...r, deletedAt: Date.now() }));
+  historyRooms.value = historyRooms.value.filter((r) => !pinsToDelete.includes(r.pin));
+  trashRooms.value = [...moved, ...trashRooms.value];
+
+  // 3. Transient toast notification
+  trashNotification.value = `Moved ${count} meeting${count > 1 ? 's' : ''} to Trash`;
+  if (trashNotificationTimer) clearTimeout(trashNotificationTimer);
+  trashNotificationTimer = setTimeout(() => {
+    trashNotification.value = '';
+  }, 4000);
+
+  // 4. Background persistence to localStorage and Firestore
   for (const pin of pinsToDelete) {
     const rawItem = localStorage.getItem(`ai_room_${pin}`);
-    const room = historyRooms.value.find((r) => r.pin === pin) || trashRooms.value.find((r) => r.pin === pin);
-    const docId = room?.id || (rawItem ? JSON.parse(rawItem).roomId : `room_${pin}`);
-
     if (rawItem) {
-      const parsed = JSON.parse(rawItem);
-      parsed.deletedAt = Date.now();
-      localStorage.setItem(`ai_room_${pin}`, JSON.stringify(parsed));
+      try {
+        const parsed = JSON.parse(rawItem);
+        parsed.deletedAt = Date.now();
+        localStorage.setItem(`ai_room_${pin}`, JSON.stringify(parsed));
+      } catch (e) {}
     }
 
-    if (db) {
+    const room = moved.find((r) => r.pin === pin);
+    const docId = room?.id || (rawItem ? JSON.parse(rawItem).roomId : `room_${pin}`);
+    const isHost = room?.isHost ?? (rawItem ? JSON.parse(rawItem).hostUid === authStore.uid : false);
+
+    if (db && authStore.uid) {
       try {
-        let isHost = false;
-        if (rawItem) {
-          try {
-            const parsed = JSON.parse(rawItem);
-            if (parsed.hostUid === authStore.uid) isHost = true;
-          } catch (e) {}
-        }
-        
+        // Record deletedAt in personal user room index
+        await setDoc(
+          doc(db, 'users', authStore.uid, 'rooms', docId),
+          {
+            deletedAt: Date.now(),
+            roomId: docId,
+            pin
+          },
+          { merge: true }
+        ).catch(() => {});
+
+        // If user is host, mark the room document as soft-deleted in Firestore
         if (isHost) {
           await updateDoc(doc(db, 'rooms', docId), { deletedAt: Date.now() }).catch(() => {});
-        } else {
-          // If not host, just delete it from personal index
-          if (authStore.uid) {
-            await deleteDoc(doc(db, 'users', authStore.uid, 'rooms', docId)).catch(() => {});
-          }
         }
       } catch (e) {
-        console.warn('Failed to delete room doc:', e);
+        console.warn('Failed to soft-delete room:', docId, e);
       }
     }
   }
-
-  await loadDashboardData();
-  selectedRooms.value = new Set();
-  showDeleteModal.value = false;
-  isManageMode.value = false;
-
-  // Show transient toast
-  trashNotification.value = `Moved ${count} meeting${count > 1 ? 's' : ''} to Trash`;
-  setTimeout(() => {
-    trashNotification.value = '';
-  }, 4000);
 };
 
 const restoreRooms = async () => {
   const pinsToRestore = Array.from(selectedRooms.value);
+  if (pinsToRestore.length === 0) return;
   const count = pinsToRestore.length;
 
+  isManageMode.value = false;
+  selectedRooms.value = new Set();
+
+  // Optimistic UI update: move from trashRooms to historyRooms
+  const restored = trashRooms.value
+    .filter((r) => pinsToRestore.includes(r.pin))
+    .map((r) => ({ ...r, deletedAt: null }));
+  trashRooms.value = trashRooms.value.filter((r) => !pinsToRestore.includes(r.pin));
+  historyRooms.value = [...restored, ...historyRooms.value];
+
+  trashNotification.value = `Restored ${count} meeting${count > 1 ? 's' : ''}`;
+  if (trashNotificationTimer) clearTimeout(trashNotificationTimer);
+  trashNotificationTimer = setTimeout(() => {
+    trashNotification.value = '';
+  }, 4000);
+
+  // Background persistence
   for (const pin of pinsToRestore) {
     const rawItem = localStorage.getItem(`ai_room_${pin}`);
-    const room = trashRooms.value.find((r) => r.pin === pin);
-    const docId = room?.id || (rawItem ? JSON.parse(rawItem).roomId : `room_${pin}`);
-
     if (rawItem) {
-      const parsed = JSON.parse(rawItem);
-      delete parsed.deletedAt;
-      localStorage.setItem(`ai_room_${pin}`, JSON.stringify(parsed));
+      try {
+        const parsed = JSON.parse(rawItem);
+        delete parsed.deletedAt;
+        localStorage.setItem(`ai_room_${pin}`, JSON.stringify(parsed));
+      } catch (e) {}
     }
 
-    if (db) {
+    const room = restored.find((r) => r.pin === pin);
+    const docId = room?.id || (rawItem ? JSON.parse(rawItem).roomId : `room_${pin}`);
+    const isHost = room?.isHost ?? (rawItem ? JSON.parse(rawItem).hostUid === authStore.uid : false);
+
+    if (db && authStore.uid) {
       try {
-        let isHost = false;
-        if (rawItem) {
-          try {
-            const parsed = JSON.parse(rawItem);
-            if (parsed.hostUid === authStore.uid) isHost = true;
-          } catch (e) {}
-        }
+        await updateDoc(doc(db, 'users', authStore.uid, 'rooms', docId), { deletedAt: null }).catch(() => {});
         if (isHost) {
           await updateDoc(doc(db, 'rooms', docId), { deletedAt: null }).catch(() => {});
         }
       } catch (e) {
-        console.warn('Failed to restore room doc:', e);
+        console.warn('Failed to restore room:', docId, e);
       }
     }
   }
-
-  await loadDashboardData();
-  selectedRooms.value = new Set();
-  isManageMode.value = false;
-
-  trashNotification.value = `Restored ${count} meeting${count > 1 ? 's' : ''}`;
-  setTimeout(() => {
-    trashNotification.value = '';
-  }, 4000);
 };
 
 const confirmPermanentDelete = async () => {
   const pinsToDelete = Array.from(selectedRooms.value);
+  if (pinsToDelete.length === 0) return;
   const count = pinsToDelete.length;
 
+  // 1. Immediately close modal and exit manage mode
+  showPermanentDeleteModal.value = false;
+  isManageMode.value = false;
+  selectedRooms.value = new Set();
+
+  // 2. Optimistic UI update: remove from trashRooms
+  const deletingRooms = trashRooms.value.filter((r) => pinsToDelete.includes(r.pin));
+  trashRooms.value = trashRooms.value.filter((r) => !pinsToDelete.includes(r.pin));
+
+  // 3. Transient toast notification
+  trashNotification.value = `Permanently deleted ${count} meeting${count > 1 ? 's' : ''}`;
+  if (trashNotificationTimer) clearTimeout(trashNotificationTimer);
+  trashNotificationTimer = setTimeout(() => {
+    trashNotification.value = '';
+  }, 4000);
+
+  // 4. Background persistence
   for (const pin of pinsToDelete) {
     const rawItem = localStorage.getItem(`ai_room_${pin}`);
-    const room = trashRooms.value.find((r) => r.pin === pin);
-    const docId = room?.id || (rawItem ? JSON.parse(rawItem).roomId : `room_${pin}`);
-
     localStorage.removeItem(`ai_room_${pin}`);
+
+    const room = deletingRooms.find((r) => r.pin === pin);
+    const docId = room?.id || (rawItem ? JSON.parse(rawItem).roomId : `room_${pin}`);
+    const isHost = room?.isHost ?? (rawItem ? JSON.parse(rawItem).hostUid === authStore.uid : false);
 
     if (db) {
       try {
+        // 1. Always delete from user's personal rooms index
         if (authStore.uid) {
           await deleteDoc(doc(db, 'users', authStore.uid, 'rooms', docId)).catch(() => {});
         }
-        let isHost = false;
-        if (rawItem) {
-          try {
-            const parsed = JSON.parse(rawItem);
-            if (parsed.hostUid === authStore.uid) isHost = true;
-          } catch (e) {}
-        }
+
+        // 2. If host, delete the main room document
         if (isHost) {
           await deleteDoc(doc(db, 'rooms', docId)).catch(() => {});
+        } else {
+          // 3. If participant, remove self from participantUids so Query B NEVER brings it back
+          if (authStore.uid) {
+            await updateDoc(doc(db, 'rooms', docId), {
+              participantUids: arrayRemove(authStore.uid)
+            }).catch(() => {});
+            await deleteDoc(doc(db, 'rooms', docId, 'participants', authStore.uid)).catch(() => {});
+          }
         }
       } catch (e) {
-        console.warn('Failed to permanently delete room doc:', e);
+        console.warn('Failed to permanently delete room:', docId, e);
       }
     }
   }
-
-  await loadDashboardData();
-  selectedRooms.value = new Set();
-  showDeleteModal.value = false;
-  isManageMode.value = false;
-
-  trashNotification.value = `Permanently deleted ${count} meeting${count > 1 ? 's' : ''}`;
-  setTimeout(() => {
-    trashNotification.value = '';
-  }, 4000);
 };
 const handleLogout = async () => {
   await authStore.logoutGoogle();
@@ -593,7 +683,7 @@ const handleLogout = async () => {
                     Restore ({{ selectedRooms.size }})
                   </button>
                   <button
-                    @click="confirmPermanentDelete"
+                    @click="showPermanentDeleteModal = true"
                     :disabled="selectedRooms.size === 0"
                     class="text-xs px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium transition shadow"
                   >
@@ -611,7 +701,7 @@ const handleLogout = async () => {
               <!-- If not in manage mode -->
               <template v-else>
                 <button
-                  @click="isTrashView = !isTrashView"
+                  @click="toggleTrashView"
                   class="text-xs px-3 py-1.5 rounded-lg border transition flex items-center gap-1.5"
                   :class="isTrashView ? 'border-sky-500/50 bg-sky-900/30 text-sky-400' : 'border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300'"
                 >
@@ -757,6 +847,47 @@ const handleLogout = async () => {
             class="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold transition shadow-md"
           >
             Move to Trash
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Custom Modal Confirmation Dialog for Permanent Delete -->
+    <div
+      v-if="showPermanentDeleteModal"
+      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-xs"
+      @click.self="showPermanentDeleteModal = false"
+    >
+      <div class="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl text-slate-100">
+        <div class="flex items-center gap-3 mb-4">
+          <div class="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400">
+            <Trash2 class="w-5 h-5" />
+          </div>
+          <div>
+            <h3 class="text-base font-bold text-white">Permanently Delete?</h3>
+            <p class="text-xs text-slate-400">This action cannot be undone. Meeting records will be removed forever.</p>
+          </div>
+        </div>
+
+        <p class="text-sm text-slate-300 mb-6">
+          Are you sure you want to permanently delete
+          <span class="font-semibold text-white">
+            {{ selectedRooms.size === 1 ? '1 meeting' : `${selectedRooms.size} meetings` }}
+          </span>?
+        </p>
+
+        <div class="flex items-center justify-end gap-2.5">
+          <button
+            @click="showPermanentDeleteModal = false"
+            class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition border border-slate-700"
+          >
+            Cancel
+          </button>
+          <button
+            @click="confirmPermanentDelete"
+            class="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold transition shadow-md"
+          >
+            Delete Permanently
           </button>
         </div>
       </div>

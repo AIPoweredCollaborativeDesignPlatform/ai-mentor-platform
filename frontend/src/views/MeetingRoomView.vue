@@ -264,6 +264,7 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string, expli
       },
       metadata: meta
     });
+    currentWhiteboardJson.value = json;
   } else {
     // Create new whiteboard asset under appropriate owner
     const newId = await roomStore.sendCustomMessage({
@@ -282,6 +283,7 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string, expli
     });
     if (newId) {
       activeWhiteboardAssetId.value = newId;
+      currentWhiteboardJson.value = json;
       targetAssetId = newId;
       if (whiteboardRef.value) {
         (whiteboardRef.value as any).setCurrentAssetId?.(newId);
@@ -314,8 +316,10 @@ const openWhiteboardState = async (msg: any) => {
     await handleJoinSharedWhiteboard();
     return;
   }
-  // If already viewing this exact asset on open whiteboard, no need to reload
-  if (isWhiteboardOpen.value && activeWhiteboardAssetId.value === msg.id && !isJoiningSharedBoard.value) {
+  // If already viewing this exact asset on open whiteboard and canvas is not blank, no need to reload
+  const isCanvasBlank = whiteboardRef.value ? (whiteboardRef.value as any).isBlankCanvas?.() : false;
+  if (isWhiteboardOpen.value && activeWhiteboardAssetId.value === msg.id && !isJoiningSharedBoard.value && !isCanvasBlank) {
+    roomStore.pushToast('Whiteboard Active', 'This whiteboard is currently open.', 'info');
     return;
   }
   if (isWhiteboardOpen.value && whiteboardRef.value?.hasUnsavedChanges) {

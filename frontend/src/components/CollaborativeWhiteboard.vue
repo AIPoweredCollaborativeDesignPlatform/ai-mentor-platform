@@ -5532,6 +5532,18 @@ const loadDocument = async (json?: string) => {
 
 watch([() => props.activeAssetId, () => props.initialJson], async ([newId, newJson], [oldId, oldJson]) => {
   if (newId !== oldId || newJson !== oldJson) {
+    // 1. If this is merely assigning an asset ID to the current active whiteboard session (e.g. from initial auto-save),
+    // or if currentAssetId already matches newId, update currentAssetId and DO NOT reload or wipe the canvas!
+    if ((!oldId && newId) || (newId && newId === currentAssetId.value)) {
+      currentAssetId.value = newId;
+      // Only reload if the parent explicitly provided a different, non-empty JSON
+      if (newJson && newJson !== oldJson && canvas) {
+        await loadDocument(newJson);
+      }
+      return;
+    }
+
+    // 2. Genuine asset switch (from one asset to a different asset)
     if (newId !== oldId && hasUnsavedChanges.value && canvas && !isBlankCanvasWithoutHistory()) {
       try {
         const json = getSerializedCanvasJson();
@@ -5543,7 +5555,9 @@ watch([() => props.activeAssetId, () => props.initialJson], async ([newId, newJs
       }
     }
     currentAssetId.value = newId;
-    if (canvas) {
+
+    // 3. Only load document if a valid newJson is actually provided and different!
+    if (canvas && newJson && newJson !== oldJson) {
       await loadDocument(newJson);
     }
   }
@@ -7521,7 +7535,8 @@ defineExpose({
   getCanvasSnapshot,
   setCurrentAssetId: (id: string) => { currentAssetId.value = id; },
   getCanvasJson: () => getSerializedCanvasJson(),
-  loadDocument
+  loadDocument,
+  isBlankCanvas: () => isBlankCanvasWithoutHistory()
 });
 
 // --- AI Generator ---

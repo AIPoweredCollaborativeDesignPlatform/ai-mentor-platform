@@ -40,9 +40,12 @@ import { getStoredTripoApiKey, setStoredTripoApiKey } from '../services/tripo';
 import { getStoredMeshyApiKey, setStoredMeshyApiKey } from '../services/meshy';
 import { ROOM_EMOJI_LIST } from '../constants/roomEmojis';
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   isOpen: boolean;
-}>();
+  topOffset?: string;
+}>(), {
+  topOffset: '56px'
+});
 
 const emit = defineEmits<{
   (e: 'close'): void;
@@ -330,14 +333,16 @@ const sensitivities: { id: SensitivityLevel; name: string; desc: string }[] = [
     >
       <div
         v-if="isOpen"
-        class="fixed inset-0 z-40 bg-slate-950/60 backdrop-blur-xs"
+        class="fixed inset-x-0 bottom-0 z-30 bg-slate-950/60 backdrop-blur-xs"
+        :style="{ top: topOffset }"
         @click="emit('close')"
       ></div>
     </Transition>
 
     <!-- Sliding Drawer Panel -->
     <div
-      class="fixed inset-y-0 right-0 z-50 w-full max-w-md bg-slate-900 border-l border-slate-800 h-[100dvh] flex flex-col shadow-2xl transform transition-transform duration-300 ease-in-out"
+      class="fixed bottom-0 right-0 z-40 w-full max-w-md bg-slate-900 border-l border-slate-800 flex flex-col shadow-2xl transform transition-transform duration-300 ease-in-out"
+      :style="{ top: topOffset, height: `calc(100dvh - ${topOffset})` }"
       :class="isOpen ? 'translate-x-0' : 'translate-x-full'"
     >
       <!-- Header -->

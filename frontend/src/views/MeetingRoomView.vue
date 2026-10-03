@@ -460,8 +460,44 @@ const pin = roomId.value.replace('room_', '');
 const isDrawerOpen = ref(false);
 const isAssetsDrawerOpen = ref(false);
 
+const drawerTopOffset = computed(() => {
+  return isMeetingClosed.value ? '89px' : '56px';
+});
+
+const toggleSettingsDrawer = () => {
+  if (isDrawerOpen.value) {
+    isDrawerOpen.value = false;
+  } else {
+    isAssetsDrawerOpen.value = false;
+    isDrawerOpen.value = true;
+  }
+};
+
+const toggleAssetsDrawer = () => {
+  if (isAssetsDrawerOpen.value) {
+    isAssetsDrawerOpen.value = false;
+  } else {
+    isDrawerOpen.value = false;
+    isAssetsDrawerOpen.value = true;
+  }
+};
+
+const openUserProfile = () => {
+  isDrawerOpen.value = false;
+  isAssetsDrawerOpen.value = false;
+  isEditProfileOpen.value = true;
+};
+
+watch(isDrawerOpen, (isOpen) => {
+  if (isOpen) {
+    isAssetsDrawerOpen.value = false;
+  }
+});
+
 watch(isAssetsDrawerOpen, (isOpen) => {
-  if (!isOpen) {
+  if (isOpen) {
+    isDrawerOpen.value = false;
+  } else {
     isManagingAssets.value = false;
   }
 });
@@ -1162,13 +1198,13 @@ onUnmounted(() => {
     <!-- Read-Only Archive Notice Bar (When closed) -->
     <div
       v-if="isMeetingClosed"
-      class="bg-amber-950/70 border-b border-amber-500/30 px-3 sm:px-4 py-2 text-center text-xs text-amber-300 flex items-center justify-center gap-1.5 shrink-0 z-20"
+      class="bg-amber-950/70 border-b border-amber-500/30 px-3 sm:px-4 py-2 text-center text-xs text-amber-300 flex items-center justify-center gap-1.5 shrink-0 z-40 relative"
     >
       <Lock class="w-3.5 h-3.5 text-amber-400 shrink-0" />
       <span class="truncate">Meeting closed by host (Read-only).</span>
       <button
         v-if="roomStore.isHost"
-        @click="isDrawerOpen = true"
+        @click="toggleSettingsDrawer"
         class="underline font-semibold hover:text-white ml-1 cursor-pointer shrink-0"
       >
         Reopen
@@ -1176,7 +1212,7 @@ onUnmounted(() => {
     </div>
 
     <!-- Top Navigation Bar -->
-    <header class="h-14 border-b border-slate-800 bg-slate-900/90 backdrop-blur-md px-2.5 sm:px-5 flex items-center justify-between z-10 shrink-0 gap-2">
+    <header class="h-14 border-b border-slate-800 bg-slate-900/90 backdrop-blur-md px-2.5 sm:px-5 flex items-center justify-between z-40 shrink-0 gap-2 relative">
       <div class="flex items-center gap-1.5 sm:gap-2 min-w-0">
         <router-link
           :to="authStore.isGoogleLinked ? '/dashboard' : '/'"
@@ -1189,7 +1225,7 @@ onUnmounted(() => {
         <div class="min-w-0">
           <div
             class="flex items-center gap-1.5 cursor-pointer group"
-            @click="isDrawerOpen = true"
+            @click="toggleSettingsDrawer"
             :title="roomStore.isHost ? 'Click to edit room name & avatar in Settings' : 'Room settings'"
           >
             <span class="text-base sm:text-lg select-none shrink-0 group-hover:scale-110 transition-transform">{{ roomStore.currentRoom?.roomEmoji || '💡' }}</span>
@@ -1231,7 +1267,7 @@ onUnmounted(() => {
 
         <!-- AI Status Capsule (Desktop/Tablet) -->
         <button
-          @click="isDrawerOpen = true"
+          @click="toggleSettingsDrawer"
           class="hidden md:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition cursor-pointer"
           :class="{
             'bg-sky-950/50 border-sky-500/40 text-sky-300 hover:bg-sky-900/50': roomStore.aiStatus === 'idle',
@@ -1253,7 +1289,7 @@ onUnmounted(() => {
 
         <!-- User Profile Pill (Click to edit) -->
         <button
-          @click="isEditProfileOpen = true"
+          @click="openUserProfile"
           class="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-700 text-slate-200 transition text-xs cursor-pointer min-h-[36px]"
           title="Change name or avatar"
         >
@@ -1286,8 +1322,9 @@ onUnmounted(() => {
 
         <!-- Album / Assets Drawer Button -->
         <button
-          @click="isAssetsDrawerOpen = true"
-          class="relative inline-flex items-center gap-1 text-[11px] px-2 py-1.5 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 text-amber-400 font-medium transition cursor-pointer min-h-[36px]"
+          @click="toggleAssetsDrawer"
+          class="relative inline-flex items-center gap-1 text-[11px] px-2 py-1.5 rounded-lg border transition cursor-pointer min-h-[36px]"
+          :class="isAssetsDrawerOpen ? 'border-amber-500/60 bg-amber-500/20 text-amber-300 shadow-xs' : 'border-slate-700 bg-slate-800 hover:bg-slate-700 text-amber-400 font-medium'"
           title="Assets Library"
         >
           <Box class="w-3.5 h-3.5" />
@@ -1296,8 +1333,9 @@ onUnmounted(() => {
 
         <!-- Controls Drawer Button -->
         <button
-          @click="isDrawerOpen = true"
-          class="relative inline-flex items-center gap-1 text-[11px] px-2.5 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold shadow transition cursor-pointer min-h-[36px]"
+          @click="toggleSettingsDrawer"
+          class="relative inline-flex items-center gap-1 text-[11px] px-2.5 py-1.5 rounded-lg font-semibold shadow transition cursor-pointer min-h-[36px]"
+          :class="isDrawerOpen ? 'bg-sky-500 text-white ring-2 ring-sky-400/40 shadow-md' : 'bg-sky-600 hover:bg-sky-500 text-white'"
           title="Room Settings & Members"
         >
           <Sliders class="w-3.5 h-3.5" />
@@ -2080,7 +2118,8 @@ onUnmounted(() => {
 
     <!-- Assets / Album Drawer -->
     <div
-      class="fixed inset-y-0 right-0 z-50 w-full sm:w-80 bg-slate-900 border-l border-slate-800 shadow-2xl flex flex-col transform transition-transform duration-300 ease-in-out"
+      class="fixed bottom-0 right-0 z-40 w-full sm:w-80 bg-slate-900 border-l border-slate-800 shadow-2xl flex flex-col transform transition-transform duration-300 ease-in-out"
+      :style="{ top: drawerTopOffset, height: `calc(100dvh - ${drawerTopOffset})` }"
       :class="isAssetsDrawerOpen ? 'translate-x-0' : 'translate-x-full'"
     >
       <div class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950">
@@ -2412,12 +2451,14 @@ onUnmounted(() => {
     <div
       v-if="isAssetsDrawerOpen"
       @click="isAssetsDrawerOpen = false"
-      class="fixed inset-0 z-40 bg-black/60 transition-opacity"
+      class="fixed inset-x-0 bottom-0 z-30 bg-black/60 transition-opacity"
+      :style="{ top: drawerTopOffset }"
     ></div>
 
     <!-- Host Control Drawer -->
     <HostControlDrawer
       :isOpen="isDrawerOpen"
+      :topOffset="drawerTopOffset"
       @close="isDrawerOpen = false"
     />
 

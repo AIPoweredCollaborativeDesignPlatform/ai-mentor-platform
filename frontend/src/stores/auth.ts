@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
-import { auth, db, isFirebaseConfigured } from '../firebase/config';
+import { auth, db } from '../firebase/config';
 import { doc, getDoc, setDoc, updateDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import {
   signInAnonymously,
@@ -14,7 +14,6 @@ import {
 } from 'firebase/auth';
 
 export const useAuthStore = defineStore('auth', () => {
-  const isConfigured = ref(isFirebaseConfigured());
 
   // Pool of diverse, fun emoji avatars to prevent repeated avatars
   const AVATAR_POOL = [
@@ -345,7 +344,6 @@ export const useAuthStore = defineStore('auth', () => {
     avatar,
     email,
     isGoogleLinked,
-    isConfigured,
     firebaseUser,
     updateProfile,
     upgradeWithGoogle,

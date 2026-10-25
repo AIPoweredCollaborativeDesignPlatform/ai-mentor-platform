@@ -51,7 +51,7 @@ import AlertModal from '../components/AlertModal.vue';
 import PdfViewerModal from '../components/PdfViewerModal.vue';
 import CollaborativeWhiteboard from '../components/CollaborativeWhiteboard.vue';
 import * as fabric from 'fabric';
-import { currentLocale, setLocale, t, type SupportedLocale } from '../i18n';
+import { t } from '../i18n';
 
 const route = useRoute();
 const router = useRouter();

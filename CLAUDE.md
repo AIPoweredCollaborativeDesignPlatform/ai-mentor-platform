@@ -30,13 +30,14 @@ npm run deploy:dry         # 只 build 驗證，不部署、不改版本
 
 - **無自有後端**：Vue 3 SPA 直接在瀏覽器呼叫 Gemini（`@google/generative-ai`）、Meshy、Tripo；Firestore 是唯一的即時同步匯流排。`backend/`（FastAPI）是遺留程式碼，前端沒有呼叫，不要改它來修功能。
 - **Cloud Function** 只有 `functions/index.js` 的 `proxyGlb`（Hosting rewrite `/api/proxy`），用來繞過外部 GLB 的 CORS。
-- **AI 由觸發者的瀏覽器執行**：`stores/room.ts` 的 `triggerMentorAgent` 決定是否呼叫（`@mentor` 強制；否則每 5 則訊息、8 秒冷卻、`isAnalyzing` 互斥；Strict 模式只回應 `@mentor`）→ `services/ai.ts` 的 `analyzeDialogueWithGemini` 回傳 JSON（`shouldIntervene / aiMessage / actionOptions / assetType / assetData`）→ 以 `senderUid: 'ai_mentor'` 寫回 messages。模型清單 `FLASH_CORE_MODELS` 依序 fallback。
+- **Room store 是門面**：`stores/room.ts` 只組合 `stores/room/{session,messages,whiteboard,mentor}.ts`，元件一律透過 `useRoomStore()` 使用；`MeetingRoomView.vue` 只做編排，UI 拆在 `components/room/`，白板開關/私人公開狀態機在 `composables/useWhiteboardSession.ts`。
+- **AI 由觸發者的瀏覽器執行**：`stores/room/mentor.ts` 的 `triggerMentorAgent` 決定是否呼叫（`@mentor` 強制；否則每 5 則訊息、8 秒冷卻、`isAnalyzing` 互斥；Strict 模式只回應 `@mentor`）→ `services/ai.ts` 的 `analyzeDialogueWithGemini` 回傳 JSON（`shouldIntervene / aiMessage / actionOptions / assetType / assetData`）→ 以 `senderUid: 'ai_mentor'` 寫回 messages。模型清單 `FLASH_CORE_MODELS` 依序 fallback。
 - **路由為 Hash 模式**（`/#/room/room_123456`）；Room ID＝`room_${6位數PIN}`。
 - **協作白板**（`components/CollaborativeWhiteboard.vue`，約 9.9k 行，Fabric.js **v7** API）有三條同步通道：
   - `rooms/{id}/cursors/{uid}`：高頻即時預覽（游標、liveStroke/liveShape/liveDrag/liveText/liveLock）
   - `rooms/{id}.whiteboardState`：共享 session 的權威 Fabric JSON（50ms debounce），他端 `watch` → `loadFromFirebase` 以物件 `id` 做 entity reconciliation（不是清空重載）
   - `rooms/{id}/messages/{assetId}`（`type: whiteboard_state`）：白板資產本體＋`isPrivate`，800ms 自動儲存
-- 巨型檔案（白板元件、`MeetingRoomView.vue` 3.4k 行、`room.ts` 2k 行）請先 grep 函式名再用行號範圍讀；快速定位表見 HANDOVER_LOG §16.3。
+- `CollaborativeWhiteboard.vue`（約 9.9k 行，P3 將重寫）請先 grep 函式名再用行號範圍讀。HANDOVER_LOG §16.3 的行號對照表在 P1 重構後已失效。
 
 ## 常見陷阱（改動前必看）
 

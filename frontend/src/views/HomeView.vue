@@ -367,5 +367,13 @@ const handleGoogleSignIn = async () => {
         </div>
       </div>
     </div>
+
+    <!-- Academic Research & AI Privacy Disclosure (IRB Compliance Notice) -->
+    <div class="mt-6 text-center max-w-lg px-4">
+      <p class="text-[11px] text-slate-500 leading-relaxed">
+        <strong class="text-slate-400 font-medium">Research Disclosure & Privacy Notice:</strong>
+        This platform integrates Google Gemini AI to assist design meetings and collaborative ideation. The AI processes room messages and custom display names to provide real-time facilitation; your login email (Gmail) and private account credentials are <span class="text-slate-400 underline decoration-slate-600">never</span> accessed or transmitted to the AI. Meeting interactions and transcripts are collected for academic research under an IRB-compliant protocol. By entering or creating a room, you acknowledge participation in this research study.
+      </p>
+    </div>
   </div>
 </template>

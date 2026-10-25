@@ -17,7 +17,7 @@ if ((fabric as any).Object?.prototype) {
   (fabric as any).Object.prototype.objectCaching = false;
 }
 import {
-  X, Pencil, Image as ImageIcon, Undo2, Redo2, Trash2, Maximize, Minimize, Check, Loader2, Sparkles, Send, Radio, Settings2, MousePointer2, Type, Square, Circle, Triangle, Minus, ArrowUpRight, Group, Ungroup, BringToFront, SendToBack, MoveUp, MoveDown, Copy, Scissors, ClipboardPaste, AlertTriangle, AlertCircle, RefreshCw, ChevronDown, ChevronUp, StickyNote, MoreHorizontal, Lock, Unlock, HelpCircle, Waypoints, Globe, MicOff, Save, User, Users, Camera, CloudOff
+  X, Pencil, Image as ImageIcon, Undo2, Redo2, Trash2, Maximize, Minimize, Check, Loader2, Sparkles, Send, Radio, Settings2, MousePointer2, Type, Square, Circle, Triangle, Minus, ArrowUpRight, Group, Ungroup, BringToFront, SendToBack, MoveUp, MoveDown, Copy, Scissors, ClipboardPaste, AlertTriangle, AlertCircle, RefreshCw, ChevronDown, ChevronUp, StickyNote, MoreHorizontal, Lock, Unlock, HelpCircle, Waypoints, Globe, MicOff, Save, User, Users, Camera, CloudOff, UploadCloud, Network, Cloud, Share2, Shapes
 } from 'lucide-vue-next';
 import { db } from '../firebase/config';
 import { doc, collection, onSnapshot, setDoc, deleteDoc, type Unsubscribe } from 'firebase/firestore';
@@ -28,11 +28,38 @@ const props = withDefaults(defineProps<{
   initialJson?: string;
   activeAssetId?: string | null;
   isSharedSession?: boolean;
+  isPublic?: boolean;
+  assetCreatorUid?: string | null;
 }>(), {
-  isSharedSession: false
+  isSharedSession: false,
+  isPublic: false,
+  assetCreatorUid: null
 });
 
+const isConvertingToPrivate = ref(false);
+
 const isCollabActive = computed(() => !!roomStore.currentRoom?.whiteboardActive && props.isSharedSession);
+const isPublicCanvas = computed(() => {
+  if (isConvertingToPrivate.value) return false;
+  return isCollabActive.value || props.isPublic;
+});
+
+const isPublisher = computed(() => {
+  const uid = authStore.uid;
+  if (!uid) return false;
+  const isHost = roomStore.currentRoom?.whiteboardHostUid === uid;
+  const isCreator = props.assetCreatorUid ? props.assetCreatorUid === uid : isHost;
+  return isHost || isCreator;
+});
+
+const canMakePrivate = computed(() => {
+  if (!isPublicCanvas.value) return false;
+  const uid = authStore.uid;
+  if (!uid) return false;
+  const isHost = roomStore.currentRoom?.whiteboardHostUid === uid;
+  const isCreator = props.assetCreatorUid ? props.assetCreatorUid === uid : isHost;
+  return isHost || isCreator;
+});
 
 const emit = defineEmits<{
   (e: 'close'): void;
@@ -47,6 +74,8 @@ const CUSTOM_PROPS = [
   'isStickyNote',
   'stickyColorConfig',
   'minHeight',
+  '_savedHeight',
+  'height',
   'isLocked',
   'isArrow',
   'arrowPoints',
@@ -69,6 +98,7 @@ const CUSTOM_PROPS = [
   'id',
   'fontSize',
   '_origEndpointCorners',
+  'localArrowPoints',
   'hasLockedChildren',
   'isSvg',
   'strokeUniform'
@@ -98,12 +128,12 @@ const handleWindowPointerDown = (e: PointerEvent) => {
 };
 
 const whiteboardContainerWidth = ref(800);
-const isColorPickerOpen = ref(false);
 const isSendTextVisible = computed(() => whiteboardContainerWidth.value >= 960);
 const isFullColorsVisible = computed(() => whiteboardContainerWidth.value >= 880);
 const isCompactToolbar = computed(() => whiteboardContainerWidth.value < 880);
 const isStackedToolbar = computed(() => whiteboardContainerWidth.value < 680);
 const isNarrowToolbar = computed(() => whiteboardContainerWidth.value < 520);
+const isHeaderCompact = computed(() => whiteboardContainerWidth.value < 640);
 
 let canvas: fabric.Canvas | null = null;
 
@@ -132,7 +162,7 @@ const activeColor = ref('#0f172a'); // Dark slate for drawing on light backgroun
 const strokeWidth = ref(4);
 const isDrawingMode = ref(true);
 
-const colors = ['#0f172a', '#38bdf8', '#818cf8', '#e879f9', '#34d399', '#fbbf24', '#f87171'];
+const colors = ['#0f172a', '#64748b', '#ef4444', '#f97316', '#f59e0b', '#10b981', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899'];
 const strokeSizes = [
   { label: 'S', value: 2 },
   { label: 'M', value: 4 },
@@ -163,6 +193,67 @@ const activeStickyNote = shallowRef<any>(null);
 const stickyToolbarPosition = ref({ x: 0, y: 0, visible: false });
 const lockToolbarPosition = ref({ x: 0, y: 0, visible: false, hasLocked: false, allLocked: false });
 const hasIsolationChanged = ref(false);
+const isShiftKeyPressed = ref(false);
+const activeFlyoutMenu = ref<'pen' | 'note' | 'color' | 'ai' | null>(null);
+let flyoutCloseTimer: any = null;
+
+const openFlyout = (menu: 'pen' | 'note' | 'color' | 'ai') => {
+  if (flyoutCloseTimer) {
+    clearTimeout(flyoutCloseTimer);
+    flyoutCloseTimer = null;
+  }
+  activeFlyoutMenu.value = menu;
+};
+
+const scheduleCloseFlyout = () => {
+  if (flyoutCloseTimer) clearTimeout(flyoutCloseTimer);
+  flyoutCloseTimer = setTimeout(() => {
+    activeFlyoutMenu.value = null;
+  }, 250);
+};
+
+const cancelCloseFlyout = () => {
+  if (flyoutCloseTimer) {
+    clearTimeout(flyoutCloseTimer);
+    flyoutCloseTimer = null;
+  }
+};
+
+const closeFlyoutImmediately = () => {
+  if (flyoutCloseTimer) {
+    clearTimeout(flyoutCloseTimer);
+    flyoutCloseTimer = null;
+  }
+  activeFlyoutMenu.value = null;
+};
+
+const handleToolMouseEnter = (menu: 'pen' | 'note' | 'color' | 'ai') => {
+  cancelCloseFlyout();
+  openFlyout(menu);
+};
+
+const handleToolMouseLeave = () => {
+  scheduleCloseFlyout();
+};
+
+const handlePenDirectClick = () => {
+  closeFlyoutImmediately();
+  toggleMode(true);
+  currentTool.value = 'draw';
+};
+
+const handleNoteToolClick = () => {
+  closeFlyoutImmediately();
+  addSticky(selectedStickyColor.value);
+};
+
+const handleColorDirectClick = () => {
+  if (activeFlyoutMenu.value === 'color') {
+    closeFlyoutImmediately();
+  } else {
+    openFlyout('color');
+  }
+};
 
 // Arrow Floating Toolbar & Node Editing State
 const activeArrow = shallowRef<any>(null);
@@ -239,6 +330,8 @@ let isolatedItems: any[] = [];
 
 // Hover highlight & toast & cheatsheet
 const isHoveringSend = ref(false);
+const isPublishing = ref(false);
+const isSendingView = ref(false);
 const toastMsg = ref('');
 const showToast = ref(false);
 let toastTimer: any = null;
@@ -342,30 +435,27 @@ const updateArrowToolbar = () => {
     active.setCoords();
     const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
     const coords = active.getCoords ? active.getCoords(true, true) : null;
+    let rawX = 0;
+    let rawY = 0;
     if (coords && coords.length >= 4) {
       const minSceneX = Math.min(coords[0].x, coords[1].x, coords[2].x, coords[3].x);
       const maxSceneX = Math.max(coords[0].x, coords[1].x, coords[2].x, coords[3].x);
       const maxSceneY = Math.max(coords[0].y, coords[1].y, coords[2].y, coords[3].y);
       const midSceneX = (minSceneX + maxSceneX) / 2;
-
-      const screenX = midSceneX * vpt[0] + vpt[4];
-      const screenY = maxSceneY * vpt[3] + vpt[5];
-
-      arrowToolbarPosition.value = {
-        x: screenX,
-        y: screenY + 28,
-        visible: true
-      };
+      rawX = midSceneX * vpt[0] + vpt[4];
+      rawY = maxSceneY * vpt[3] + vpt[5];
     } else {
       const bound = active.getBoundingRect(true);
-      const screenX = (bound.left + bound.width / 2) * vpt[0] + vpt[4];
-      const screenY = (bound.top + bound.height) * vpt[3] + vpt[5];
-      arrowToolbarPosition.value = {
-        x: screenX,
-        y: screenY + 28,
-        visible: true
-      };
+      rawX = (bound.left + bound.width / 2) * vpt[0] + vpt[4];
+      rawY = (bound.top + bound.height) * vpt[3] + vpt[5];
     }
+    const clampedX = Math.max(80, Math.min(window.innerWidth - 80, rawX));
+    const clampedY = Math.max(70, Math.min(window.innerHeight - 60, rawY + 24));
+    arrowToolbarPosition.value = {
+      x: clampedX,
+      y: clampedY,
+      visible: true
+    };
   } else {
     activeArrow.value = null;
     arrowToolbarPosition.value.visible = false;
@@ -670,23 +760,31 @@ const liveNodeArrowSvg = computed(() => {
   }
   const tangentAngle = Math.atan2(sn.y - sRef.y, sn.x - sRef.x);
 
-  const baseDist = headLen * Math.cos(headAngle);
-  const shaftCut = Math.max(2, baseDist - Math.min(3 * zoom, headLen * 0.15));
-  const shaftEndX = sn.x - shaftCut * Math.cos(tangentAngle);
-  const shaftEndY = sn.y - shaftCut * Math.sin(tangentAngle);
+  const hLen = Math.max(14, rawWidth * 3.6) * zoom;
+  const hHalfWidth = hLen * 0.55;
 
-  const w1x = sn.x - headLen * Math.cos(tangentAngle - headAngle);
-  const w1y = sn.y - headLen * Math.sin(tangentAngle - headAngle);
-  const w2x = sn.x - headLen * Math.cos(tangentAngle + headAngle);
-  const w2y = sn.y - headLen * Math.sin(tangentAngle + headAngle);
-  const headPoints = `${sn.x.toFixed(1)},${sn.y.toFixed(1)} ${w1x.toFixed(1)},${w1y.toFixed(1)} ${w2x.toFixed(1)},${w2y.toFixed(1)}`;
+  const cosA = Math.cos(tangentAngle);
+  const sinA = Math.sin(tangentAngle);
+
+  // Tip point extends forward from sn along tangentAngle
+  const tipX = sn.x + hLen * cosA;
+  const tipY = sn.y + hLen * sinA;
+
+  // Base corners perpendicular to tangentAngle at sn
+  const w1x = sn.x - hHalfWidth * sinA;
+  const w1y = sn.y + hHalfWidth * cosA;
+
+  const w2x = sn.x + hHalfWidth * sinA;
+  const w2y = sn.y - hHalfWidth * cosA;
+
+  const headPoints = `${tipX.toFixed(1)},${tipY.toFixed(1)} ${w1x.toFixed(1)},${w1y.toFixed(1)} ${w2x.toFixed(1)},${w2y.toFixed(1)}`;
 
   let pathD = '';
   if (sPts.length < 3) {
-    pathD = `M ${s0.x.toFixed(1)} ${s0.y.toFixed(1)} L ${shaftEndX.toFixed(1)} ${shaftEndY.toFixed(1)}`;
+    pathD = `M ${s0.x.toFixed(1)} ${s0.y.toFixed(1)} L ${sn.x.toFixed(1)} ${sn.y.toFixed(1)}`;
   } else {
     const shaftSampled = [...sPts];
-    shaftSampled[shaftSampled.length - 1] = { x: shaftEndX, y: shaftEndY };
+    shaftSampled[shaftSampled.length - 1] = { x: sn.x, y: sn.y };
     pathD = `M ${shaftSampled[0].x.toFixed(1)} ${shaftSampled[0].y.toFixed(1)}`;
     const m = shaftSampled.length - 1;
     for (let i = 0; i < m; i++) {
@@ -724,53 +822,72 @@ const enterArrowNodeEditing = (arrow: any) => {
   isArrowNodeEditing.value = true;
   selectedNodeIndices.value.clear();
 
-  if (Array.isArray(arrow.arrowPoints) && arrow.arrowPoints.length > 0) {
+  alignArrowPointsAndNodes(arrow);
+  let worldPts: Array<{ x: number; y: number }> = [];
+
+  if (arrow.isType('line')) {
+    const l = arrow as fabric.Line;
+    const x1 = l.x1 ?? 0;
+    const y1 = l.y1 ?? 0;
+    const x2 = l.x2 ?? 0;
+    const y2 = l.y2 ?? 0;
+    const midX = (x1 + x2) / 2;
+    const midY = (y1 + y2) / 2;
+    const M = arrow.calcTransformMatrix();
+    worldPts = [
+      fabric.util.transformPoint(new fabric.Point(x1 - midX, y1 - midY), M),
+      fabric.util.transformPoint(new fabric.Point(x2 - midX, y2 - midY), M)
+    ];
+  } else if (Array.isArray((arrow as any).localArrowPoints) && (arrow as any).localArrowPoints.length > 0) {
+    const M = arrow.calcTransformMatrix();
+    worldPts = (arrow as any).localArrowPoints.map((lp: any) => {
+      const p = fabric.util.transformPoint(new fabric.Point(lp.x, lp.y), M);
+      return { x: p.x, y: p.y };
+    });
+  } else if (Array.isArray(arrow.arrowPoints) && arrow.arrowPoints.length > 0) {
     const M0 = (arrow as any).initialMatrix || arrow.calcTransformMatrix();
     const M1 = arrow.calcTransformMatrix();
-    let pts = arrow.arrowPoints.map((p: any) => ({ x: p.x, y: p.y }));
-
-    let matrixChanged = false;
-    for (let i = 0; i < 6; i++) {
-      if (Math.abs(M1[i] - M0[i]) > 1e-4) {
-        matrixChanged = true;
-        break;
-      }
+    try {
+      const invM0 = fabric.util.invertTransform(M0);
+      const M_delta = fabric.util.multiplyTransformMatrices(M1, invM0);
+      worldPts = arrow.arrowPoints.map((pt: any) => {
+        const p = fabric.util.transformPoint(new fabric.Point(pt.x, pt.y), M_delta);
+        return { x: p.x, y: p.y };
+      });
+    } catch {
+      worldPts = arrow.arrowPoints.map((p: any) => ({ x: p.x, y: p.y }));
     }
-    if (matrixChanged) {
-      try {
-        const invM0 = fabric.util.invertTransform(M0);
-        const M_delta = fabric.util.multiplyTransformMatrices(M1, invM0);
-        pts = pts.map((pt: any) => fabric.util.transformPoint(pt, M_delta));
-
-        // Recreate the arrow at scale=1, angle=0 with the transformed world points
-        const updated = createArrowFromPoints(pts, (arrow as any).arrowColor, (arrow as any).arrowStrokeWidth, true, (arrow as any).arrowCornerIndices);
-        if (updated && canvas) {
-          (updated as any).arrowId = (arrow as any).arrowId;
-          (updated as any).isLocked = (arrow as any).isLocked;
-          (updated as any).authorUid = (arrow as any).authorUid;
-          (updated as any).authorName = (arrow as any).authorName;
-          const allObjs = canvas.getObjects();
-          const idx = allObjs.indexOf(arrow);
-          if (idx !== -1) {
-            canvas.remove(arrow);
-            canvas.insertAt(idx, updated);
-            arrow = updated;
-          }
-        }
-      } catch (err) {
-        console.warn('Failed to transform arrow nodes:', err);
-      }
-    }
-
-    editingArrow.value = arrow;
-    editingArrowPoints.value = pts;
-    const existingCorners = Array.isArray((arrow as any).arrowCornerIndices) ? (arrow as any).arrowCornerIndices : [];
-    editingArrowCorners.value = new Set(existingCorners);
-    (arrow as any).arrowPoints = pts.map((p: any) => ({ ...p }));
-    (arrow as any).initialMatrix = arrow.calcTransformMatrix();
-  } else {
-    return;
   }
+
+  if (worldPts.length < 2) return;
+
+  const color = (arrow as any).arrowColor || arrow.stroke || activeColor.value;
+  const width = (arrow as any).arrowStrokeWidth || arrow.strokeWidth || strokeWidth.value;
+  const existingCorners: number[] = Array.isArray((arrow as any).arrowCornerIndices) ? (arrow as any).arrowCornerIndices : [];
+  const cornersSet = new Set<number>(existingCorners);
+  const origCorners = (arrow as any)._origEndpointCorners || null;
+
+  // Recreate the arrow at scale=1, angle=0 using the exact current world points
+  const updated = createArrowFromPoints(worldPts, color, width, true, cornersSet, origCorners);
+  if (updated && canvas) {
+    (updated as any).arrowId = (arrow as any).arrowId;
+    (updated as any).isLocked = (arrow as any).isLocked;
+    (updated as any).authorUid = (arrow as any).authorUid;
+    (updated as any).authorName = (arrow as any).authorName;
+    const allObjs = canvas.getObjects();
+    const idx = allObjs.indexOf(arrow);
+    if (idx !== -1) {
+      canvas.remove(arrow);
+      canvas.insertAt(idx, updated);
+      arrow = updated;
+    }
+  }
+
+  editingArrow.value = arrow;
+  editingArrowPoints.value = worldPts.map((p: any) => ({ x: p.x, y: p.y }));
+  editingArrowCorners.value = cornersSet;
+  (arrow as any).arrowPoints = worldPts.map((p: any) => ({ ...p }));
+  (arrow as any).initialMatrix = arrow.calcTransformMatrix();
 
   arrow.set({
     hasControls: false,
@@ -1358,61 +1475,65 @@ const straightenSelectedArrow = (arrow: any) => {
   }
 };
 
-const duplicateArrow = (arrow: any) => {
+const duplicateArrow = async (arrow: any) => {
   if (!canvas || !arrow) return;
   const offset = 24;
-  let pts = arrow.arrowPoints;
-  if (!pts && arrow.type === 'line') {
-    pts = [{ x: arrow.x1 ?? 0, y: arrow.y1 ?? 0 }, { x: arrow.x2 ?? 0, y: arrow.y2 ?? 0 }];
-  }
-  if (!pts) return;
 
-  // Apply current transform delta so points match visual position before offset
-  let transformedPts = pts;
-  if (arrow.initialMatrix) {
-    const invOldM = fabric.util.invertTransform(arrow.initialMatrix);
-    const newM = arrow.calcTransformMatrix();
-    const deltaM = fabric.util.multiplyTransformMatrices(newM, invOldM);
-    transformedPts = pts.map((p: any) => {
-      const tp = fabric.util.transformPoint(new fabric.Point(p.x, p.y), deltaM);
-      return { x: tp.x, y: tp.y };
-    });
-  }
-
-  const newPts = transformedPts.map((p: any) => ({ x: p.x + offset, y: p.y + offset }));
-  let newObj: any;
-  if (arrow.isArrow) {
-    const color = (arrow as any).arrowColor || activeColor.value;
-    const width = (arrow as any).arrowStrokeWidth || strokeWidth.value;
-    const cornerIndices = (arrow as any).arrowCornerIndices;
-    const origCorners = (arrow as any)._origEndpointCorners;
-    newObj = createArrowFromPoints(newPts, color, width, true, cornerIndices, origCorners);
-  } else {
-    const color = (arrow as any).stroke || activeColor.value;
-    const width = (arrow as any).strokeWidth || strokeWidth.value;
-    newObj = new fabric.Line([newPts[0].x, newPts[0].y, newPts[newPts.length - 1].x, newPts[newPts.length - 1].y], {
-      stroke: color,
-      strokeWidth: width,
-      strokeLineCap: 'round',
+  try {
+    const cloned: any = await arrow.clone(CUSTOM_PROPS);
+    const cCanvas = canvas;
+    if (!cCanvas) return;
+    cloned.set({
+      left: (arrow.left || 0) + offset,
+      top: (arrow.top || 0) + offset,
+      angle: arrow.angle || 0,
+      scaleX: arrow.scaleX || 1,
+      scaleY: arrow.scaleY || 1,
+      flipX: !!arrow.flipX,
+      flipY: !!arrow.flipY,
+      selectable: true,
+      evented: true,
       strokeUniform: true,
+      objectCaching: false,
       perPixelTargetFind: true
     });
-    (newObj as any).isStraightLine = true;
-    (newObj as any).arrowPoints = newPts;
-  }
-  if (newObj) {
-    (newObj as any).arrowId = Math.random().toString(36).substring(2, 9);
-    canvas.add(newObj);
-    if (isIsolationMode.value && !isolatedItems.includes(newObj)) {
-      isolatedItems.push(newObj);
+
+    const newId = 'arrow_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
+    cloned.arrowId = newId;
+    cloned.id = newId;
+    cloned.isArrow = true;
+    cloned.arrowColor = arrow.arrowColor || arrow.stroke;
+    cloned.arrowStrokeWidth = arrow.arrowStrokeWidth || arrow.strokeWidth;
+    cloned.isStraightArrow = !!arrow.isStraightArrow;
+    cloned.isClosedLoop = !!arrow.isClosedLoop;
+    cloned.arrowCornerIndices = arrow.arrowCornerIndices ? [...arrow.arrowCornerIndices] : [];
+    cloned._origEndpointCorners = arrow._origEndpointCorners ? { ...arrow._origEndpointCorners } : null;
+
+    if (Array.isArray(arrow.localArrowPoints)) {
+      cloned.localArrowPoints = arrow.localArrowPoints.map((p: any) => ({ x: p.x, y: p.y }));
+    }
+    if (Array.isArray(arrow.arrowPoints)) {
+      cloned.arrowPoints = arrow.arrowPoints.map((p: any) => ({ x: p.x + offset, y: p.y + offset }));
+    }
+
+    cloned.setCoords();
+    cloned.initialMatrix = cloned.calcTransformMatrix();
+    attachArrowRenderer(cloned);
+
+    cCanvas.add(cloned);
+    if (isIsolationMode.value && !isolatedItems.includes(cloned)) {
+      isolatedItems.push(cloned);
       hasIsolationChanged.value = true;
     }
-    canvas.setActiveObject(newObj);
-    canvas.requestRenderAll();
+    cCanvas.setActiveObject(cloned);
+    cCanvas.requestRenderAll();
     saveHistoryState();
     syncToFirebase();
     updateSelectionState();
     displayToast('Duplicated');
+  } catch (err) {
+    console.error('Failed to duplicate arrow:', err);
+    displayToast('Failed to duplicate');
   }
 };
 
@@ -1491,12 +1612,14 @@ const updateSelectionState = () => {
       lockRotation: allLocked,
       lockScalingX: allLocked,
       lockScalingY: allLocked,
+      lockUniScaling: true,
+      lockScalingFlip: true,
       hasControls: !allLocked
     });
     if (!allLocked) {
       active.setControlsVisibility({
         tl: true, tr: true, bl: true, br: true,
-        ml: true, mr: true, mt: true, mb: true, mtr: true
+        ml: false, mr: false, mt: false, mb: false, mtr: true
       });
     } else {
       active.setControlsVisibility({
@@ -1535,20 +1658,29 @@ const updateSelectionState = () => {
       });
     }
   } else if (active && (active.isStickyNote || active.stickyColorConfig)) {
+    const isLocked = !!active.isLocked;
     active.set({
-      lockUniScaling: true,
+      lockUniScaling: false,
       lockScalingFlip: true,
-      lockScalingX: true,
-      lockScalingY: true,
-      lockRotation: true,
-      hasControls: false,
+      lockScalingX: isLocked,
+      lockScalingY: isLocked,
+      lockRotation: isLocked,
+      hasControls: !isLocked,
       hasBorders: true
     });
-    active.setControlsVisibility({
-      tl: false, tr: false, bl: false, br: false,
-      ml: false, mr: false, mt: false, mb: false, mtr: false
-    });
-    isObjectLocked.value = !!(active && active.isLocked === true);
+    if (!isLocked) {
+      setupStickyControls(active);
+      active.setControlsVisibility({
+        tl: true, tr: true, bl: true, br: true,
+        ml: true, mr: true, mt: true, mb: true, mtr: true
+      });
+    } else {
+      active.setControlsVisibility({
+        tl: false, tr: false, bl: false, br: false,
+        ml: false, mr: false, mt: false, mb: false, mtr: false
+      });
+    }
+    isObjectLocked.value = isLocked;
   } else {
     isObjectLocked.value = !!(active && active.isLocked === true);
   }
@@ -2116,7 +2248,6 @@ const isCurrentUserMuted = computed(() => {
 // Whiteboard Publish / Private Dropdown & Modal
 const showPublishMenu = ref(false);
 const showPrivateConfirmModal = ref(false);
-const isConvertingToPrivate = ref(false);
 
 // Ramer-Douglas-Peucker (RDP) polygonal simplification
 const rdp = (points: Array<{ x: number; y: number }>, epsilon: number): Array<{ x: number; y: number }> => {
@@ -2205,12 +2336,7 @@ const createArrowFromPoints = (
       finalPts.push({ x: p0.x + t * (pn.x - p0.x), y: p0.y + t * (pn.y - p0.y) });
     }
 
-    const baseDist = headLen * Math.cos(headAngle);
-    const shaftCut = Math.max(2, baseDist - Math.min(3, headLen * 0.15));
-    const shaftEndX = pn.x - shaftCut * Math.cos(tangentAngle);
-    const shaftEndY = pn.y - shaftCut * Math.sin(tangentAngle);
-
-    shaft = new fabric.Line([p0.x, p0.y, shaftEndX, shaftEndY], {
+    shaft = new fabric.Line([p0.x, p0.y, pn.x, pn.y], {
       stroke: color,
       strokeWidth: width,
       strokeLineCap: 'round',
@@ -2270,20 +2396,13 @@ const createArrowFromPoints = (
       tangentAngle = Math.atan2(pn.y - pRef.y, pn.x - pRef.x);
     }
 
-    const baseDist = headLen * Math.cos(headAngle);
-    const shaftCut = Math.max(2, baseDist - Math.min(3, headLen * 0.15));
-    const shaftEndX = pn.x - shaftCut * Math.cos(tangentAngle);
-    const shaftEndY = pn.y - shaftCut * Math.sin(tangentAngle);
-
     const shaftSampled = [...sampled];
-    if (!isClosedLoop) {
-      shaftSampled[shaftSampled.length - 1] = { x: shaftEndX, y: shaftEndY };
-    } else {
+    if (isClosedLoop) {
       shaftSampled[shaftSampled.length - 1] = { x: p0.x, y: p0.y };
     }
 
     if (!isClosedLoop && shaftSampled.length < 3) {
-      shaft = new fabric.Line([p0.x, p0.y, shaftEndX, shaftEndY], {
+      shaft = new fabric.Line([p0.x, p0.y, pn.x, pn.y], {
         stroke: color,
         strokeWidth: width,
         strokeLineCap: 'round',
@@ -2329,49 +2448,21 @@ const createArrowFromPoints = (
     }
   }
 
-  let head: any = null;
-  if (!isClosedLoop) {
-    // 2. Arrowhead triangle oriented along tangentAngle
-    const w1x = pn.x - headLen * Math.cos(tangentAngle - headAngle);
-    const w1y = pn.y - headLen * Math.sin(tangentAngle - headAngle);
-    const w2x = pn.x - headLen * Math.cos(tangentAngle + headAngle);
-    const w2y = pn.y - headLen * Math.sin(tangentAngle + headAngle);
-
-    head = new fabric.Polygon(
-      [
-        { x: pn.x, y: pn.y },
-        { x: w1x, y: w1y },
-        { x: w2x, y: w2y }
-      ],
-      {
-        fill: color,
-        stroke: color,
-        strokeWidth: 1,
-        strokeLineJoin: 'round',
-        strokeUniform: true,
-        perPixelTargetFind: true
-      }
-    );
-    head.set({
-      objectCaching: false,
-      strokeUniform: true
-    });
-  }
-
   shaft.set({
-    objectCaching: false,
-    strokeUniform: true
-  });
-
-  const arrow = new fabric.Group(head ? [shaft, head] : [shaft], {
     selectable: true,
     evented: true,
     strokeUniform: true,
     objectCaching: false,
     perPixelTargetFind: true
   });
+
+  const arrow = shaft;
   (arrow as any).isArrow = true;
   (arrow as any).arrowPoints = finalPts.map(p => ({ x: p.x, y: p.y }));
+  const pOffset = (arrow as any).pathOffset || { x: (arrow.width || 0) / 2, y: (arrow.height || 0) / 2 };
+  if (!arrow.isType('line')) {
+    (arrow as any).localArrowPoints = finalPts.map(p => ({ x: p.x - pOffset.x, y: p.y - pOffset.y }));
+  }
   (arrow as any).arrowColor = color;
   (arrow as any).arrowStrokeWidth = width;
   (arrow as any).isStraightArrow = isStraight;
@@ -2382,7 +2473,300 @@ const createArrowFromPoints = (
   (arrow as any).arrowCornerIndices = Array.from(cornersSet);
   (arrow as any).initialMatrix = arrow.calcTransformMatrix();
   (arrow as any)._origEndpointCorners = origEndpointCorners;
+
+  attachArrowRenderer(arrow);
+  alignArrowPointsAndNodes(arrow);
   return arrow;
+};
+
+const alignArrowPointsAndNodes = (arrow: any) => {
+  if (!arrow || !arrow.isArrow) return;
+  arrow.setCoords();
+  const M = arrow.calcTransformMatrix();
+  (arrow as any).initialMatrix = M;
+
+  if (arrow.isType('line')) {
+    const l = arrow as fabric.Line;
+    const x1 = l.x1 ?? 0;
+    const y1 = l.y1 ?? 0;
+    const x2 = l.x2 ?? 0;
+    const y2 = l.y2 ?? 0;
+    const midX = (x1 + x2) / 2;
+    const midY = (y1 + y2) / 2;
+    (arrow as any).arrowPoints = [
+      fabric.util.transformPoint(new fabric.Point(x1 - midX, y1 - midY), M),
+      fabric.util.transformPoint(new fabric.Point(x2 - midX, y2 - midY), M)
+    ].map(p => ({ x: p.x, y: p.y }));
+    (arrow as any).localArrowPoints = [
+      { x: x1 - midX, y: y1 - midY },
+      { x: x2 - midX, y: y2 - midY }
+    ];
+  } else {
+    // For path-based arrows:
+    if ((!arrow.localArrowPoints || arrow.localArrowPoints.length === 0) && Array.isArray(arrow.arrowPoints)) {
+      try {
+        const invM = fabric.util.invertTransform(M);
+        (arrow as any).localArrowPoints = arrow.arrowPoints.map((pt: any) => {
+          const lp = fabric.util.transformPoint(new fabric.Point(pt.x, pt.y), invM);
+          return { x: lp.x, y: lp.y };
+        });
+      } catch {
+        const pOffset = (arrow as any).pathOffset || { x: (arrow.width || 0) / 2, y: (arrow.height || 0) / 2 };
+        (arrow as any).localArrowPoints = arrow.arrowPoints.map((p: any) => ({ x: p.x - pOffset.x, y: p.y - pOffset.y }));
+      }
+    } else if (Array.isArray(arrow.localArrowPoints) && arrow.localArrowPoints.length > 0) {
+      (arrow as any).arrowPoints = arrow.localArrowPoints.map((lp: any) => {
+        const p = fabric.util.transformPoint(new fabric.Point(lp.x, lp.y), M);
+        return { x: p.x, y: p.y };
+      });
+    }
+  }
+};
+
+const attachArrowRenderer = (arrow: any) => {
+  if (!arrow || arrow._hasArrowRenderer) return;
+  arrow._hasArrowRenderer = true;
+
+  const origRender = arrow._render;
+  arrow._render = function(ctx: CanvasRenderingContext2D) {
+    origRender.call(this, ctx);
+    if ((this as any).isClosedLoop) return;
+
+    let localEndX = 0;
+    let localEndY = 0;
+    let localPrevX = 0;
+    let localPrevY = 0;
+
+    if (this.isType('line')) {
+      const l = this as fabric.Line;
+      const x1 = l.x1 ?? 0;
+      const y1 = l.y1 ?? 0;
+      const x2 = l.x2 ?? 0;
+      const y2 = l.y2 ?? 0;
+      const midX = (x1 + x2) / 2;
+      const midY = (y1 + y2) / 2;
+
+      localEndX = x2 - midX;
+      localEndY = y2 - midY;
+      localPrevX = x1 - midX;
+      localPrevY = y1 - midY;
+    } else {
+      const localPts = (this as any).localArrowPoints;
+      if (localPts && localPts.length >= 2) {
+        const lastPt = localPts[localPts.length - 1];
+        const secondLastPt = localPts[Math.max(0, localPts.length - 2)];
+        localEndX = lastPt.x;
+        localEndY = lastPt.y;
+        localPrevX = secondLastPt.x;
+        localPrevY = secondLastPt.y;
+      } else {
+        const pts = (this as any).arrowPoints;
+        if (pts && pts.length >= 2) {
+          const pOffset = (this as any).pathOffset || { x: (this.width || 0) / 2, y: (this.height || 0) / 2 };
+          const lastPt = pts[pts.length - 1];
+          const secondLastPt = pts[Math.max(0, pts.length - 2)];
+          localEndX = lastPt.x - pOffset.x;
+          localEndY = lastPt.y - pOffset.y;
+          localPrevX = secondLastPt.x - pOffset.x;
+          localPrevY = secondLastPt.y - pOffset.y;
+        } else {
+          return;
+        }
+      }
+    }
+
+    const m = ctx.getTransform();
+    const screenEndX = m.a * localEndX + m.c * localEndY + m.e;
+    const screenEndY = m.b * localEndX + m.d * localEndY + m.f;
+    const screenPrevX = m.a * localPrevX + m.c * localPrevY + m.e;
+    const screenPrevY = m.b * localPrevX + m.d * localPrevY + m.f;
+    const screenDx = screenEndX - screenPrevX;
+    const screenDy = screenEndY - screenPrevY;
+    const dist = Math.hypot(screenDx, screenDy);
+
+    if (dist > 0.5) {
+      const screenAngle = Math.atan2(screenDy, screenDx);
+      const zoom = this.canvas?.getZoom() || 1;
+      const retina = (this.canvas as any)?.getRetinaScaling ? (this.canvas as any).getRetinaScaling() : (window.devicePixelRatio || 1);
+      const totalScale = zoom * retina;
+      const strokeW = (this as any).arrowStrokeWidth || this.strokeWidth || 3;
+      const hLen = Math.max(14, strokeW * 3.6) * totalScale;
+      const hHalfWidth = hLen * 0.55;
+
+      ctx.save();
+      ctx.resetTransform();
+      ctx.translate(screenEndX, screenEndY);
+      ctx.rotate(screenAngle);
+
+      const arrowColor = (this as any).arrowColor || this.stroke || '#0f172a';
+      ctx.fillStyle = arrowColor;
+      ctx.strokeStyle = arrowColor;
+      ctx.lineWidth = Math.max(1, totalScale);
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(hLen, 0);
+      ctx.lineTo(0, -hHalfWidth);
+      ctx.lineTo(0, hHalfWidth);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.restore();
+    }
+  };
+};
+
+const normalizeArrowObject = (arrow: any) => {
+  if (!arrow || !arrow.isArrow || !canvas) return arrow;
+
+  const sx = arrow.scaleX || 1;
+  const sy = arrow.scaleY || 1;
+  const skewX = arrow.skewX || 0;
+  const skewY = arrow.skewY || 0;
+  const hasScaleOrSkew = Math.abs(sx - 1) > 0.001 || Math.abs(sy - 1) > 0.001 || skewX !== 0 || skewY !== 0;
+
+  // If already at scale 1, no skew, and not part of an active selection or group, rotation axis angle is already preserved!
+  if (!hasScaleOrSkew && !arrow.group && !(arrow as any)._transformedWorldPts) {
+    arrow.setCoords();
+    return arrow;
+  }
+
+  // 1. Calculate full world transform matrix
+  const M = arrow.calcTransformMatrix();
+
+  // 2. Extract true world rotation angle in degrees
+  const targetAngle = Math.atan2(M[1], M[0]) * (180 / Math.PI);
+
+  // 3. Extract world coordinates of all knots
+  let worldPts: Array<{ x: number; y: number }> = [];
+
+  if (Array.isArray((arrow as any)._transformedWorldPts) && (arrow as any)._transformedWorldPts.length >= 2) {
+    worldPts = (arrow as any)._transformedWorldPts.map((p: any) => ({ x: Number(p.x), y: Number(p.y) }));
+    delete (arrow as any)._transformedWorldPts;
+  } else if (arrow.isType('line')) {
+    const l = arrow as fabric.Line;
+    const x1 = l.x1 ?? 0;
+    const y1 = l.y1 ?? 0;
+    const x2 = l.x2 ?? 0;
+    const y2 = l.y2 ?? 0;
+    const midX = (x1 + x2) / 2;
+    const midY = (y1 + y2) / 2;
+    worldPts = [
+      fabric.util.transformPoint(new fabric.Point(x1 - midX, y1 - midY), M),
+      fabric.util.transformPoint(new fabric.Point(x2 - midX, y2 - midY), M)
+    ].map(p => ({ x: p.x, y: p.y }));
+  } else if (Array.isArray((arrow as any).localArrowPoints) && (arrow as any).localArrowPoints.length > 0) {
+    worldPts = (arrow as any).localArrowPoints.map((lp: any) => {
+      const p = fabric.util.transformPoint(new fabric.Point(lp.x, lp.y), M);
+      return { x: p.x, y: p.y };
+    });
+  } else if (Array.isArray(arrow.arrowPoints) && arrow.arrowPoints.length > 0) {
+    const M0 = (arrow as any)._transformStartMatrix || (arrow as any).initialMatrix || M;
+    try {
+      const invM0 = fabric.util.invertTransform(M0);
+      const M_delta = fabric.util.multiplyTransformMatrices(M, invM0);
+      const ptsSource = (arrow as any)._transformStartPoints || arrow.arrowPoints;
+      worldPts = ptsSource.map((pt: any) => {
+        const p = fabric.util.transformPoint(new fabric.Point(pt.x, pt.y), M_delta);
+        return { x: p.x, y: p.y };
+      });
+    } catch {
+      worldPts = arrow.arrowPoints.map((p: any) => ({ x: p.x, y: p.y }));
+    }
+  }
+
+  if (worldPts.length < 2) {
+    arrow.setCoords();
+    return arrow;
+  }
+
+  // 4. Transform world points into unrotated coordinate frame aligned with targetAngle
+  const rad = targetAngle * (Math.PI / 180);
+  const cosNeg = Math.cos(-rad);
+  const sinNeg = Math.sin(-rad);
+  const unrotatedPts = worldPts.map(p => ({
+    x: p.x * cosNeg - p.y * sinNeg,
+    y: p.x * sinNeg + p.y * cosNeg
+  }));
+
+  // 5. Calculate bounding box center in unrotated space
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const pt of unrotatedPts) {
+    if (pt.x < minX) minX = pt.x;
+    if (pt.x > maxX) maxX = pt.x;
+    if (pt.y < minY) minY = pt.y;
+    if (pt.y > maxY) maxY = pt.y;
+  }
+  const midX = (minX + maxX) / 2;
+  const midY = (minY + maxY) / 2;
+
+  // 6. Calculate world center
+  const cosPos = Math.cos(rad);
+  const sinPos = Math.sin(rad);
+  const centerWorld = {
+    x: midX * cosPos - midY * sinPos,
+    y: midX * sinPos + midY * cosPos
+  };
+
+  // 7. Local points centered around (0, 0)
+  const localPts = unrotatedPts.map(p => ({
+    x: p.x - midX,
+    y: p.y - midY
+  }));
+
+  const color = (arrow as any).arrowColor || arrow.stroke || activeColor.value;
+  const width = (arrow as any).arrowStrokeWidth || arrow.strokeWidth || strokeWidth.value;
+  const existingCorners: number[] = Array.isArray((arrow as any).arrowCornerIndices) ? (arrow as any).arrowCornerIndices : [];
+  const cornersSet = new Set<number>(existingCorners);
+  const origCorners = (arrow as any)._origEndpointCorners || null;
+
+  // 8. Recreate arrow with local points centered at (0, 0)
+  const updated = createArrowFromPoints(localPts, color, width, true, cornersSet, origCorners);
+  if (!updated) {
+    arrow.setCoords();
+    return arrow;
+  }
+
+  // 9. Position updated arrow at centerWorld with angle = targetAngle and pristine scale = 1!
+  updated.set({
+    left: centerWorld.x,
+    top: centerWorld.y,
+    originX: 'center',
+    originY: 'center',
+    angle: targetAngle,
+    scaleX: 1,
+    scaleY: 1,
+    skewX: 0,
+    skewY: 0,
+    strokeUniform: true
+  });
+  (updated as any).arrowPoints = worldPts.map(p => ({ x: p.x, y: p.y }));
+  (updated as any).localArrowPoints = localPts.map(p => ({ x: p.x, y: p.y }));
+  (updated as any).arrowP0 = { ...worldPts[0] };
+  (updated as any).arrowPn = { ...worldPts[worldPts.length - 1] };
+  (updated as any).arrowId = (arrow as any).arrowId;
+  (updated as any).id = (arrow as any).id || (arrow as any).arrowId;
+  (updated as any).isLocked = (arrow as any).isLocked;
+  (updated as any).authorUid = (arrow as any).authorUid;
+  (updated as any).authorName = (arrow as any).authorName;
+  (updated as any)._createdAt = (arrow as any)._createdAt;
+  (updated as any)._localModifiedAt = Date.now();
+
+  updated.setCoords();
+  alignArrowPointsAndNodes(updated);
+  (updated as any).initialMatrix = updated.calcTransformMatrix();
+
+  const allObjs = canvas.getObjects();
+  const idx = allObjs.indexOf(arrow);
+  if (idx !== -1) {
+    const wasActive = canvas.getActiveObject() === arrow;
+    canvas.remove(arrow);
+    canvas.insertAt(idx, updated);
+    if (wasActive) {
+      canvas.setActiveObject(updated);
+    }
+  }
+  return updated;
 };
 
 const createSmoothedShape = (pts: Array<{ x: number; y: number }>) => {
@@ -3128,6 +3512,8 @@ const initFabric = () => {
       delete o._dragStartLocalTop;
       if (o.isStickyNote || o.stickyColorConfig) {
         normalizeStickyNoteDimensions(o);
+      } else if (o.isArrow) {
+        normalizeArrowObject(o);
       } else if (o.type === 'group' || o instanceof fabric.Group) {
         const normalizeGroupChildren = (g: any) => {
           const children = g.getObjects ? g.getObjects() : (g._objects || []);
@@ -3201,24 +3587,72 @@ const initFabric = () => {
   // Track object transformation before modification for precise undo/redo
   let hasObjectTransformed = false;
   let objectTransformBefore: { targetId: string; props: any } | null = null;
+  let multiTransformBefore: Array<{ targetId: string; props: any }> = [];
+
   canvas.on('before:transform', (e: any) => {
     const target = e.transform?.target || canvas?.getActiveObject();
-    if (target && !isInternalChange) {
+    if (!target || isInternalChange) return;
+
+    if (target.type === 'activeselection' || target.type === 'activeSelection') {
+      objectTransformBefore = null;
+      const children = target.getObjects ? target.getObjects() : (target._objects || []);
+      const selMatrix = target.calcTransformMatrix();
+      multiTransformBefore = children.map((c: any) => {
+        const id = c.id || c.arrowId;
+        const cWorldMatrix = c.calcTransformMatrix();
+        if (c.isArrow) {
+          c._transformStartMatrix = cWorldMatrix;
+          c._transformStartPoints = Array.isArray(c.arrowPoints) ? c.arrowPoints.map((p: any) => ({ ...p })) : [];
+        }
+        if (c.isStickyNote || c.stickyColorConfig || (c.type === 'textbox' && c.width === STICKY_NOTE_CONST_SIZE)) {
+          c._transformStartWidth = c.width || STICKY_NOTE_CONST_SIZE;
+          c._transformStartHeight = Math.max((c as any).minHeight || 0, (c as any)._savedHeight || 0, c.height || 0, STICKY_NOTE_CONST_SIZE);
+        }
+        return {
+          targetId: id,
+          props: {
+            left: c.left,
+            top: c.top,
+            scaleX: c.scaleX,
+            scaleY: c.scaleY,
+            angle: c.angle,
+            width: c.width,
+            height: (c as any).isStickyNote ? Math.max((c as any).minHeight || 0, (c as any)._savedHeight || 0, c.height || 0, STICKY_NOTE_CONST_SIZE) : c.height,
+            minHeight: (c as any).minHeight,
+            _savedHeight: (c as any)._savedHeight,
+            fontSize: c.fontSize,
+            arrowPoints: Array.isArray(c.arrowPoints) ? c.arrowPoints.map((p: any) => ({ ...p })) : undefined,
+            localArrowPoints: Array.isArray(c.localArrowPoints) ? c.localArrowPoints.map((p: any) => ({ ...p })) : undefined
+          }
+        };
+      }).filter((item: any) => !!item.targetId);
+    } else {
+      multiTransformBefore = [];
       const id = target.id || target.arrowId;
+      if (target.isArrow) {
+        target._transformStartMatrix = target.calcTransformMatrix();
+        target._transformStartPoints = Array.isArray(target.arrowPoints) ? target.arrowPoints.map((p: any) => ({ ...p })) : [];
+      }
+      if (target.isStickyNote || target.stickyColorConfig || (target.type === 'textbox' && target.width === STICKY_NOTE_CONST_SIZE)) {
+        target._transformStartWidth = target.width || STICKY_NOTE_CONST_SIZE;
+        target._transformStartHeight = Math.max((target as any).minHeight || 0, (target as any)._savedHeight || 0, target.height || 0, STICKY_NOTE_CONST_SIZE);
+      }
       if (id) {
-        const isSticky = (target as any).isStickyNote || (target as any).stickyColorConfig || target.type === 'textbox';
         objectTransformBefore = {
           targetId: id,
           props: {
             left: target.left,
             top: target.top,
-            scaleX: isSticky ? 1 : target.scaleX,
-            scaleY: isSticky ? 1 : target.scaleY,
-            angle: isSticky ? 0 : target.angle,
-            width: isSticky ? STICKY_NOTE_CONST_SIZE : target.width,
-            height: target.height,
-            minHeight: isSticky ? STICKY_NOTE_CONST_SIZE : (target as any).minHeight,
-            fontSize: target.fontSize
+            scaleX: target.scaleX,
+            scaleY: target.scaleY,
+            angle: target.angle,
+            width: target.width,
+            height: (target as any).isStickyNote ? Math.max((target as any).minHeight || 0, (target as any)._savedHeight || 0, target.height || 0, STICKY_NOTE_CONST_SIZE) : target.height,
+            minHeight: (target as any).minHeight,
+            _savedHeight: (target as any)._savedHeight,
+            fontSize: target.fontSize,
+            arrowPoints: Array.isArray(target.arrowPoints) ? target.arrowPoints.map((p: any) => ({ ...p })) : undefined,
+            localArrowPoints: Array.isArray(target.localArrowPoints) ? target.localArrowPoints.map((p: any) => ({ ...p })) : undefined
           }
         };
       }
@@ -3260,22 +3694,17 @@ const initFabric = () => {
       hasIsolationChanged.value = true;
     }
     const obj = e?.target;
-    if (!isInternalChange && obj) {
+    if (!obj || !canvas) return;
+
+    if (!isInternalChange) {
       obj._localModifiedAt = Date.now();
       if (typeof obj.forEachObject === 'function') {
         obj.forEachObject((c: any) => { c._localModifiedAt = Date.now(); });
       }
     }
-    if (obj && (obj.isStickyNote || obj.stickyColorConfig)) {
-      obj.set({
-        scaleX: 1,
-        scaleY: 1,
-        flipX: false,
-        flipY: false,
-        angle: 0
-      });
-      obj.setCoords();
-    } else if (obj && (obj.type === 'activeselection' || obj.type === 'activeSelection' || obj.type === 'group')) {
+
+    // Preserve locked children inside groups
+    if (obj.type === 'activeselection' || obj.type === 'activeSelection' || obj.type === 'group') {
       obj.setCoords();
       const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
       const rawScaleX = obj.scaleX || 1;
@@ -3286,16 +3715,7 @@ const initFabric = () => {
       const isParentFlippedY = !!(obj.flipY || rawScaleY < 0);
 
       targets.forEach((c: any) => {
-        if (c.isStickyNote || c.stickyColorConfig) {
-          c.set({
-            scaleX: 1 / selScaleX,
-            scaleY: 1 / selScaleY,
-            flipX: isParentFlippedX,
-            flipY: isParentFlippedY,
-            angle: -(obj.angle || 0)
-          });
-          c.setCoords();
-        } else if (c.isLocked && c._origLockedWorldPos) {
+        if (c.isLocked && c._origLockedWorldPos) {
           const origSx = c._origBaseScaleX !== undefined ? c._origBaseScaleX : Math.abs(c._origScaleX || 1);
           const origSy = c._origBaseScaleY !== undefined ? c._origBaseScaleY : Math.abs(c._origScaleY || 1);
           const invSel = fabric.util.invertTransform(obj.calcTransformMatrix());
@@ -3325,96 +3745,149 @@ const initFabric = () => {
       canvas?.requestRenderAll();
     }
 
-    // Reconstruct arrow with fixed pristine arrowhead size, preserved points, and vector crispness
-    const syncArrowTransform = (arrowObj: any) => {
-      if (isArrowNodeEditing.value) return;
-      if (!arrowObj || !(arrowObj as any).isArrow || !Array.isArray((arrowObj as any).arrowPoints)) return;
-      if (arrowObj.isLocked) return;
-      try {
-        if (!canvas) return;
-        const M0 = (arrowObj as any).initialMatrix || arrowObj.calcTransformMatrix();
-        const M1 = arrowObj.calcTransformMatrix();
-        let matrixChanged = false;
-        for (let i = 0; i < 6; i++) {
-          if (Math.abs(M1[i] - M0[i]) > 1e-4) {
-            matrixChanged = true;
-            break;
+    // Normalization and undo tracking
+    let modifiedItemsToRecord: Array<{ targetId: string; authorUid: string; beforeProps: any; afterProps: any }> = [];
+
+    if (obj.type === 'activeselection' || obj.type === 'activeSelection') {
+      const activeSel = obj as fabric.ActiveSelection;
+      const children = [...(activeSel.getObjects ? activeSel.getObjects() : (activeSel._objects || []))];
+      const hasArrowOrSticky = children.some((c: any) => c.isArrow || c.isStickyNote || c.stickyColorConfig || (c.type === 'textbox' && c.width === STICKY_NOTE_CONST_SIZE));
+
+      if (hasArrowOrSticky) {
+        // Step 1: Unpack active selection to world coordinates cleanly using Fabric's native discardActiveObject
+        canvas.discardActiveObject();
+
+        // Step 2: Normalize each unpacked child object in world space
+        const normalizedItems = children.map((item: any) => {
+          if (item.isArrow) {
+            return normalizeArrowObject(item);
           }
-        }
-        if (!matrixChanged) return;
+          if (item.isStickyNote || item.stickyColorConfig || (item.type === 'textbox' && item.width === STICKY_NOTE_CONST_SIZE)) {
+            normalizeStickyNoteDimensions(item);
+          }
+          return item;
+        });
 
-        const invM0 = fabric.util.invertTransform(M0);
-        const M_delta = fabric.util.multiplyTransformMatrices(M1, invM0);
-        const newPts = (arrowObj as any).arrowPoints.map((pt: any) => fabric.util.transformPoint(pt, M_delta));
+        // Step 3: Re-select the normalized items with a fresh ActiveSelection
+        const newActiveSel = new fabric.ActiveSelection(normalizedItems, { canvas });
+        (newActiveSel as any).lockUniScaling = true;
+        (newActiveSel as any).lockScalingFlip = true;
+        newActiveSel.setControlsVisibility({
+          tl: true, tr: true, bl: true, br: true,
+          ml: false, mr: false, mt: false, mb: false, mtr: true
+        });
+        canvas.setActiveObject(newActiveSel);
+        newActiveSel.setCoords();
 
-        const isScaledOrRotated = (arrowObj.scaleX && Math.abs(arrowObj.scaleX - 1) > 1e-3) ||
-                                 (arrowObj.scaleY && Math.abs(arrowObj.scaleY - 1) > 1e-3) ||
-                                 (arrowObj.angle && Math.abs(arrowObj.angle % 360) > 1e-3);
-
-        if (!isScaledOrRotated || arrowObj.group) {
-          // Just translated or inside multi-selection/group: update arrowPoints and initialMatrix directly without recreating
-          (arrowObj as any).arrowPoints = newPts;
-          (arrowObj as any).initialMatrix = M1;
-        } else {
-          // Scaled or rotated: reconstruct to keep fixed pristine arrowhead
-          const cornerIndices = (arrowObj as any).arrowCornerIndices;
-          const origCorners = (arrowObj as any)._origEndpointCorners;
-          const newArrow = createArrowFromPoints(newPts, (arrowObj as any).arrowColor, (arrowObj as any).arrowStrokeWidth, true, cornerIndices, origCorners);
-          if (newArrow) {
-            (newArrow as any).isLocked = (arrowObj as any).isLocked;
-            (newArrow as any).arrowId = (arrowObj as any).arrowId || Math.random().toString(36).substring(2, 9);
-            (newArrow as any).authorUid = (arrowObj as any).authorUid;
-            (newArrow as any).authorName = (arrowObj as any).authorName;
-            if ((arrowObj as any).isLocked) {
-              newArrow.set({
-                lockMovementX: true,
-                lockMovementY: true,
-                lockRotation: true,
-                lockScalingX: true,
-                lockScalingY: true,
-                hasControls: false
+        // Step 5: Match against multiTransformBefore for multi-object undo
+        if (multiTransformBefore.length > 0) {
+          normalizedItems.forEach((item: any) => {
+            const id = item.id || item.arrowId;
+            const beforeRecord = multiTransformBefore.find(b => b.targetId === id);
+            if (beforeRecord) {
+              const afterProps = {
+                left: item.left,
+                top: item.top,
+                scaleX: item.scaleX,
+                scaleY: item.scaleY,
+                angle: item.angle,
+                width: item.width,
+                height: item.height,
+                minHeight: (item as any).minHeight,
+                _savedHeight: (item as any)._savedHeight,
+                fontSize: item.fontSize,
+                arrowPoints: Array.isArray(item.arrowPoints) ? item.arrowPoints.map((p: any) => ({ ...p })) : undefined,
+                localArrowPoints: Array.isArray(item.localArrowPoints) ? item.localArrowPoints.map((p: any) => ({ ...p })) : undefined
+              };
+              modifiedItemsToRecord.push({
+                targetId: id,
+                authorUid: authStore.uid,
+                beforeProps: beforeRecord.props,
+                afterProps
               });
             }
-            const allObjs = canvas.getObjects();
-            const idx = allObjs.indexOf(arrowObj);
-            if (idx !== -1) {
-              canvas.remove(arrowObj);
-              canvas.insertAt(idx, newArrow);
-              if (isIsolationMode.value) {
-                const isoIdx = isolatedItems.indexOf(arrowObj);
-                if (isoIdx !== -1) {
-                  isolatedItems[isoIdx] = newArrow;
-                  hasIsolationChanged.value = true;
-                }
-              }
-              newArrow.setCoords();
-              if (canvas.getActiveObject() === arrowObj) {
-                canvas.setActiveObject(newArrow);
-              }
-              canvas.requestRenderAll();
-              updateSelectionState();
-            }
-          }
+          });
+          multiTransformBefore = [];
         }
-      } catch (err) {
-        console.warn('Failed to sync arrow transform:', err);
+      } else {
+        // Active selection without arrows/stickies
+        if (multiTransformBefore.length > 0) {
+          children.forEach((item: any) => {
+            const id = item.id || item.arrowId;
+            const beforeRecord = multiTransformBefore.find(b => b.targetId === id);
+            if (beforeRecord) {
+              modifiedItemsToRecord.push({
+                targetId: id,
+                authorUid: authStore.uid,
+                beforeProps: beforeRecord.props,
+                afterProps: {
+                  left: item.left,
+                  top: item.top,
+                  scaleX: item.scaleX,
+                  scaleY: item.scaleY,
+                  angle: item.angle,
+                  width: item.width,
+                  height: item.height,
+                  minHeight: (item as any).minHeight,
+                  fontSize: item.fontSize
+                }
+              });
+            }
+          });
+          multiTransformBefore = [];
+        }
       }
-    };
+    } else if (obj.type === 'group' || obj instanceof fabric.Group) {
+      const normalizeContainer = (container: any) => {
+        const children = container.getObjects ? container.getObjects() : (container._objects || []);
+        children.forEach((c: any) => {
+          if (c.isArrow) {
+            normalizeArrowObject(c);
+          } else if (c.isStickyNote || c.stickyColorConfig || (c.type === 'textbox' && c.width === STICKY_NOTE_CONST_SIZE)) {
+            normalizeStickyNoteDimensions(c, container);
+          } else if (c.type === 'group' || c instanceof fabric.Group) {
+            normalizeContainer(c);
+            c.setCoords();
+          }
+        });
+      };
+      normalizeContainer(obj);
+      obj.setCoords();
+    } else {
+      // Single object
+      let normalizedObj = obj;
+      if (obj.isStickyNote || obj.stickyColorConfig || (obj.type === 'textbox' && obj.width === STICKY_NOTE_CONST_SIZE)) {
+        normalizeStickyNoteDimensions(obj);
+      } else if (obj.isArrow) {
+        normalizedObj = normalizeArrowObject(obj);
+      }
 
-    const syncAllArrowsRecursively = (target: any) => {
-      if (!target) return;
-      if ((target as any).isLocked) return;
-      if ((target as any).isArrow) {
-        syncArrowTransform(target);
+      if (objectTransformBefore) {
+        const id = normalizedObj.id || normalizedObj.arrowId;
+        if (id === objectTransformBefore.targetId) {
+          const afterProps = {
+            left: normalizedObj.left,
+            top: normalizedObj.top,
+            scaleX: normalizedObj.scaleX,
+            scaleY: normalizedObj.scaleY,
+            angle: normalizedObj.angle,
+            width: normalizedObj.width,
+            height: normalizedObj.height,
+            minHeight: (normalizedObj as any).minHeight,
+            _savedHeight: (normalizedObj as any)._savedHeight,
+            fontSize: normalizedObj.fontSize,
+            arrowPoints: Array.isArray(normalizedObj.arrowPoints) ? normalizedObj.arrowPoints.map((p: any) => ({ ...p })) : undefined,
+            localArrowPoints: Array.isArray(normalizedObj.localArrowPoints) ? normalizedObj.localArrowPoints.map((p: any) => ({ ...p })) : undefined
+          };
+          modifiedItemsToRecord.push({
+            targetId: id,
+            authorUid: authStore.uid,
+            beforeProps: objectTransformBefore.props,
+            afterProps
+          });
+        }
+        objectTransformBefore = null;
       }
-      if (target.type === 'activeselection' || target.type === 'activeSelection' || target.type === 'group' || target instanceof fabric.Group) {
-        const children = target.getObjects ? target.getObjects() : (target._objects || []);
-        children.forEach((child: any) => syncAllArrowsRecursively(child));
-      }
-    };
-
-    if (obj) {
-      syncAllArrowsRecursively(obj);
     }
 
     if (isArrowNodeEditing.value && editingArrow.value && obj === editingArrow.value) {
@@ -3423,46 +3896,23 @@ const initFabric = () => {
     }
 
     if (!isInternalChange) {
-      if (objectTransformBefore && obj) {
-        const id = obj.id || obj.arrowId;
-        if (id === objectTransformBefore.targetId) {
-          const afterProps = {
-            left: obj.left,
-            top: obj.top,
-            scaleX: obj.scaleX,
-            scaleY: obj.scaleY,
-            angle: obj.angle,
-            width: obj.width,
-            height: obj.height,
-            minHeight: (obj as any).minHeight,
-            fontSize: obj.fontSize
-          };
-          if (afterProps.left !== objectTransformBefore.props.left ||
-              afterProps.top !== objectTransformBefore.props.top ||
-              afterProps.scaleX !== objectTransformBefore.props.scaleX ||
-              afterProps.scaleY !== objectTransformBefore.props.scaleY ||
-              afterProps.angle !== objectTransformBefore.props.angle ||
-              afterProps.width !== objectTransformBefore.props.width ||
-              afterProps.minHeight !== objectTransformBefore.props.minHeight) {
-            localUserUndoStack.value.push({
-              type: 'modify',
-              items: [{
-                targetId: id,
-                authorUid: authStore.uid,
-                beforeProps: objectTransformBefore.props,
-                afterProps
-              }]
-            });
-            if (localUserUndoStack.value.length > 50) localUserUndoStack.value.shift();
-            localUserRedoStack.value = [];
-          }
-        }
-        objectTransformBefore = null;
+      if (modifiedItemsToRecord.length > 0) {
+        localUserUndoStack.value.push({
+          type: 'modify',
+          items: modifiedItemsToRecord
+        });
+        if (localUserUndoStack.value.length > 50) localUserUndoStack.value.shift();
+        localUserRedoStack.value = [];
       }
       saveHistoryState();
       syncToFirebase();
       triggerDebouncedAutoSave();
     }
+
+    updateFloatingToolbars();
+    updateArrowToolbar();
+    updateSelectionState();
+    canvas?.requestRenderAll();
   });
 
   canvas.on('object:removed', (e: any) => {
@@ -3477,8 +3927,17 @@ const initFabric = () => {
     if (!canvas || isInternalChange) return;
     const target = e.target;
     if (target && (target.isStickyNote || target.stickyColorConfig)) {
+      const textH = fabric.Textbox.prototype.calcTextHeight.call(target);
+      const dynamicMinH = Math.max(STICKY_MIN_SIZE, Math.ceil(textH + 16));
+      const curH = (target as any).height || STICKY_NOTE_CONST_SIZE;
+      if (dynamicMinH > curH) {
+        target.set('height', dynamicMinH);
+        (target as any).minHeight = dynamicMinH;
+        (target as any)._savedHeight = dynamicMinH;
+      }
       target.initDimensions?.();
       target.setCoords?.();
+      canvas.requestRenderAll();
     }
     const targetId = target?.id || target?.arrowId;
     if (targetId && isCollabActive.value) {
@@ -3720,9 +4179,12 @@ const initFabric = () => {
       return;
     }
 
-    // Left click dismisses context menu
+    // Left click dismisses context menu & closes pen flyout
     if (contextMenu.value.visible) {
       contextMenu.value.visible = false;
+    }
+    if (activeSidebarPanel.value === 'pen') {
+      activeSidebarPanel.value = '';
     }
 
     if (e.button !== 0) return;
@@ -3863,6 +4325,47 @@ const initFabric = () => {
       pencilHoldTimer = setTimeout(() => {
         onPencilHoldDetected();
       }, 650);
+      return;
+    }
+
+    // Text tool: directly focus existing text or create new text on click
+    if (currentTool.value === 'text') {
+      const target = opt.target || (canvas.findTarget(e) as any);
+      if (target && (target.type === 'i-text' || target.type === 'text' || target.type === 'textbox')) {
+        canvas.setActiveObject(target);
+        if ((target as any).enterEditing) {
+          (target as any).enterEditing();
+          (target as any).selectAll?.();
+        }
+        canvas.requestRenderAll();
+        updateSelectionState();
+        return;
+      }
+
+      const text = new fabric.IText('Type here...', {
+        left: scenePoint.x,
+        top: scenePoint.y,
+        originX: 'left',
+        originY: 'top',
+        fontFamily: 'Inter, sans-serif',
+        fontSize: 24,
+        fill: activeColor.value,
+        perPixelTargetFind: true
+      });
+      (text as any).id = 'text_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+      (text as any).authorUid = authStore.uid;
+      canvas.add(text);
+      if (isIsolationMode.value && !isolatedItems.includes(text)) {
+        isolatedItems.push(text);
+        hasIsolationChanged.value = true;
+      }
+      canvas.setActiveObject(text);
+      saveHistoryState();
+      syncToFirebase();
+      text.enterEditing();
+      text.selectAll();
+      currentTool.value = 'select';
+      updateSelectionState();
       return;
     }
 
@@ -4536,6 +5039,7 @@ const initFabric = () => {
             hasIsolationChanged.value = true;
           }
           finalArrow.setCoords();
+          alignArrowPointsAndNodes(finalArrow);
           canvas.requestRenderAll();
           saveHistoryState();
           syncToFirebase();
@@ -4675,20 +5179,22 @@ const initFabric = () => {
     target._dragStartLeft = target.left;
     target._dragStartTop = target.top;
 
-    // Native minScaleLimit allows Fabric to enforce minimum size relative to the fixed anchor point,
-    // eliminating drift and smoothly allowing reverse scaling when the mouse moves back outwards.
-    const minDim = (target.isStickyNote || target.stickyColorConfig) ? 80 : 20;
-    const baseW = target.width || minDim;
-    const baseH = target.height || minDim;
-    const majorDim = Math.max(baseW, baseH);
-    const curScale = Math.min(Math.abs(target.scaleX || 1), Math.abs(target.scaleY || 1));
-
-    if (majorDim > minDim) {
-      // Normal object: allow scaling down until major dimension reaches minDim
-      target.minScaleLimit = Math.max(0.01, minDim / majorDim);
+    if (target.isStickyNote || target.stickyColorConfig) {
+      delete (target as any).minScaleLimit;
     } else {
-      // Micro object or dot (already <= minDim): never force minScaleLimit above current scale!
-      target.minScaleLimit = Math.min(curScale, 0.05);
+      const minDim = 20;
+      const baseW = target.width || minDim;
+      const baseH = target.height || minDim;
+      const majorDim = Math.max(baseW, baseH);
+      const curScale = Math.min(Math.abs(target.scaleX || 1), Math.abs(target.scaleY || 1));
+
+      if (majorDim > minDim) {
+        // Normal object: allow scaling down until major dimension reaches minDim
+        target.minScaleLimit = Math.max(0.01, minDim / majorDim);
+      } else {
+        // Micro object or dot (already <= minDim): never force minScaleLimit above current scale!
+        target.minScaleLimit = Math.min(curScale, 0.05);
+      }
     }
 
     if (target.type === 'activeselection' || (target.type === 'group' && !target.isStickyNote)) {
@@ -4879,17 +5385,44 @@ const initFabric = () => {
         }
       }
 
-      // 1. Single sticky note: scaling is completely disabled
+      // Sticky note axis-independent minimum limit: only clamp the axis that reached minimum size, never block the other axis
       if (obj.isStickyNote || obj.stickyColorConfig) {
-        obj.set({
-          scaleX: 1,
-          scaleY: 1,
-          flipX: false,
-          flipY: false,
-          angle: 0
-        });
-      } else if (obj.type === 'activeselection' || obj.type === 'activeSelection' || obj.type === 'group' || obj instanceof fabric.Group) {
-        compensateStickyNoteScaleInContainer(obj);
+        obj.lockScalingFlip = true;
+        obj.set({ skewX: 0, skewY: 0 });
+        const textH = obj.calcTextHeight ? fabric.Textbox.prototype.calcTextHeight.call(obj) : 0;
+        const minW = STICKY_MIN_SIZE;
+        const minH = Math.max(STICKY_MIN_SIZE, Math.ceil(textH + 16));
+        const baseW = (obj as any)._transformStartWidth || obj.width || STICKY_NOTE_CONST_SIZE;
+        const baseH = (obj as any)._transformStartHeight || Math.max((obj as any)._savedHeight || 0, (obj as any).height || 0, minH);
+        const curW = baseW * Math.abs(obj.scaleX || 1);
+        const curH = baseH * Math.abs(obj.scaleY || 1);
+
+        if (curW < minW && baseW > 0) {
+          obj.scaleX = minW / baseW;
+        }
+        if (curH < minH && baseH > 0) {
+          obj.scaleY = minH / baseH;
+        }
+      } else if (obj.type === 'activeselection' || obj.type === 'activeSelection') {
+        obj.lockScalingFlip = true;
+        const children = obj.getObjects ? obj.getObjects() : ((obj as any)._objects || []);
+        const absSx = Math.abs(obj.scaleX || 1);
+        const absSy = Math.abs(obj.scaleY || 1);
+        for (const c of children) {
+          if (c.isStickyNote || c.stickyColorConfig || (c.type === 'textbox' && c.width === STICKY_NOTE_CONST_SIZE)) {
+            c.set({ skewX: 0, skewY: 0 });
+            const textH = c.calcTextHeight ? fabric.Textbox.prototype.calcTextHeight.call(c) : 0;
+            const childMinH = Math.max(STICKY_MIN_SIZE, Math.ceil(textH + 16));
+            const baseW = c._transformStartWidth || c.width || STICKY_NOTE_CONST_SIZE;
+            const baseH = c._transformStartHeight || Math.max((c as any)._savedHeight || 0, c.height || 0, childMinH);
+            if (baseW * absSx < STICKY_MIN_SIZE && baseW > 0) {
+              obj.scaleX = STICKY_MIN_SIZE / baseW;
+            }
+            if (baseH * absSy < childMinH && baseH > 0) {
+              obj.scaleY = childMinH / baseH;
+            }
+          }
+        }
       }
 
       obj.setCoords();
@@ -4902,59 +5435,39 @@ const initFabric = () => {
     updateFloatingToolbars();
     updateArrowToolbar();
   });
-  canvas.on('object:modified', (e: any) => {
-    const obj = e?.target;
-    if (obj) {
-      if (obj.isStickyNote || obj.stickyColorConfig) {
-        normalizeStickyNoteDimensions(obj);
-      } else if (obj.type === 'activeselection' || obj.type === 'activeSelection' || obj.type === 'group' || obj instanceof fabric.Group) {
-        const normalizeContainerNotes = (container: any) => {
-          const children = container.getObjects ? container.getObjects() : (container._objects || []);
-          children.forEach((c: any) => {
-            if (c.isStickyNote || c.stickyColorConfig || (c.type === 'textbox' && c.width === STICKY_NOTE_CONST_SIZE)) {
-              normalizeStickyNoteDimensions(c, container);
-            } else if (c.type === 'group' || c instanceof fabric.Group) {
-              normalizeContainerNotes(c);
-              c.setCoords();
-            }
-          });
-        };
-        normalizeContainerNotes(obj);
-        obj.setCoords();
-      }
-    }
-    updateFloatingToolbars();
-    updateArrowToolbar();
-  });
   canvas.on('object:resizing', (e: any) => {
     const obj = e?.target;
     if (obj && (obj.isStickyNote || obj.stickyColorConfig)) {
-      if (obj.width < 80) {
-        obj.width = 80;
-        obj.initDimensions();
-        obj.setCoords();
-      }
       updateFloatingToolbars();
     }
   });
   canvas.on('object:rotating', (e: any) => {
     hasObjectTransformed = true;
     const obj = e?.target;
-    if (obj && (obj.type === 'activeselection' || obj.type === 'activeSelection' || obj.type === 'group' || obj instanceof fabric.Group)) {
-      const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
-
-      // If group contains locked children, rotating is forbidden!
-      const anyLocked = (obj as any).isLocked || (obj as any).hasLockedChildren || targets.some((c: any) => isItemOrDescendantLocked(c));
-      if (anyLocked) {
-        if ((obj as any)._dragStartAngle !== undefined) obj.angle = (obj as any)._dragStartAngle;
-        if ((obj as any)._dragStartLeft !== undefined) obj.left = (obj as any)._dragStartLeft;
-        if ((obj as any)._dragStartTop !== undefined) obj.top = (obj as any)._dragStartTop;
-        obj.setCoords();
-        canvas?.requestRenderAll();
-        return;
+    if (obj) {
+      // User requirement: "shift旋轉物件上45度一格"
+      const evt = e?.e as MouseEvent | undefined;
+      const isShift = !!(evt?.shiftKey || isShiftKeyPressed.value);
+      if (isShift) {
+        const rawAngle = obj.angle || 0;
+        obj.angle = Math.round(rawAngle / 45) * 45;
       }
 
-      compensateStickyNoteScaleInContainer(obj);
+      if (obj.type === 'activeselection' || obj.type === 'activeSelection' || obj.type === 'group' || obj instanceof fabric.Group) {
+        const targets = obj.getObjects ? obj.getObjects() : obj._objects || [];
+
+        // If group contains locked children, rotating is forbidden!
+        const anyLocked = (obj as any).isLocked || (obj as any).hasLockedChildren || targets.some((c: any) => isItemOrDescendantLocked(c));
+        if (anyLocked) {
+          if ((obj as any)._dragStartAngle !== undefined) obj.angle = (obj as any)._dragStartAngle;
+          if ((obj as any)._dragStartLeft !== undefined) obj.left = (obj as any)._dragStartLeft;
+          if ((obj as any)._dragStartTop !== undefined) obj.top = (obj as any)._dragStartTop;
+          obj.setCoords();
+          canvas?.requestRenderAll();
+          return;
+        }
+      }
+      obj.setCoords();
       canvas?.requestRenderAll();
     }
     updateLiveDrag(e);
@@ -5015,17 +5528,31 @@ watch([activeColor, strokeWidth], () => {
   updateBrush();
 });
 
+const STICKY_NOTE_CONST_SIZE = 180;
+const STICKY_MIN_SIZE = 60;
+
 const changeStickyWidth = (eventData: any, transform: any, x: number, y: number) => {
   const { target, originX, originY } = transform;
   if (!target) return false;
   const constraint = target.getPositionByOrigin ? target.getPositionByOrigin(originX, originY) : null;
   const localPoint = fabric.controlsUtils.getLocalPoint(transform, originX, originY, x, y);
-  const strokePadding = target.strokeWidth / (target.strokeUniform ? target.scaleX : 1);
+  const strokePadding = (target.strokeWidth || 0) / (target.strokeUniform ? (target.scaleX || 1) : 1);
   const multiplier = originX === 'center' ? 2 : 1;
-  const newW = Math.max(125, Math.abs(localPoint.x * multiplier / (target.scaleX || 1)) - strokePadding);
+  const signX = originX === 'left' ? 1 : (originX === 'right' ? -1 : 1);
+  const projX = localPoint.x * signX;
+  const effectiveX = Math.max(0, projX);
+  const newW = Math.max(STICKY_MIN_SIZE, (effectiveX * multiplier / (target.scaleX || 1)) - strokePadding);
   const oldW = target.width;
+  const textH = target.calcTextHeight ? fabric.Textbox.prototype.calcTextHeight.call(target) : 0;
+  const dynamicMinH = Math.max(STICKY_MIN_SIZE, Math.ceil(textH + 16));
+  const curHeight = Math.max(target.height || 0, (target as any).minHeight || 0, (target as any)._savedHeight || 0, dynamicMinH);
+  (target as any).minHeight = curHeight;
+  (target as any)._savedHeight = curHeight;
   target.set('width', newW);
-  target.initDimensions();
+  target.set('height', curHeight);
+  target.set('scaleX', 1);
+  target.set('scaleY', 1);
+  target.set({ skewX: 0, skewY: 0 });
   if (constraint && target.setPositionByOrigin) {
     target.setPositionByOrigin(constraint, originX, originY);
   }
@@ -5040,14 +5567,21 @@ const changeStickyHeight = (eventData: any, transform: any, x: number, y: number
   if (!target) return false;
   const constraint = target.getPositionByOrigin ? target.getPositionByOrigin(originX, originY) : null;
   const localPoint = fabric.controlsUtils.getLocalPoint(transform, originX, originY, x, y);
-  const strokePadding = target.strokeWidth / (target.strokeUniform ? target.scaleY : 1);
+  const strokePadding = (target.strokeWidth || 0) / (target.strokeUniform ? (target.scaleY || 1) : 1);
   const multiplier = originY === 'center' ? 2 : 1;
-  const minAllowedH = 60;
-  const newH = Math.max(minAllowedH, Math.abs(localPoint.y * multiplier / (target.scaleY || 1)) - strokePadding);
-  const oldH = (target as any).minHeight;
+  const signY = originY === 'top' ? 1 : (originY === 'bottom' ? -1 : 1);
+  const projY = localPoint.y * signY;
+  const effectiveY = Math.max(0, projY);
+  const textH = target.calcTextHeight ? fabric.Textbox.prototype.calcTextHeight.call(target) : 0;
+  const dynamicMinH = Math.max(STICKY_MIN_SIZE, Math.ceil(textH + 16));
+  const newH = Math.max(dynamicMinH, (effectiveY * multiplier / (target.scaleY || 1)) - strokePadding);
+  const oldH = (target as any).height;
   (target as any).minHeight = newH;
+  (target as any)._savedHeight = newH;
   target.set('height', newH);
-  target.initDimensions();
+  target.set('scaleX', 1);
+  target.set('scaleY', 1);
+  target.set({ skewX: 0, skewY: 0 });
   if (constraint && target.setPositionByOrigin) {
     target.setPositionByOrigin(constraint, originX, originY);
   }
@@ -5057,50 +5591,150 @@ const changeStickyHeight = (eventData: any, transform: any, x: number, y: number
   return oldH !== newH;
 };
 
-const STICKY_NOTE_CONST_SIZE = 180;
+const changeStickyCorner = (eventData: any, transform: any, x: number, y: number) => {
+  const { target, originX, originY } = transform;
+  if (!target) return false;
+  const constraint = target.getPositionByOrigin ? target.getPositionByOrigin(originX, originY) : null;
+  const localPoint = fabric.controlsUtils.getLocalPoint(transform, originX, originY, x, y);
+  const strokePaddingX = (target.strokeWidth || 0) / (target.strokeUniform ? (target.scaleX || 1) : 1);
+  const strokePaddingY = (target.strokeWidth || 0) / (target.strokeUniform ? (target.scaleY || 1) : 1);
+  const multiplierX = originX === 'center' ? 2 : 1;
+  const multiplierY = originY === 'center' ? 2 : 1;
+  const signX = originX === 'left' ? 1 : (originX === 'right' ? -1 : 1);
+  const signY = originY === 'top' ? 1 : (originY === 'bottom' ? -1 : 1);
+  const projX = localPoint.x * signX;
+  const projY = localPoint.y * signY;
+  const effectiveX = Math.max(0, projX);
+  const effectiveY = Math.max(0, projY);
+  const rawW = (effectiveX * multiplierX / (target.scaleX || 1)) - strokePaddingX;
+  const rawH = (effectiveY * multiplierY / (target.scaleY || 1)) - strokePaddingY;
+  const textH = target.calcTextHeight ? fabric.Textbox.prototype.calcTextHeight.call(target) : 0;
+  const dynamicMinH = Math.max(STICKY_MIN_SIZE, Math.ceil(textH + 16));
+  const newW = Math.max(STICKY_MIN_SIZE, rawW);
+  const newH = Math.max(dynamicMinH, rawH);
+  const oldW = target.width;
+  const oldH = target.height;
+  (target as any).minHeight = newH;
+  (target as any)._savedHeight = newH;
+  target.set('width', newW);
+  target.set('height', newH);
+  target.set('scaleX', 1);
+  target.set('scaleY', 1);
+  target.set({ skewX: 0, skewY: 0 });
+  if (constraint && target.setPositionByOrigin) {
+    target.setPositionByOrigin(constraint, originX, originY);
+  }
+  target.setCoords();
+  target.fire('resizing');
+  if (target.canvas) target.canvas.fire('object:resizing', { target });
+  return oldW !== newW || oldH !== newH;
+};
 
 const setupStickyControls = (note: any) => {
+  const defaultControls = fabric.controlsUtils.createObjectDefaultControls();
+  note.controls = {
+    ...defaultControls,
+    tl: new fabric.Control({
+      x: -0.5,
+      y: -0.5,
+      actionHandler: changeStickyCorner,
+      cursorStyleHandler: fabric.controlsUtils.scaleCursorStyleHandler,
+      actionName: 'resizing'
+    }),
+    tr: new fabric.Control({
+      x: 0.5,
+      y: -0.5,
+      actionHandler: changeStickyCorner,
+      cursorStyleHandler: fabric.controlsUtils.scaleCursorStyleHandler,
+      actionName: 'resizing'
+    }),
+    bl: new fabric.Control({
+      x: -0.5,
+      y: 0.5,
+      actionHandler: changeStickyCorner,
+      cursorStyleHandler: fabric.controlsUtils.scaleCursorStyleHandler,
+      actionName: 'resizing'
+    }),
+    br: new fabric.Control({
+      x: 0.5,
+      y: 0.5,
+      actionHandler: changeStickyCorner,
+      cursorStyleHandler: fabric.controlsUtils.scaleCursorStyleHandler,
+      actionName: 'resizing'
+    }),
+    ml: new fabric.Control({
+      x: -0.5,
+      y: 0,
+      actionHandler: changeStickyWidth,
+      cursorStyleHandler: fabric.controlsUtils.scaleSkewCursorStyleHandler,
+      actionName: 'resizing'
+    }),
+    mr: new fabric.Control({
+      x: 0.5,
+      y: 0,
+      actionHandler: changeStickyWidth,
+      cursorStyleHandler: fabric.controlsUtils.scaleSkewCursorStyleHandler,
+      actionName: 'resizing'
+    }),
+    mt: new fabric.Control({
+      x: 0,
+      y: -0.5,
+      actionHandler: changeStickyHeight,
+      cursorStyleHandler: fabric.controlsUtils.scaleSkewCursorStyleHandler,
+      actionName: 'resizing'
+    }),
+    mb: new fabric.Control({
+      x: 0,
+      y: 0.5,
+      actionHandler: changeStickyHeight,
+      cursorStyleHandler: fabric.controlsUtils.scaleSkewCursorStyleHandler,
+      actionName: 'resizing'
+    }),
+    mtr: defaultControls.mtr
+  };
   note.setControlsVisibility({
-    tl: false,
-    tr: false,
-    bl: false,
-    br: false,
-    ml: false,
-    mr: false,
-    mt: false,
-    mb: false,
-    mtr: false
+    tl: true,
+    tr: true,
+    bl: true,
+    br: true,
+    ml: true,
+    mr: true,
+    mt: true,
+    mb: true,
+    mtr: true
   });
-  note.hasControls = false;
+  note.hasControls = true;
   note.hasBorders = true;
-  note.hasRotatingPoint = false;
-  note.lockScalingX = true;
-  note.lockScalingY = true;
-  note.lockRotation = true;
-  note.lockUniScaling = true;
+  note.hasRotatingPoint = true;
+  note.lockScalingX = false;
+  note.lockScalingY = false;
+  note.lockRotation = false;
+  note.lockUniScaling = false;
   note.lockScalingFlip = true;
+  note.set({ skewX: 0, skewY: 0 });
 };
 
 const applyStickyNoteMethods = (note: any) => {
   note.padding = 0;
-  note.width = STICKY_NOTE_CONST_SIZE;
-  note.minHeight = STICKY_NOTE_CONST_SIZE;
-  note.height = Math.max(note.height || 0, STICKY_NOTE_CONST_SIZE);
+  if (!note.width) note.width = STICKY_NOTE_CONST_SIZE;
+  const textH = note.calcTextHeight ? fabric.Textbox.prototype.calcTextHeight.call(note) : 0;
+  const dynamicMinH = Math.max(STICKY_MIN_SIZE, Math.ceil(textH + 16));
+  const targetH = Math.max((note as any)._savedHeight || 0, note.height || 0, dynamicMinH);
+  note.minHeight = targetH;
+  (note as any)._savedHeight = targetH;
+  note.height = targetH;
 
   note.calcTextHeight = function() {
     const textH = fabric.Textbox.prototype.calcTextHeight.call(this);
-    return Math.max(textH, STICKY_NOTE_CONST_SIZE);
+    const minH = Math.max((this as any).minHeight || 0, (this as any)._savedHeight || 0, STICKY_MIN_SIZE);
+    return Math.max(textH, minH);
   };
   (note as any)._getTopOffset = function() {
     const textH = fabric.Textbox.prototype.calcTextHeight.call(this);
-    const h = Math.max((this as any).height || STICKY_NOTE_CONST_SIZE, STICKY_NOTE_CONST_SIZE);
+    const minH = Math.max((this as any).minHeight || 0, (this as any)._savedHeight || 0, STICKY_MIN_SIZE);
+    const h = Math.max((this as any).height || minH, minH);
     const extraOffset = Math.max(0, (h - textH) / 2);
     return -h / 2 + extraOffset;
-  };
-  note.initDimensions = function() {
-    fabric.Textbox.prototype.initDimensions.call(this);
-    this.width = STICKY_NOTE_CONST_SIZE;
-    this.height = Math.max(this.height || 0, STICKY_NOTE_CONST_SIZE);
   };
 
   // Pure visual canvas placeholder render that disappears on typing and never serializes
@@ -5127,76 +5761,54 @@ const normalizeStickyNoteDimensions = (note: any, parentGroup?: any) => {
   if (note.text === 'Type note here...' || note.text === 'Type here...') {
     note.text = '';
   }
-  note.width = STICKY_NOTE_CONST_SIZE;
-  note.minHeight = STICKY_NOTE_CONST_SIZE;
   note.textAlign = 'center';
   note.splitByGrapheme = true;
-  note.lockUniScaling = true;
-  note.hasRotatingPoint = false;
   note.objectCaching = false;
   note.perPixelTargetFind = false;
-  applyStickyNoteMethods(note);
-  note.initDimensions?.();
-  note.height = Math.max(note.height || 0, STICKY_NOTE_CONST_SIZE);
+  note.lockScalingFlip = true;
+  note.set({ skewX: 0, skewY: 0 });
 
-  const group = parentGroup || note.group;
-  if (group && (group.type === 'group' || group instanceof fabric.Group)) {
-    let accScaleX = 1;
-    let accScaleY = 1;
-    let accAngle = 0;
-    let isFlipX = false;
-    let isFlipY = false;
-    let curr = group;
-    while (curr) {
-      const sx = curr.scaleX || 1;
-      const sy = curr.scaleY || 1;
-      accScaleX *= Math.abs(sx);
-      accScaleY *= Math.abs(sy);
-      if (curr.flipX || sx < 0) isFlipX = !isFlipX;
-      if (curr.flipY || sy < 0) isFlipY = !isFlipY;
-      accAngle += (curr.angle || 0);
-      curr = curr.group;
-    }
-    note.scaleX = 1 / (accScaleX || 1);
-    note.scaleY = 1 / (accScaleY || 1);
-    note.flipX = isFlipX;
-    note.flipY = isFlipY;
-    note.angle = -accAngle;
+  const textH = note.calcTextHeight ? fabric.Textbox.prototype.calcTextHeight.call(note) : 0;
+  const dynamicMinH = Math.max(STICKY_MIN_SIZE, Math.ceil(textH + 16));
+
+  // Bake any residual scaling into width & height and reset scaleX/scaleY to 1 so text is never deformed
+  const sx = Math.abs(note.scaleX || 1);
+  const sy = Math.abs(note.scaleY || 1);
+  if (Math.abs(sx - 1) > 0.001 || Math.abs(sy - 1) > 0.001) {
+    const baseW = note.width || STICKY_NOTE_CONST_SIZE;
+    const baseH = Math.max((note as any)._savedHeight || 0, note.height || 0, dynamicMinH);
+    const curW = baseW * sx;
+    const curH = baseH * sy;
+    const finalW = Math.max(STICKY_MIN_SIZE, curW);
+    const finalH = Math.max(dynamicMinH, curH);
+    note.set({
+      width: finalW,
+      height: finalH,
+      scaleX: 1,
+      scaleY: 1,
+      skewX: 0,
+      skewY: 0
+    });
+    (note as any).minHeight = finalH;
+    (note as any)._savedHeight = finalH;
   } else {
-    note.scaleX = 1;
-    note.scaleY = 1;
-    note.flipX = false;
-    note.flipY = false;
-    note.angle = 0;
+    const currentH = Math.max((note as any)._savedHeight || 0, note.height || 0, dynamicMinH);
+    (note as any).minHeight = currentH;
+    (note as any)._savedHeight = currentH;
+    note.set({
+      height: currentH,
+      scaleX: 1,
+      scaleY: 1,
+      skewX: 0,
+      skewY: 0
+    });
   }
+
+  applyStickyNoteMethods(note);
   note.setCoords();
 };
 
-const compensateStickyNoteScaleInContainer = (container: any, parentScaleX = 1, parentScaleY = 1, parentAngle = 0, parentFlipX = false, parentFlipY = false) => {
-  if (!container) return;
-  const curScaleX = parentScaleX * Math.abs(container.scaleX || 1);
-  const curScaleY = parentScaleY * Math.abs(container.scaleY || 1);
-  const curAngle = parentAngle + (container.angle || 0);
-  const isFlipX = parentFlipX !== !!(container.flipX || (container.scaleX || 1) < 0);
-  const isFlipY = parentFlipY !== !!(container.flipY || (container.scaleY || 1) < 0);
-
-  const children = container.getObjects ? container.getObjects() : (container._objects || []);
-  children.forEach((c: any) => {
-    if (c.isStickyNote || c.stickyColorConfig || (c.type === 'textbox' && c.width === STICKY_NOTE_CONST_SIZE)) {
-      c.scaleX = 1 / Math.max(0.001, curScaleX);
-      c.scaleY = 1 / Math.max(0.001, curScaleY);
-      c.angle = -curAngle;
-      c.flipX = isFlipX;
-      c.flipY = isFlipY;
-      c.width = STICKY_NOTE_CONST_SIZE;
-      c.minHeight = STICKY_NOTE_CONST_SIZE;
-      c.setCoords();
-    } else if (c.type === 'group' || c instanceof fabric.Group) {
-      compensateStickyNoteScaleInContainer(c, curScaleX, curScaleY, curAngle, isFlipX, isFlipY);
-      c.setCoords();
-    }
-  });
-};
+const compensateStickyNoteScaleInContainer = (...args: any[]) => {};
 
 // Rehydrate custom attributes, methods, and constraints after deserializing from JSON
 const rehydrateCanvasObjects = () => {
@@ -5230,6 +5842,10 @@ const rehydrateCanvasObjects = () => {
     }
 
     if (o.isStickyNote || (o.type === 'textbox' && (o.stickyColorConfig || o.backgroundColor))) {
+      const targetH = Math.max((o as any).minHeight || 0, (o as any)._savedHeight || 0, o.height || 0, STICKY_NOTE_CONST_SIZE);
+      (o as any).minHeight = targetH;
+      (o as any)._savedHeight = targetH;
+      o.height = targetH;
       normalizeStickyNoteDimensions(o, parentGroup);
     }
 
@@ -5258,6 +5874,8 @@ const rehydrateCanvasObjects = () => {
 
       const children = o.getObjects ? o.getObjects() : (o._objects || []);
       children.forEach((c: any) => c.set({ objectCaching: false, strokeUniform: true }));
+      attachArrowRenderer(o);
+      alignArrowPointsAndNodes(o);
     }
 
     if ((o as any).isArrow || (o as any).isStraightLine || o.type === 'line' || o.type === 'path') {
@@ -5343,6 +5961,48 @@ const syncNodeEditingStateAfterReload = () => {
 
 const getSerializedCanvasJson = (): string => {
   if (!canvas) return '';
+  const activeObj = canvas.getActiveObject();
+  const isActiveSel = activeObj && (activeObj.type === 'activeselection' || activeObj.type === 'activeSelection');
+  if (isActiveSel) {
+    const activeSel = activeObj as fabric.ActiveSelection;
+    const activeSelMatrix = activeSel.calcTransformMatrix();
+    const activeObjects = activeSel.getObjects ? activeSel.getObjects() : ((activeSel as any)._objects || []);
+    const canvasData = (canvas as any).toObject(CUSTOM_PROPS);
+    if (canvasData && Array.isArray(canvasData.objects)) {
+      canvasData.objects = canvas.getObjects().map((o: any) => {
+        const objData = o.toObject(CUSTOM_PROPS);
+        if (activeObjects.includes(o)) {
+          const wm = o.calcTransformMatrix();
+          const decomposed = fabric.util.qrDecompose(wm);
+          objData.left = decomposed.translateX;
+          objData.top = decomposed.translateY;
+          objData.scaleX = decomposed.scaleX;
+          objData.scaleY = decomposed.scaleY;
+          objData.angle = decomposed.angle;
+          objData.skewX = (o.isStickyNote || o.stickyColorConfig) ? 0 : decomposed.skewX;
+          objData.skewY = (o.isStickyNote || o.stickyColorConfig) ? 0 : decomposed.skewY;
+          if (o.isStickyNote || o.stickyColorConfig || (o.type === 'textbox' && o.width === STICKY_NOTE_CONST_SIZE)) {
+            const textH = o.calcTextHeight ? fabric.Textbox.prototype.calcTextHeight.call(o) : 0;
+            const dynamicMinH = Math.max(STICKY_MIN_SIZE, Math.ceil(textH + 16));
+            const baseW = o.width || STICKY_NOTE_CONST_SIZE;
+            const baseH = Math.max((o as any).minHeight || 0, (o as any)._savedHeight || 0, o.height || 0, dynamicMinH, STICKY_NOTE_CONST_SIZE);
+            const finalW = Math.max(STICKY_MIN_SIZE, baseW * decomposed.scaleX);
+            const finalH = Math.max(dynamicMinH, baseH * decomposed.scaleY);
+            objData.width = finalW;
+            objData.height = finalH;
+            objData.minHeight = finalH;
+            objData._savedHeight = finalH;
+            objData.scaleX = 1;
+            objData.scaleY = 1;
+            objData.skewX = 0;
+            objData.skewY = 0;
+          }
+        }
+        return objData;
+      });
+      return JSON.stringify(canvasData);
+    }
+  }
   return JSON.stringify((canvas as any).toObject(CUSTOM_PROPS));
 };
 
@@ -5388,6 +6048,8 @@ const syncToFirebase = () => {
   const json = getSerializedCanvasJson();
   lastSyncedJson = json;
   roomStore.syncWhiteboardState(json);
+  // Post-save convergence heartbeat: ensure all clients converge if concurrent saves crossed in transit
+  setTimeout(checkConvergenceHeartbeat, 1200);
 };
 
 const loadFromFirebase = async (json: string) => {
@@ -5453,18 +6115,25 @@ const loadFromFirebase = async (json: string) => {
         // Do not clobber an object if local user is actively transforming or editing text right now
         const isLocallyInteracting = localObj === activeObj && (isMouseDown || localObj.isEditing);
         if (!isLocallyInteracting) {
-          if (localObj.isStickyNote || (localObj.type === 'textbox' && localObj.stickyColorConfig)) {
+          const isTextType = localObj.isStickyNote || localObj.type === 'textbox' || localObj.type === 'i-text' || localObj.type === 'text' || !!(localObj as any).stickyColorConfig;
+          if (isTextType) {
             if (objJson.text !== undefined && localObj.text !== objJson.text) {
               localObj.set({ text: objJson.text });
-              localObj.initDimensions?.();
+              if (typeof localObj.initDimensions === 'function') {
+                localObj.initDimensions();
+              }
             }
             if (objJson.minHeight !== undefined && localObj.minHeight !== objJson.minHeight) {
               localObj.minHeight = objJson.minHeight;
-              localObj.initDimensions?.();
+              if (typeof localObj.initDimensions === 'function') {
+                localObj.initDimensions();
+              }
             }
             if (objJson.fontSize !== undefined && localObj.fontSize !== objJson.fontSize) {
               localObj.set({ fontSize: objJson.fontSize });
-              localObj.initDimensions?.();
+              if (typeof localObj.initDimensions === 'function') {
+                localObj.initDimensions();
+              }
             }
           }
 
@@ -5561,6 +6230,19 @@ const loadFromFirebase = async (json: string) => {
           if (data.isStraightLine) o.isStraightLine = data.isStraightLine;
           if (data.isLocked) o.isLocked = data.isLocked;
         }
+
+        // Automatic image decode & render hook: ensure newly added images repaint immediately without requiring pan/zoom
+        const imgEl = (typeof o.getElement === 'function' ? o.getElement() : (o as any)._element);
+        if (imgEl && imgEl instanceof HTMLImageElement) {
+          if (!imgEl.complete) {
+            imgEl.addEventListener('load', () => {
+              o.setCoords();
+              canvas?.calcViewportBoundaries();
+              canvas?.requestRenderAll();
+            }, { once: true });
+          }
+        }
+
         canvas.add(o);
       }
     }
@@ -5575,14 +6257,29 @@ const loadFromFirebase = async (json: string) => {
     canvas.calcViewportBoundaries();
     canvas.getObjects().forEach(o => o.setCoords());
     canvas.requestRenderAll();
+    requestAnimationFrame(() => canvas?.requestRenderAll());
+    setTimeout(() => { canvas?.calcViewportBoundaries(); canvas?.requestRenderAll(); viewportVersion.value++; }, 150);
+    setTimeout(() => { canvas?.requestRenderAll(); }, 500);
     viewportVersion.value++;
 
-    // Seamless stroke handover: clear live preview only after the real Fabric object is added
+    // Seamless stroke handover: only clear remote live previews if that author's object is confirmed or timed out
+    const nowTime = Date.now();
     for (const uid in smoothedCursors.value) {
-      smoothedCursors.value[uid].liveStroke = null;
-      smoothedCursors.value[uid].strokeCompletedAt = undefined;
-      smoothedCursors.value[uid].liveShape = null;
-      smoothedCursors.value[uid].shapeCompletedAt = undefined;
+      const cursor = smoothedCursors.value[uid];
+      const hasCommittedStroke = newObjectsJson.some((d: any) => d.authorUid === uid || d.type === 'path') ||
+        existingObjects.some((o: any) => o.authorUid === uid && o.type === 'path');
+      const isExpired = cursor.strokeCompletedAt && (nowTime - cursor.strokeCompletedAt > 4000);
+      if (hasCommittedStroke || isExpired) {
+        cursor.liveStroke = null;
+        cursor.strokeCompletedAt = undefined;
+      }
+
+      const hasCommittedShape = newObjectsJson.some((d: any) => d.authorUid === uid && d.type !== 'path');
+      const isShapeExpired = cursor.shapeCompletedAt && (nowTime - cursor.shapeCompletedAt > 4000);
+      if (hasCommittedShape || isShapeExpired) {
+        cursor.liveShape = null;
+        cursor.shapeCompletedAt = undefined;
+      }
     }
 
     if (historyStack.value.length === 0) {
@@ -5613,8 +6310,8 @@ watch(() => roomStore.currentRoom?.whiteboardState, (newState, oldState) => {
     // Ignore echo of local changes
     if (newState === lastSyncedJson) return;
 
-    // Defer loading only if local user is actively drawing a freehand pencil stroke right now
-    const isInteracting = isDrawingMode.value && pencilStrokePoints.length > 0;
+    // Defer loading only if local user is actively drawing a freehand pencil stroke, dragging, or editing text
+    const isInteracting = (isDrawingMode.value && pencilStrokePoints.length > 0) || isMouseDown || isDragging || (canvas?.getActiveObject() as any)?.isEditing;
     if (isInteracting) {
       pendingRemoteState = newState;
       return;
@@ -5622,6 +6319,39 @@ watch(() => roomStore.currentRoom?.whiteboardState, (newState, oldState) => {
     loadFromFirebase(newState);
   }
 });
+
+// Auto-eject when host terminates shared whiteboard session to prevent parallel whiteboards
+watch(() => roomStore.currentRoom?.whiteboardActive, (active) => {
+  if (props.isSharedSession && !isPublisher.value && active === false) {
+    emit('close');
+  }
+});
+
+// Post-save & Idle State Convergence Heartbeat: Reconcile any divergence when idle
+let convergenceHeartbeatTimer: any = null;
+
+const checkConvergenceHeartbeat = () => {
+  if (!canvas || !isCollabActive.value) return;
+  const remoteState = roomStore.currentRoom?.whiteboardState;
+  if (!remoteState) return;
+
+  const isInteracting = (isDrawingMode.value && pencilStrokePoints.length > 0) || isMouseDown || isDragging || (canvas?.getActiveObject() as any)?.isEditing;
+  if (isInteracting) return;
+
+  if (pendingRemoteState) {
+    const stateToApply = pendingRemoteState;
+    pendingRemoteState = null;
+    loadFromFirebase(stateToApply);
+    return;
+  }
+
+  if (remoteState !== lastSyncedJson) {
+    const currentLocalJson = getSerializedCanvasJson();
+    if (currentLocalJson !== remoteState) {
+      loadFromFirebase(remoteState);
+    }
+  }
+};
 
 watch(isCurrentUserMuted, (muted) => {
   if (!canvas) return;
@@ -5805,10 +6535,16 @@ const pasteSelection = async (targetPoint?: { x: number; y: number }) => {
         if (child.isStickyNote || (child.type === 'textbox' && (child.stickyColorConfig || child.backgroundColor))) {
           normalizeStickyNoteDimensions(child, obj);
         }
+        if (child.isArrow || child.arrowId || child.isStraightArrow) {
+          child.isArrow = true;
+          attachArrowRenderer(child);
+        }
       });
     }
 
-    if (obj.isArrow) {
+    if (obj.isArrow || obj.arrowId || obj.isStraightArrow) {
+      obj.isArrow = true;
+      attachArrowRenderer(obj);
       obj.set({
         lockUniScaling: false,
         strokeUniform: true
@@ -5898,8 +6634,10 @@ const spawnStickyNote = (x: number, y: number, colorCfg = selectedStickyColor.va
   if (!canvas) return;
   const size = 180;
   const note = new fabric.Textbox('', {
-    left: x - size / 2,
-    top: y - size / 2,
+    originX: 'center',
+    originY: 'center',
+    left: x,
+    top: y,
     width: size,
     fontSize: 15,
     fontFamily: 'Inter, sans-serif',
@@ -5918,8 +6656,8 @@ const spawnStickyNote = (x: number, y: number, colorCfg = selectedStickyColor.va
       offsetY: 4
     }),
     perPixelTargetFind: false,
-    lockUniScaling: true,
-    hasRotatingPoint: false,
+    lockUniScaling: false,
+    hasRotatingPoint: true,
     objectCaching: false
   });
 
@@ -5985,20 +6723,21 @@ const duplicateStickyNote = async (note: any) => {
   cloned.set({
     left: (note.left || 0) + 24,
     top: (note.top || 0) + 24,
-    scaleX: 1,
-    scaleY: 1,
+    scaleX: note.scaleX || 1,
+    scaleY: note.scaleY || 1,
+    angle: note.angle || 0,
     selectable: true,
     evented: true,
     perPixelTargetFind: false,
-    lockUniScaling: true,
-    hasRotatingPoint: false,
+    lockUniScaling: false,
+    hasRotatingPoint: true,
     objectCaching: false
   });
   (cloned as any).isStickyNote = true;
   (cloned as any).stickyColorConfig = (note as any).stickyColorConfig;
-  (cloned as any).width = STICKY_NOTE_CONST_SIZE;
+  (cloned as any).width = (note as any).width || STICKY_NOTE_CONST_SIZE;
   (cloned as any).minHeight = STICKY_NOTE_CONST_SIZE;
-  (cloned as any).height = Math.max((cloned as any).height || 0, STICKY_NOTE_CONST_SIZE);
+  (cloned as any).height = (note as any).height || STICKY_NOTE_CONST_SIZE;
   applyStickyNoteMethods(cloned);
   cloned.initDimensions();
   (cloned as any).height = Math.max((cloned as any).height || 0, STICKY_NOTE_CONST_SIZE);
@@ -6401,7 +7140,7 @@ const handleQuickSave = async () => {
         saveStatus.value = 'idle';
       }
     }, 2500);
-    displayToast(isCollabActive.value ? 'Whiteboard saved to Assets Library' : 'Saved to Personal Drafts');
+    displayToast(isPublicCanvas.value ? 'Whiteboard saved to Assets Library' : 'Saved to Personal Drafts');
   } catch (e) {
     saveStatus.value = 'offline';
     displayToast('Saved offline');
@@ -6544,6 +7283,31 @@ const pasteAtContext = () => {
   handlePasteAction(contextMenuScenePoint || undefined);
 };
 
+const duplicateSelected = async () => {
+  if (!canvas) return;
+  const activeObj = canvas.getActiveObject() as any;
+  if (!activeObj) return;
+
+  if (activeArrow.value || (activeObj as any).isArrow || (activeObj as any).arrowId || isLineOrArrow(activeObj)) {
+    await duplicateArrow(activeArrow.value || activeObj);
+    return;
+  }
+  if (activeStickyNote.value || (activeObj as any).isStickyNote) {
+    await duplicateStickyNote(activeStickyNote.value || activeObj);
+    return;
+  }
+
+  try {
+    const prevClipboard = clipboard;
+    clipboard = await activeObj.clone(CUSTOM_PROPS);
+    await pasteSelection();
+    clipboard = prevClipboard;
+    displayToast('Duplicated');
+  } catch (err) {
+    console.error('Failed to duplicate selected object:', err);
+    displayToast('Failed to duplicate');
+  }
+};
 const deleteSelected = () => {
   if (!canvas) return;
   const activeObj = canvas.getActiveObject() as any;
@@ -7058,7 +7822,21 @@ const undo = async () => {
             });
             found.set(item.beforeProps);
             if ((found as any).isStickyNote || (found as any).stickyColorConfig || found.type === 'textbox') {
+              if (item.beforeProps.minHeight || item.beforeProps._savedHeight || item.beforeProps.height) {
+                const targetH = Math.max(item.beforeProps.minHeight || 0, item.beforeProps._savedHeight || 0, item.beforeProps.height || 0, STICKY_MIN_SIZE);
+                (found as any).minHeight = targetH;
+                (found as any)._savedHeight = targetH;
+                found.height = targetH;
+              }
               normalizeStickyNoteDimensions(found, (found as any).group);
+            } else if ((found as any).isArrow) {
+              if (Array.isArray(item.beforeProps.arrowPoints)) {
+                (found as any).arrowPoints = item.beforeProps.arrowPoints.map((p: any) => ({ ...p }));
+              }
+              if (Array.isArray(item.beforeProps.localArrowPoints)) {
+                (found as any).localArrowPoints = item.beforeProps.localArrowPoints.map((p: any) => ({ ...p }));
+              }
+              normalizeArrowObject(found);
             }
             if (found.left !== undefined) {
               const w = (found.width || 0) * (found.scaleX || 1);
@@ -7270,7 +8048,21 @@ const redo = async () => {
             });
             found.set(item.beforeProps);
             if ((found as any).isStickyNote || (found as any).stickyColorConfig || found.type === 'textbox') {
+              if (item.beforeProps.minHeight || item.beforeProps._savedHeight || item.beforeProps.height) {
+                const targetH = Math.max(item.beforeProps.minHeight || 0, item.beforeProps._savedHeight || 0, item.beforeProps.height || 0, STICKY_MIN_SIZE);
+                (found as any).minHeight = targetH;
+                (found as any)._savedHeight = targetH;
+                found.height = targetH;
+              }
               normalizeStickyNoteDimensions(found, (found as any).group);
+            } else if ((found as any).isArrow) {
+              if (Array.isArray(item.beforeProps.arrowPoints)) {
+                (found as any).arrowPoints = item.beforeProps.arrowPoints.map((p: any) => ({ ...p }));
+              }
+              if (Array.isArray(item.beforeProps.localArrowPoints)) {
+                (found as any).localArrowPoints = item.beforeProps.localArrowPoints.map((p: any) => ({ ...p }));
+              }
+              normalizeArrowObject(found);
             }
             if (found.left !== undefined) {
               const w = (found.width || 0) * (found.scaleX || 1);
@@ -7405,17 +8197,20 @@ const addShape = (type: any) => {
   isBrushMenuOpen.value = false;
 };
 
-const addText = () => {
+const selectTextTool = () => {
   if (isArrowNodeEditing.value) return;
+  toggleMode(false);
   currentTool.value = 'text';
-  isDrawingMode.value = false;
+  activeSidebarPanel.value = '';
   if (canvas) {
-    canvas.isDrawingMode = false;
-    canvas.selection = false;
+    canvas.discardActiveObject();
+    canvas.defaultCursor = 'text';
+    canvas.requestRenderAll();
   }
-  canvas?.discardActiveObject();
-  canvas?.requestRenderAll();
-  updateSelectionState();
+};
+
+const addText = () => {
+  selectTextTool();
 };
 
 const applyColorToSelected = (color: string) => {
@@ -7424,23 +8219,66 @@ const applyColorToSelected = (color: string) => {
   const activeObj = canvas.getActiveObject();
   if (activeObj) {
     if ((activeObj as any).isLocked) return;
-    if (activeObj.isType('path')) {
-      activeObj.set({ stroke: color });
-    } else if (activeObj.isType('i-text')) {
-      activeObj.set({ fill: color });
-    } else if (activeObj.isType('rect') || activeObj.isType('circle') || activeObj.isType('triangle')) {
-      activeObj.set({ stroke: color });
+
+    const applyToSingleObject = (obj: any) => {
+      if (!obj || obj.isLocked) return;
+      if (obj.isArrow) {
+        obj.arrowColor = color;
+        obj.set({ stroke: color });
+        if (typeof obj.getObjects === 'function') {
+          obj.getObjects().forEach((child: any) => {
+            child.set({ stroke: color });
+            if (child.isType('polygon') || child.type === 'polygon') {
+              child.set({ fill: color });
+            }
+          });
+        }
+      } else if (obj.isType('line') || obj.type === 'line') {
+        obj.set({ stroke: color });
+      } else if (obj.isType('rect') || obj.type === 'rect') {
+        const currentFill = obj.fill;
+        if (!currentFill || currentFill === 'transparent') {
+          obj.set({ stroke: color });
+        } else {
+          obj.set({ fill: color, stroke: color });
+        }
+      } else if (obj.isType('circle') || obj.type === 'circle' || obj.isType('triangle') || obj.type === 'triangle') {
+        const currentFill = obj.fill;
+        if (!currentFill || currentFill === 'transparent') {
+          obj.set({ stroke: color });
+        } else {
+          obj.set({ fill: color, stroke: color });
+        }
+      } else if (obj.isType('i-text') || obj.isType('text') || obj.isType('textbox')) {
+        obj.set({ fill: color });
+      } else if (obj.isType('path') || obj.type === 'path') {
+        obj.set({ stroke: color });
+      } else if (obj.isType('group') || obj.type === 'group' || typeof obj.getObjects === 'function') {
+        obj.getObjects().forEach((child: any) => applyToSingleObject(child));
+      }
+    };
+
+    if (activeObj.isType('activeSelection') || (activeObj as any).type === 'activeSelection') {
+      (activeObj as any).getObjects().forEach((obj: any) => applyToSingleObject(obj));
+    } else {
+      applyToSingleObject(activeObj);
     }
+
     canvas.requestRenderAll();
     saveHistoryState();
     syncToFirebase();
   } else if (isDrawingMode.value) {
     updateBrush();
   }
+  setTimeout(() => {
+    closeFlyoutImmediately();
+  }, 200);
 };
 
 const handleSendToChat = async () => {
   if (!canvas) return;
+  isSendingView.value = true;
+  try {
   const dataUrl = getCanvasSnapshot(0.9, true);
   const res = await fetch(dataUrl);
   const blob = await res.blob();
@@ -7448,6 +8286,9 @@ const handleSendToChat = async () => {
   emit('share', file);
   displayToast('Viewport image sent to chat');
   // Keeps whiteboard open for continuous drawing!
+  } finally {
+    isSendingView.value = false;
+  }
 };
 
 const handleCancelCloseModal = () => {
@@ -7456,6 +8297,8 @@ const handleCancelCloseModal = () => {
 
 const handlePublish = async () => {
   if (!canvas) return;
+  isPublishing.value = true;
+  try {
   const json = getSerializedCanvasJson();
   const thumbnail = getCanvasSnapshot(0.3);
   const assignedId = await roomStore.startWhiteboardSession(json, thumbnail, currentAssetId.value);
@@ -7463,6 +8306,9 @@ const handlePublish = async () => {
     currentAssetId.value = assignedId;
   }
   displayToast('Whiteboard published for team collaboration');
+  } finally {
+    isPublishing.value = false;
+  }
 };
 
 const handleConfirmMakePrivate = async () => {
@@ -7485,7 +8331,9 @@ const handleConfirmMakePrivate = async () => {
 
 const handleCloseRequest = async () => {
   try {
-    await triggerAutoSaveAsAsset();
+    if (hasUnsavedChanges.value) {
+      await triggerAutoSaveAsAsset();
+    }
   } catch (e) {
     console.warn('Auto-save on close error:', e);
   }
@@ -7510,6 +8358,9 @@ const handleConfirmSave = () => {
 
 // Keyboard Shortcuts
 const handleKeydown = (e: KeyboardEvent) => {
+  if (e.key === 'Shift') {
+    isShiftKeyPressed.value = true;
+  }
   // Prevent Windows browser menu activation and enable center-scaling dynamically mid-drag
   if (e.key === 'Alt') {
     e.preventDefault();
@@ -7646,6 +8497,10 @@ const handleKeydown = (e: KeyboardEvent) => {
   } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
     e.preventDefault();
     redo();
+  } else if ((e.ctrlKey || e.metaKey) && (e.key === 'd' || e.key === 'D')) {
+    e.preventDefault();
+    e.stopPropagation();
+    duplicateSelected();
   } else if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
     e.preventDefault();
     copySelection();
@@ -7729,7 +8584,7 @@ async function triggerAutoSaveAsAsset() {
   if (!canvas || isBlankCanvasWithoutHistory()) return '';
   const json = getSerializedCanvasJson();
   const dataUrl = getCanvasSnapshot(0.7);
-  emit('save-state', json, dataUrl, currentAssetId.value, !isCollabActive.value);
+  emit('save-state', json, dataUrl, currentAssetId.value, !isPublicCanvas.value);
   hasUnsavedChanges.value = false;
   return json;
 }
@@ -7848,6 +8703,8 @@ const abortAiGeneration = () => {
 
 const generateAIObject = async () => {
   if (!aiPrompt.value.trim() || !canvas || isGeneratingSvg.value) return;
+  activeSidebarPanel.value = '';
+  displayToast('✨ Generating AI vector graphic...', 3000);
   const currentPrompt = aiPrompt.value.trim();
   lastFailedPrompt.value = currentPrompt;
   isGeneratingSvg.value = true;
@@ -7942,6 +8799,44 @@ const generateAIObject = async () => {
 };
 
 const isAiRedrawing = ref(false);
+const aiPanelOpen = ref(false);
+const activeSidebarPanel = ref('');
+
+const handleSelectNoteColor = (color: StickyColorConfig) => {
+  selectedStickyColor.value = color;
+  currentTool.value = 'sticky';
+  isDrawingMode.value = false;
+  if (canvas) {
+    canvas.isDrawingMode = false;
+    canvas.selection = false;
+    canvas.discardActiveObject();
+    canvas.requestRenderAll();
+  }
+  setTimeout(() => {
+    closeFlyoutImmediately();
+  }, 200);
+};
+
+const setStrokeThickness = (val: number) => {
+  strokeWidth.value = val;
+  updateBrush();
+  if (!canvas) return;
+  const activeObj = canvas.getActiveObject();
+  if (activeObj && !(activeObj as any).isLocked) {
+    if ((activeObj as any).isArrow) {
+      (activeObj as any).arrowStrokeWidth = val;
+      activeObj.set({ strokeWidth: val });
+    } else if (activeObj.isType('line') || activeObj.isType('path')) {
+      activeObj.set({ strokeWidth: val });
+    } else if (activeObj.isType('rect') || activeObj.isType('circle') || activeObj.isType('triangle')) {
+      activeObj.set({ strokeWidth: val });
+    }
+    canvas.requestRenderAll();
+    saveHistoryState();
+    syncToFirebase();
+  }
+};
+
 const aiRedrawLoadingMessage = ref('');
 
 const triggerAiRedrawSketch = async () => {
@@ -7960,9 +8855,10 @@ const triggerAiRedrawSketch = async () => {
 
   const meetingLang = roomStore.currentRoom?.mentorConfig?.meetingLanguage || mentorStore.config?.meetingLanguage || 'zh-TW';
 
+  activeSidebarPanel.value = '';
   isAiRedrawing.value = true;
   aiRedrawLoadingMessage.value = 'Redrawing sketch into vector graphic...';
-  // Note: Do not call displayToast here so notification banners never conflict or stagger!
+  displayToast('🎨 Redrawing sketch into vector graphic...', 3500);
 
   try {
     // 1. Separate visual drawing objects from sticky notes & pure textboxes
@@ -8320,6 +9216,9 @@ const handleWhiteboardWheel = (e: WheelEvent) => {
 };
 
 const handleKeyup = (e: KeyboardEvent) => {
+  if (e.key === 'Shift') {
+    isShiftKeyPressed.value = false;
+  }
   if (e.key === 'Alt') {
     e.preventDefault();
     if (canvas) {
@@ -8362,6 +9261,7 @@ onMounted(() => {
   if (isCollabActive.value) {
     startCursorListener();
   }
+  convergenceHeartbeatTimer = setInterval(checkConvergenceHeartbeat, 3000);
   nextTick(() => {
     initFabric();
   });
@@ -8389,6 +9289,10 @@ watch(isCollabActive, (active) => {
 });
 
 onBeforeUnmount(() => {
+  if (convergenceHeartbeatTimer) {
+    clearInterval(convergenceHeartbeatTimer);
+    convergenceHeartbeatTimer = null;
+  }
   if (autoSaveDebounceTimer) {
     clearTimeout(autoSaveDebounceTimer);
     autoSaveDebounceTimer = null;
@@ -8397,7 +9301,7 @@ onBeforeUnmount(() => {
     try {
       const json = getSerializedCanvasJson();
       const dataUrl = getCanvasSnapshot(0.7);
-      emit('save-state', json, dataUrl, currentAssetId.value, !isCollabActive.value);
+      emit('save-state', json, dataUrl, currentAssetId.value, !isPublicCanvas.value);
       hasUnsavedChanges.value = false;
     } catch (e) {
       console.warn('Auto-save on unmount error:', e);
@@ -8434,1248 +9338,529 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div ref="rootRef" class="h-full w-full flex flex-col relative bg-slate-900 overflow-hidden" @contextmenu.prevent>
-    <!-- Unified Top Header Container (Guarantees center banners never overlap right buttons) -->
-    <div class="absolute top-4 left-4 right-4 z-30 flex items-center justify-between gap-2 pointer-events-none select-none">
-      <!-- Top Left: Status Badge -->
-      <div
-        class="flex items-center gap-2 transition-opacity duration-200 pointer-events-auto shrink-0"
-        :class="{ 'opacity-15': isHoveringSend }"
-      >
-        <!-- Shared Canvas Badge -->
-        <div
-          v-if="isCollabActive"
-          class="h-8 px-2.5 rounded-xl bg-emerald-600/90 shadow-sm border border-emerald-400 flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-white shrink-0"
-          title="Shared Canvas (Team Collaboration Active)"
-        >
-          <Users class="w-3.5 h-3.5 text-emerald-200 shrink-0" />
-          <span class="w-2 h-2 rounded-full bg-emerald-300 animate-pulse shrink-0"></span>
-          <span v-if="whiteboardContainerWidth >= 640" class="truncate max-w-[140px]">{{ roomStore.currentRoom?.whiteboardHostName }} Shared Canvas</span>
-        </div>
-
-        <!-- Personal Badge -->
-        <div
-          v-else
-          class="h-8 px-2.5 rounded-xl bg-white/95 shadow-sm border border-slate-200 flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-slate-700 shrink-0"
-          title="Personal (Private Draft)"
-        >
-          <User class="w-3.5 h-3.5 text-sky-500 shrink-0" />
-          <span v-if="whiteboardContainerWidth >= 640">Personal</span>
-        </div>
-      </div>
-
-      <!-- Top Center: Floating Banners (Isolation / Node Edit / View-Only) -->
-      <div class="flex-1 min-w-0 flex items-center justify-center px-1 sm:px-2 pointer-events-none">
-        <!-- View-Only Banner for Muted Users -->
-        <div
-          v-if="isCurrentUserMuted"
-          class="pointer-events-auto px-3.5 py-1.5 rounded-2xl bg-rose-950/90 border border-rose-500/50 text-rose-300 text-xs font-semibold shadow-2xl backdrop-blur-md flex items-center gap-2 truncate"
-        >
-          <MicOff class="w-4 h-4 text-rose-400 shrink-0" />
-          <span class="truncate">View-Only: Muted by host</span>
-        </div>
-
-        <!-- Group Isolation Mode Top Floating Banner (hidden while in arrow node edit mode) -->
-        <div
-          v-else-if="isIsolationMode && !isArrowNodeEditing"
-          class="pointer-events-auto flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1 bg-slate-900/95 border border-indigo-500/80 rounded-2xl shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 whitespace-nowrap select-none shrink-0"
-        >
-          <div v-if="whiteboardContainerWidth >= 560" class="flex items-center gap-1 sm:gap-1.5 text-indigo-300 font-medium text-xs whitespace-nowrap shrink-0">
-            <Group class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-indigo-400 shrink-0" />
-            <span>{{ isolationStack.length > 0 ? `Isolation (L${isolationStack.length + 1})` : 'Isolation' }}</span>
-            <span v-if="whiteboardContainerWidth >= 768" class="text-slate-400 font-normal text-[11px]">(ESC to exit)</span>
-          </div>
-          <button
-            @click="exitGroupIsolation"
-            class="px-2 py-0.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-[11px] sm:text-xs transition cursor-pointer whitespace-nowrap shrink-0 shadow-sm flex items-center gap-1"
-            :title="isolationStack.length > 0 ? 'Back (ESC)' : 'Exit Isolation (ESC)'"
-          >
-            <Group v-if="whiteboardContainerWidth < 560" class="w-3.5 h-3.5 text-indigo-200" />
-            <span>{{ isolationStack.length > 0 ? 'Back' : 'Exit' }}</span>
-          </button>
-        </div>
-
-        <!-- Arrow & Line Node Editing Mode Top Floating Banner -->
-        <div
-          v-else-if="isArrowNodeEditing"
-          class="pointer-events-auto flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1 bg-slate-900/95 border border-indigo-500/80 rounded-2xl shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 whitespace-nowrap select-none shrink-0"
-        >
-          <div v-if="whiteboardContainerWidth >= 560" class="flex items-center gap-1.5 sm:gap-2 text-indigo-300 font-medium text-xs whitespace-nowrap shrink-0">
-            <Waypoints class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-indigo-400 shrink-0" />
-            <span>Node Edit</span>
-
-            <!-- Compact ? Help Button with concise card tooltip (vanishes immediately on mouse leave) -->
-            <div
-              class="relative inline-flex items-center"
-              @mouseenter="showNodeHelp = true"
-              @mouseleave="showNodeHelp = false"
-            >
-              <button
-                type="button"
-                @click.stop="showNodeHelp = !showNodeHelp"
-                class="w-4 h-4 rounded-full bg-indigo-500/20 hover:bg-indigo-500/40 text-indigo-300 text-[10px] font-bold flex items-center justify-center transition cursor-pointer border border-indigo-400/40"
-                aria-label="Node editing guide"
-              >
-                ?
-              </button>
-              <div
-                v-if="showNodeHelp"
-                class="absolute top-full left-1/2 -translate-x-1/2 mt-2 z-50 w-72 sm:w-80 p-3 bg-slate-950/95 border border-indigo-500/60 rounded-xl text-slate-200 text-xs shadow-2xl backdrop-blur-md transition select-none"
-              >
-                <div class="text-[11px] text-slate-300 leading-relaxed space-y-1.5">
-                  <p><span class="text-indigo-300 font-semibold">Double-click line:</span> Add new vector node</p>
-                  <p><span class="text-indigo-300 font-semibold">Double-click node:</span> Toggle sharp corner / smooth curve</p>
-                  <p><span class="text-indigo-300 font-semibold">Drag stroke line:</span> Move whole arrow or curve</p>
-                  <p><span class="text-indigo-300 font-semibold">Drag background:</span> Marquee box select multiple nodes</p>
-                  <p><span class="text-indigo-300 font-semibold">Del / Backspace:</span> Delete selected nodes</p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="flex items-center gap-1 shrink-0">
-            <button
-              v-if="selectedNodeIndices.size > 0"
-              @click="deleteSelectedArrowNodes"
-              class="px-1.5 sm:px-2 py-0.5 rounded-lg bg-rose-600/80 hover:bg-rose-500 text-white font-medium text-[11px] sm:text-xs transition cursor-pointer whitespace-nowrap shrink-0"
-              title="Delete selected nodes (Del/Backspace)"
-            >
-              <Trash2 v-if="whiteboardContainerWidth < 560" class="w-3.5 h-3.5" />
-              <span v-else>Delete ({{ selectedNodeIndices.size }})</span>
-            </button>
-            <button
-              @click="exitArrowNodeEditing"
-              class="px-2 sm:px-2.5 py-0.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-[11px] sm:text-xs transition cursor-pointer whitespace-nowrap shrink-0 shadow-sm flex items-center gap-1"
-              title="Done editing nodes (ESC)"
-            >
-              <Waypoints v-if="whiteboardContainerWidth < 560" class="w-3.5 h-3.5 text-indigo-200" />
-              <span>Done</span>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Top Right: Action Buttons -->
-      <div
-        class="flex items-center gap-1 sm:gap-2 transition-opacity duration-200 pointer-events-auto shrink-0"
-        :class="{ 'opacity-15': isHoveringSend }"
-      >
-        <!-- Explicit Save Button with Animated Auto-Save Status (Saving, Saved, Offline, Save) -->
-        <button
-          @click="handleQuickSave"
-          class="h-8 px-2.5 sm:px-3 rounded-xl transition-all duration-200 text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-sm border"
-          :class="[
-            saveStatus === 'saved' || isRecentlySaved
-              ? 'bg-emerald-50 text-emerald-700 border-emerald-400'
-              : saveStatus === 'saving'
-                ? 'bg-indigo-50 text-indigo-700 border-indigo-300'
-                : saveStatus === 'offline'
-                  ? 'bg-amber-50 text-amber-700 border-amber-300'
-                  : 'bg-white/95 hover:bg-white text-slate-700 hover:text-indigo-600 border-slate-200'
-          ]"
-          title="Save whiteboard to Room Album (Ctrl+S)"
-        >
-          <Loader2 v-if="saveStatus === 'saving'" class="w-3.5 h-3.5 text-indigo-600 animate-spin shrink-0" />
-          <Check v-else-if="saveStatus === 'saved' || isRecentlySaved" class="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-          <CloudOff v-else-if="saveStatus === 'offline'" class="w-3.5 h-3.5 text-amber-600 shrink-0" />
-          <Save v-else class="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-          <span v-if="whiteboardContainerWidth >= 680" class="w-14 text-center inline-block truncate">
-            {{
-              saveStatus === 'saving'
-                ? 'Saving...'
-                : saveStatus === 'saved' || isRecentlySaved
-                  ? 'Saved'
-                  : saveStatus === 'offline'
-                    ? 'Offline'
-                    : 'Save'
-            }}
-          </span>
-        </button>
-
-        <!-- Toggle: Make Private (if Shared & Host) OR Share (if Personal) directly next to Save -->
-        <button
-          v-if="isCollabActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid"
-          @click="showPrivateConfirmModal = true"
-          class="h-8 px-2.5 sm:px-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white shadow-sm border border-rose-500 transition text-xs font-semibold flex items-center gap-1.5 cursor-pointer shrink-0"
-          title="Convert to Private Board (Stop Team Collaboration)"
-        >
-          <Lock class="w-3.5 h-3.5 shrink-0" />
-          <span v-if="whiteboardContainerWidth >= 680">Make Private</span>
-        </button>
-
-        <button
-          v-else-if="!isCollabActive"
-          @click="handlePublish"
-          :disabled="isCurrentUserMuted"
-          class="h-8 px-2.5 sm:px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm border border-indigo-500 transition text-xs font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0"
-          title="Publish as shared canvas for team collaboration"
-        >
-          <Globe class="w-3.5 h-3.5 shrink-0" />
-          <span v-if="whiteboardContainerWidth >= 680">Share</span>
-        </button>
-
-        <!-- Shortcuts Cheatsheet -->
-        <button @click="showShortcutsModal = true" class="h-8 w-8 rounded-xl bg-white/95 hover:bg-white text-slate-600 hover:text-indigo-600 shadow-sm border border-slate-200 transition cursor-pointer flex items-center justify-center shrink-0" title="Shortcuts Cheatsheet (?)">
-          <HelpCircle class="w-3.5 h-3.5" />
-        </button>
-
-        <!-- Close Panel -->
-        <button @click="handleCloseRequest" class="h-8 w-8 rounded-xl bg-white/95 hover:bg-white text-slate-500 hover:text-rose-600 shadow-sm border border-slate-200 transition cursor-pointer flex items-center justify-center shrink-0" title="Close Panel">
-          <X class="w-3.5 h-3.5" />
-        </button>
-      </div>
-    </div>
-
-    <!-- Quick Save & Action Toast Notification -->
-    <transition
-      enter-active-class="transition duration-200 ease-out"
-      enter-from-class="opacity-0 -translate-y-2"
-      enter-to-class="opacity-100 translate-y-0"
-      leave-active-class="transition duration-150 ease-in"
-      leave-from-class="opacity-100 translate-y-0"
-      leave-to-class="opacity-0 -translate-y-2"
-    >
-      <div v-if="showToast && !isAiRedrawing" class="absolute top-16 left-1/2 -translate-x-1/2 z-40 px-4 py-2 bg-slate-900/95 border border-emerald-500/60 text-emerald-300 text-xs font-semibold rounded-2xl shadow-2xl flex items-center gap-2 backdrop-blur-md">
-        <Check class="w-4 h-4 text-emerald-400" />
-        <span>{{ toastMsg }}</span>
-      </div>
-    </transition>
-
-    <!-- AI Redraw Progress Notification (Aligned with top notifications) -->
-    <transition
-      enter-active-class="transition duration-200 ease-out"
-      enter-from-class="opacity-0 -translate-y-2"
-      enter-to-class="opacity-100 translate-y-0"
-      leave-active-class="transition duration-150 ease-in"
-      leave-from-class="opacity-100 translate-y-0"
-      leave-to-class="opacity-0 -translate-y-2"
-    >
-      <div v-if="isAiRedrawing" class="absolute top-16 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-slate-900/95 border border-violet-500/60 text-violet-200 text-xs font-semibold rounded-2xl shadow-2xl flex items-center gap-2.5 backdrop-blur-md select-none pointer-events-none">
-        <Loader2 class="w-4 h-4 animate-spin text-fuchsia-400" />
-        <span>{{ aiRedrawLoadingMessage || 'Redrawing sketch into vector graphic...' }}</span>
-      </div>
-    </transition>
-
-    <!-- Canvas Wrapper with glowing Send viewport border on hover -->
-    <div
-      ref="wrapperRef"
-      class="flex-1 w-full h-full relative cursor-crosshair transition-[box-shadow] duration-200"
-      :class="{ 'ring-4 ring-inset ring-sky-400/90 shadow-[inset_0_0_40px_rgba(56,189,248,0.35)]': isHoveringSend }"
-      @contextmenu.prevent
-      @mouseleave="removeMyCursor"
-    >
+  <div ref="rootRef" class="w-full h-full bg-[#eef0f3] text-slate-800 font-sans overflow-hidden select-none relative" @contextmenu.prevent>
+    
+    <!-- ACTUAL CANVAS WRAPPER (Spans absolute inset-0 across the entire whiteboard area) -->
+    <div class="absolute inset-0 w-full h-full bg-[#eef0f3] overflow-hidden" ref="wrapperRef" @mouseleave="removeMyCursor" @pointerdown="closeFlyoutImmediately" :class="[currentTool === 'select' ? 'cursor-default' : 'cursor-crosshair', {'ring-4 ring-inset ring-sky-400/90 shadow-[inset_0_0_40px_rgba(56,189,248,0.35)]': isHoveringSend}]">
       <canvas ref="canvasRef" class="w-full h-full touch-none"></canvas>
 
-      <!-- Live Collaborative Cursors & Live Stroke Overlay -->
+      <!-- Remote Cursors & Live Previews -->
       <div v-if="isCollabActive" class="absolute inset-0 pointer-events-none z-30 overflow-hidden">
-        <!-- Live Remote In-Progress Strokes & Shapes -->
         <svg class="absolute inset-0 w-full h-full pointer-events-none">
           <template v-for="c in Object.values(smoothedCursors)" :key="'stroke-' + c.uid">
-            <!-- Freehand & Arrow In-Progress Strokes -->
-            <path
-              v-if="c.liveStroke?.points && c.liveStroke.points.length >= 2"
-              :d="pointsToSvgPath(c.liveStroke.points)"
-              fill="none"
-              :stroke="c.liveStroke.color || c.color"
-              :stroke-width="(c.liveStroke.width || 4) * (canvas?.getZoom() || 1)"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              class="opacity-80"
-            />
-            <!-- Live Rectangle -->
-            <rect
-              v-if="c.liveShape?.shapeType === 'rect'"
-              :x="getNodeScreenPos({ x: c.liveShape.x, y: c.liveShape.y }).x"
-              :y="getNodeScreenPos({ x: c.liveShape.x, y: c.liveShape.y }).y"
-              :width="c.liveShape.w * (canvas?.getZoom() || 1)"
-              :height="c.liveShape.h * (canvas?.getZoom() || 1)"
-              fill="none"
-              :stroke="c.liveShape.color || c.color"
-              :stroke-width="(c.liveShape.strokeWidth || 3) * (canvas?.getZoom() || 1)"
-              class="opacity-80"
-            />
-            <!-- Live Circle (Ellipse) -->
-            <ellipse
-              v-else-if="c.liveShape?.shapeType === 'circle'"
-              :cx="getNodeScreenPos({ x: c.liveShape.x, y: c.liveShape.y }).x"
-              :cy="getNodeScreenPos({ x: c.liveShape.x, y: c.liveShape.y }).y"
-              :rx="c.liveShape.w * (canvas?.getZoom() || 1)"
-              :ry="c.liveShape.h * (canvas?.getZoom() || 1)"
-              fill="none"
-              :stroke="c.liveShape.color || c.color"
-              :stroke-width="(c.liveShape.strokeWidth || 3) * (canvas?.getZoom() || 1)"
-              class="opacity-80"
-            />
-            <!-- Live Triangle -->
-            <polygon
-              v-else-if="c.liveShape?.shapeType === 'triangle'"
-              :points="getTriangleScreenPoints(c.liveShape)"
-              fill="none"
-              :stroke="c.liveShape.color || c.color"
-              :stroke-width="(c.liveShape.strokeWidth || 3) * (canvas?.getZoom() || 1)"
-              stroke-linejoin="round"
-              class="opacity-80"
-            />
-            <!-- Live Line -->
-            <line
-              v-else-if="c.liveShape?.shapeType === 'line'"
-              :x1="getNodeScreenPos({ x: c.liveShape.x, y: c.liveShape.y }).x"
-              :y1="getNodeScreenPos({ x: c.liveShape.x, y: c.liveShape.y }).y"
-              :x2="getNodeScreenPos({ x: c.liveShape.w, y: c.liveShape.h }).x"
-              :y2="getNodeScreenPos({ x: c.liveShape.w, y: c.liveShape.h }).y"
-              :stroke="c.liveShape.color || c.color"
-              :stroke-width="(c.liveShape.strokeWidth || 3) * (canvas?.getZoom() || 1)"
-              stroke-linecap="round"
-              class="opacity-80"
-            />
+            <path v-if="c.liveStroke?.points && c.liveStroke.points.length >= 2" :d="pointsToSvgPath(c.liveStroke.points)" fill="none" :stroke="c.liveStroke.color || c.color" :stroke-width="(c.liveStroke.width || 4) * (canvas?.getZoom() || 1)" stroke-linecap="round" stroke-linejoin="round" class="opacity-80" />
+            <rect v-if="c.liveShape?.shapeType === 'rect'" :x="getNodeScreenPos({ x: c.liveShape.x, y: c.liveShape.y }).x" :y="getNodeScreenPos({ x: c.liveShape.x, y: c.liveShape.y }).y" :width="c.liveShape.w * (canvas?.getZoom() || 1)" :height="c.liveShape.h * (canvas?.getZoom() || 1)" fill="none" :stroke="c.liveShape.color || c.color" :stroke-width="(c.liveShape.strokeWidth || 3) * (canvas?.getZoom() || 1)" class="opacity-80" />
+            <ellipse v-else-if="c.liveShape?.shapeType === 'circle'" :cx="getNodeScreenPos({ x: c.liveShape.x, y: c.liveShape.y }).x" :cy="getNodeScreenPos({ x: c.liveShape.x, y: c.liveShape.y }).y" :rx="c.liveShape.w * (canvas?.getZoom() || 1)" :ry="c.liveShape.h * (canvas?.getZoom() || 1)" fill="none" :stroke="c.liveShape.color || c.color" :stroke-width="(c.liveShape.strokeWidth || 3) * (canvas?.getZoom() || 1)" class="opacity-80" />
+            <polygon v-else-if="c.liveShape?.shapeType === 'triangle'" :points="getTriangleScreenPoints(c.liveShape)" fill="none" :stroke="c.liveShape.color || c.color" :stroke-width="(c.liveShape.strokeWidth || 3) * (canvas?.getZoom() || 1)" stroke-linejoin="round" class="opacity-80" />
+            <line v-else-if="c.liveShape?.shapeType === 'line'" :x1="getNodeScreenPos({ x: c.liveShape.x, y: c.liveShape.y }).x" :y1="getNodeScreenPos({ x: c.liveShape.x, y: c.liveShape.y }).y" :x2="getNodeScreenPos({ x: c.liveShape.w, y: c.liveShape.h }).x" :y2="getNodeScreenPos({ x: c.liveShape.w, y: c.liveShape.h }).y" :stroke="c.liveShape.color || c.color" :stroke-width="(c.liveShape.strokeWidth || 3) * (canvas?.getZoom() || 1)" stroke-linecap="round" class="opacity-80" />
           </template>
         </svg>
-
-        <!-- 60fps RAF Lerped Cursors with Natural OS Pointer Angle -->
-        <div
-          v-for="c in Object.values(smoothedCursors)"
-          :key="c.uid"
-          class="absolute top-0 left-0 will-change-transform"
-          :style="{
-            transform: `translate3d(${getNodeScreenPos({ x: c.currentX, y: c.currentY }).x}px, ${getNodeScreenPos({ x: c.currentX, y: c.currentY }).y}px, 0)`
-          }"
-        >
-          <!-- Natural OS Cursor Pointer SVG (tip at 0,0, classic natural tilt) -->
-          <svg
-            class="w-5 h-5 drop-shadow-md"
-            viewBox="0 0 24 24"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-          >
-            <path
-              d="M0 0 L5 15 L7.5 9.5 L13 8 L0 0 Z"
-              :fill="c.color"
-              stroke="#ffffff"
-              stroke-width="1.5"
-              stroke-linejoin="round"
-            />
+        <div v-for="c in Object.values(smoothedCursors)" :key="c.uid" class="absolute top-0 left-0 will-change-transform" :style="{ transform: `translate3d(${getNodeScreenPos({ x: c.currentX, y: c.currentY }).x}px, ${getNodeScreenPos({ x: c.currentX, y: c.currentY }).y}px, 0)` }">
+          <svg class="w-5 h-5 drop-shadow-md" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M0 0 L5 15 L7.5 9.5 L13 8 L0 0 Z" :fill="c.color" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round" />
           </svg>
-          <!-- Name & Avatar Pill -->
-          <div
-            class="ml-3 -mt-1 px-2 py-0.5 rounded-full text-[10px] font-semibold text-white shadow-md flex items-center gap-1 whitespace-nowrap select-none"
-            :style="{ backgroundColor: c.color }"
-          >
-            <span>{{ c.avatar }}</span>
-            <span>{{ c.name }}</span>
+          <div class="ml-3 -mt-1 px-2 py-0.5 rounded-full text-[10px] font-semibold text-white shadow-md flex items-center gap-1 whitespace-nowrap select-none" :style="{ backgroundColor: c.color }">
+            <span>{{ c.avatar }}</span> <span>{{ c.name }}</span>
           </div>
         </div>
       </div>
 
-      <!-- Send Viewport Capture Framing Guide / Viewfinder (Clipped strictly to visible workspace) -->
-      <div
-        v-if="isHoveringSend && viewfinderBounds"
-        class="absolute border-2 border-dashed border-sky-400 pointer-events-none rounded-xl z-30 flex flex-col justify-start p-3 animate-in fade-in duration-200"
-        :style="{
-          left: `${viewfinderBounds.left}px`,
-          top: `${viewfinderBounds.top}px`,
-          width: `${viewfinderBounds.width}px`,
-          height: `${viewfinderBounds.height}px`
-        }"
-      >
-        <div class="flex justify-between items-center w-full">
-          <!-- Top Left -->
-          <div class="text-[11px] font-mono font-medium text-sky-400 bg-sky-950/90 px-2.5 py-1 rounded-lg border border-sky-500/40 shadow-sm">
-            <span>📷 Viewport Snapshot Area</span>
-          </div>
-          <!-- Top Right -->
-          <div class="text-[10px] font-mono text-sky-300/90 bg-slate-900/90 px-2.5 py-1 rounded-lg border border-slate-700 shadow-sm">
-            Full visible screen will be captured to chat
-          </div>
-        </div>
-      </div>
-
-      <!-- Unified Floating Quick-Action Bar below Active Object -->
-      <div
-        v-if="(stickyToolbarPosition.visible && activeStickyNote) || (lockToolbarPosition.visible && lockToolbarPosition.hasLocked) || (arrowToolbarPosition.visible && activeArrow && !isArrowNodeEditing)"
-        class="absolute z-40 flex items-center gap-1.5 p-1 bg-slate-900/95 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl transition-opacity animate-in fade-in zoom-in-95 pointer-events-auto cursor-default select-none"
-        :class="{ 'opacity-15': isHoveringSend }"
-        @pointerdown.stop
-        @mousedown.stop
-        :style="{
-          left: `${lockToolbarPosition.visible ? lockToolbarPosition.x : (stickyToolbarPosition.visible ? stickyToolbarPosition.x : arrowToolbarPosition.x)}px`,
-          top: `${lockToolbarPosition.visible ? lockToolbarPosition.y : (stickyToolbarPosition.visible ? stickyToolbarPosition.y : arrowToolbarPosition.y)}px`,
-          transform: 'translate(-50%, 0)'
-        }"
-      >
-        <!-- Unlock Button (if locked: icon-only) -->
-        <button
-          v-if="lockToolbarPosition.visible && lockToolbarPosition.hasLocked"
-          type="button"
-          @pointerdown.stop
-          @mousedown.stop
-          @click.stop="unlockSelectedObjects"
-          @mouseenter="highlightLockedObjects"
-          @mouseleave="clearLockedHighlights"
-          class="p-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/35 text-amber-300 hover:text-amber-200 border border-amber-500/40 transition cursor-pointer shadow-sm flex items-center justify-center"
-          title="Click to unlock (Ctrl+L)"
-        >
-          <Lock class="w-4 h-4 text-amber-400 pointer-events-none" />
-        </button>
-
-        <!-- Sticky Note Tools (only if unlocked) -->
-        <template v-if="stickyToolbarPosition.visible && activeStickyNote && !(lockToolbarPosition.visible && lockToolbarPosition.hasLocked)">
-          <div class="flex items-center gap-1 px-1">
-            <button
-              v-for="color in stickyColors"
-              :key="color.name"
-              type="button"
-              @pointerdown.stop
-              @mousedown.stop
-              @click.stop="changeStickyNoteColor(activeStickyNote, color)"
-              class="w-4 h-4 rounded-full border border-black/20 hover:scale-125 transition transform cursor-pointer"
-              :style="{ backgroundColor: color.bg }"
-              :title="color.name"
-            ></button>
-          </div>
-          <div class="w-px h-4 bg-slate-700"></div>
-          <button
-            type="button"
-            @pointerdown.stop
-            @mousedown.stop
-            @click.stop="duplicateStickyNote(activeStickyNote)"
-            class="p-1 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition cursor-pointer"
-            title="Duplicate Note"
-          >
-            <Copy class="w-3.5 h-3.5 pointer-events-none" />
-          </button>
-          <button
-            type="button"
-            @pointerdown.stop
-            @mousedown.stop
-            @click.stop="toggleLockSelected"
-            class="p-1 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition cursor-pointer"
-            title="Lock Note (Ctrl+L)"
-          >
-            <Unlock class="w-3.5 h-3.5 pointer-events-none" />
-          </button>
-          <button
-            type="button"
-            @pointerdown.stop
-            @mousedown.stop
-            @click.stop="deleteSelected"
-            class="p-1 hover:bg-rose-950/60 text-rose-400 hover:text-rose-300 rounded-lg transition cursor-pointer"
-            title="Delete Note"
-          >
-            <Trash2 class="w-3.5 h-3.5 pointer-events-none" />
-          </button>
-        </template>
-
-        <!-- Arrow Tools (only if unlocked) -->
-        <template v-if="arrowToolbarPosition.visible && activeArrow && !isArrowNodeEditing && !(lockToolbarPosition.visible && lockToolbarPosition.hasLocked)">
-          <button
-            type="button"
-            @pointerdown.stop
-            @mousedown.stop
-            @click.stop="enterArrowNodeEditing(activeArrow)"
-            class="px-2 py-1 bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-300 hover:text-white rounded-lg transition cursor-pointer flex items-center gap-1.5 text-xs font-medium whitespace-nowrap"
-            title="Edit vector line nodes (or double-click to edit)"
-          >
-            <Waypoints class="w-3.5 h-3.5 text-indigo-400 pointer-events-none" />
-            <span>Edit Nodes</span>
-          </button>
-          <div class="w-px h-4 bg-slate-700"></div>
-          <button
-            type="button"
-            @pointerdown.stop
-            @mousedown.stop
-            @click.stop="duplicateArrow(activeArrow)"
-            class="p-1 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition cursor-pointer"
-            title="Duplicate (Ctrl+D)"
-          >
-            <Copy class="w-3.5 h-3.5 pointer-events-none" />
-          </button>
-          <button
-            type="button"
-            @pointerdown.stop
-            @mousedown.stop
-            @click.stop="toggleLockSelected"
-            class="p-1 hover:bg-slate-800 rounded-lg transition cursor-pointer"
-            :class="isObjectLocked ? 'text-amber-400 hover:text-amber-300' : 'text-slate-300 hover:text-white'"
-            :title="isObjectLocked ? 'Unlock (Ctrl+L)' : 'Lock (Ctrl+L)'"
-          >
-            <component :is="isObjectLocked ? Lock : Unlock" class="w-3.5 h-3.5 pointer-events-none" />
-          </button>
-          <button
-            type="button"
-            @pointerdown.stop
-            @mousedown.stop
-            @click.stop="deleteSelected"
-            class="p-1 hover:bg-rose-950/60 text-rose-400 hover:text-rose-300 rounded-lg transition cursor-pointer"
-            title="Delete (Del)"
-          >
-            <Trash2 class="w-3.5 h-3.5 pointer-events-none" />
-          </button>
-        </template>
-      </div>
-
-      <!-- Arrow Node Editing Handles Overlay -->
-      <div
-        v-if="isArrowNodeEditing && editingArrow"
-        class="absolute inset-0 pointer-events-none z-30"
-      >
-        <!-- Marquee Selection Rectangle -->
-        <div
-          v-if="isNodeMarqueeActive"
-          class="absolute border border-indigo-400 bg-indigo-500/15 pointer-events-none z-40 rounded-sm"
-          :style="{
-            left: `${nodeMarqueeRect.x1}px`,
-            top: `${nodeMarqueeRect.y1}px`,
-            width: `${Math.max(0, nodeMarqueeRect.x2 - nodeMarqueeRect.x1)}px`,
-            height: `${Math.max(0, nodeMarqueeRect.y2 - nodeMarqueeRect.y1)}px`
-          }"
-        ></div>
-
-        <!-- Connecting guide lines, stroke double click zone, and live preview between nodes -->
+      <!-- Arrow Node Editing Canvas Overlay -->
+      <div v-if="isArrowNodeEditing && editingArrow" class="absolute inset-0 pointer-events-none z-30">
+        <div v-if="isNodeMarqueeActive" class="absolute border border-indigo-400 bg-indigo-500/15 pointer-events-none z-40 rounded-sm" :style="{ left: `${nodeMarqueeRect.x1}px`, top: `${nodeMarqueeRect.y1}px`, width: `${Math.max(0, nodeMarqueeRect.x2 - nodeMarqueeRect.x1)}px`, height: `${Math.max(0, nodeMarqueeRect.y2 - nodeMarqueeRect.y1)}px` }"></div>
         <svg class="w-full h-full absolute inset-0 pointer-events-none">
-          <!-- Invisible wide hit-testing polyline: Drag to move whole arrow, double-click to add node -->
-          <polyline
-            :points="nodeScreenPolyline"
-            fill="none"
-            stroke="transparent"
-            stroke-width="26"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            class="pointer-events-auto cursor-grab active:cursor-grabbing"
-            title="Drag line to move arrow, double-click to add node"
-            @pointerdown="onStrokePointerDown"
-            @dblclick="insertNodeOnArrowStroke"
-          />
-          <polyline
-            :points="nodeScreenPolyline"
-            fill="none"
-            stroke="#6366f1"
-            stroke-width="1.5"
-            stroke-dasharray="4,4"
-            class="opacity-70 pointer-events-none"
-          />
-          <!-- Live Arrow Shaft Preview during Node Drag -->
-          <path
-            v-if="isDraggingNode && liveNodeArrowSvg.pathD"
-            :d="liveNodeArrowSvg.pathD"
-            fill="none"
-            :stroke="liveNodeArrowSvg.color"
-            :stroke-width="liveNodeArrowSvg.strokeWidth"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-          <!-- Live Arrowhead Preview during Node Drag -->
-          <polygon
-            v-if="isDraggingNode && liveNodeArrowSvg.headPoints"
-            :points="liveNodeArrowSvg.headPoints"
-            :fill="liveNodeArrowSvg.color"
-            :stroke="liveNodeArrowSvg.color"
-            stroke-width="1"
-            stroke-linejoin="round"
-          />
+          <polyline :points="nodeScreenPolyline" fill="none" stroke="transparent" stroke-width="26" stroke-linecap="round" stroke-linejoin="round" class="pointer-events-auto cursor-grab active:cursor-grabbing" title="Drag line to move arrow, double-click to add node" @pointerdown="onStrokePointerDown" @dblclick="insertNodeOnArrowStroke" />
+          <polyline :points="nodeScreenPolyline" fill="none" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="4,4" class="opacity-70 pointer-events-none" />
+          <path v-if="isDraggingNode && liveNodeArrowSvg.pathD" :d="liveNodeArrowSvg.pathD" fill="none" :stroke="liveNodeArrowSvg.color" :stroke-width="liveNodeArrowSvg.strokeWidth" stroke-linecap="round" stroke-linejoin="round" />
+          <polygon v-if="isDraggingNode && liveNodeArrowSvg.headPoints" :points="liveNodeArrowSvg.headPoints" :fill="liveNodeArrowSvg.color" :stroke="liveNodeArrowSvg.color" :stroke-width="Math.max(1, (canvas?.getZoom() || 1))" stroke-linejoin="round" />
         </svg>
-
-        <!-- Interactive Node Handles -->
-        <div
-          v-for="(pt, idx) in editingArrowPoints"
-          :key="idx"
-          @pointerdown="onNodePointerDown(idx, $event)"
-          @dblclick.stop.prevent="toggleNodeCorner(idx)"
-          class="absolute -translate-x-1/2 -translate-y-1/2 pointer-events-auto cursor-grab active:cursor-grabbing group transition-transform"
-          :style="{
-            left: `${getNodeScreenPos(pt).x}px`,
-            top: `${getNodeScreenPos(pt).y}px`
-          }"
-          :title="idx === 0 ? 'Start Node (Double-click: toggle corner)' : idx === editingArrowPoints.length - 1 ? 'End Node (Double-click: toggle corner)' : `Node ${idx + 1} (Double-click: toggle corner, Del: delete)`"
-        >
-          <!-- Corner or Smooth Handle Styling -->
-          <div
-            class="w-4 h-4 shadow-lg flex items-center justify-center transition-all group-hover:scale-125"
-            :class="[
-              editingArrowCorners.has(idx) ? 'rounded-none rotate-45 border-2' : 'rounded-full border-2',
-              selectedNodeIndices.has(idx) ? 'ring-4 ring-amber-400 border-amber-300 scale-110' : '',
-              idx === 0 ? 'bg-emerald-500 border-white text-white ring-2 ring-emerald-400/40' :
-              idx === editingArrowPoints.length - 1 ? 'bg-sky-500 border-white text-white ring-2 ring-sky-400/40' :
-              editingArrowCorners.has(idx) ? 'bg-amber-500 border-white text-white' :
-              'bg-white border-indigo-600 ring-2 ring-indigo-400/30'
-            ]"
-          >
-            <div
-              v-if="idx !== 0 && idx !== editingArrowPoints.length - 1"
-              class="w-1.5 h-1.5"
-              :class="editingArrowCorners.has(idx) ? 'bg-white rounded-none' : 'rounded-full bg-indigo-600'"
-            ></div>
+        <div v-for="(pt, idx) in editingArrowPoints" :key="idx" @pointerdown="onNodePointerDown(idx, $event)" @dblclick.stop.prevent="toggleNodeCorner(idx)" class="absolute -translate-x-1/2 -translate-y-1/2 pointer-events-auto cursor-grab active:cursor-grabbing group transition-transform" :style="{ left: `${getNodeScreenPos(pt).x}px`, top: `${getNodeScreenPos(pt).y}px` }">
+          <div class="w-4 h-4 shadow-lg flex items-center justify-center transition-all group-hover:scale-125" :class="[editingArrowCorners.has(idx) ? 'rounded-none rotate-45 border-2' : 'rounded-full border-2', selectedNodeIndices.has(idx) ? 'ring-4 ring-amber-400 border-amber-300 scale-110' : '', idx === 0 ? 'bg-emerald-500 border-white text-white ring-2 ring-emerald-400/40' : idx === editingArrowPoints.length - 1 ? 'bg-sky-500 border-white text-white ring-2 ring-sky-400/40' : editingArrowCorners.has(idx) ? 'bg-amber-500 border-white text-white' : 'bg-white border-indigo-600 ring-2 ring-indigo-400/30']">
+            <div v-if="idx !== 0 && idx !== editingArrowPoints.length - 1" class="w-1.5 h-1.5" :class="editingArrowCorners.has(idx) ? 'bg-white rounded-none' : 'rounded-full bg-indigo-600'"></div>
           </div>
         </div>
       </div>
-
-      <!-- Ctrl Marquee Selection Box Overlay -->
-      <div
-        v-if="isCtrlMarqueeActive"
-        class="absolute border border-sky-400 bg-sky-500/15 pointer-events-none z-30 rounded-sm"
-        :style="{
-          left: `${ctrlMarqueeRect.x1}px`,
-          top: `${ctrlMarqueeRect.y1}px`,
-          width: `${Math.max(0, ctrlMarqueeRect.x2 - ctrlMarqueeRect.x1)}px`,
-          height: `${Math.max(0, ctrlMarqueeRect.y2 - ctrlMarqueeRect.y1)}px`
-        }"
-      ></div>
     </div>
 
-    <!-- Floating Unified Toolbar (Bottom Center) -->
-    
-    
-    <!-- AI Error Reporting Card -->
-    <transition
-      enter-active-class="transition duration-200 ease-out"
-      enter-from-class="transform opacity-0 translate-y-4"
-      enter-to-class="transform opacity-100 translate-y-0"
-      leave-active-class="transition duration-150 ease-in"
-      leave-from-class="transform opacity-100 translate-y-0"
-      leave-to-class="transform opacity-0 translate-y-4"
-    >
-      <div
-        v-if="aiError"
-        class="absolute bottom-28 left-1/2 -translate-x-1/2 z-30 w-[94vw] sm:w-[460px] max-w-lg bg-slate-900/95 backdrop-blur-xl border border-rose-500/40 rounded-2xl shadow-2xl p-3.5 text-slate-200 text-xs flex flex-col gap-2.5 animate-in fade-in"
-      >
-        <div class="flex items-start justify-between gap-2">
-          <div class="flex items-center gap-2 text-rose-400 font-semibold text-sm">
-            <AlertTriangle class="w-4 h-4 shrink-0 text-rose-400" />
-            <span>{{ aiError.title }}</span>
-          </div>
-          <button @click="aiError = null" class="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition">
-            <X class="w-4 h-4" />
-          </button>
+    <!-- FLOATING TOP GLOBAL HEADER (Air / Glass Pill - translucent gray frosted glass) -->
+    <div class="absolute top-3 left-3 right-3 h-11 pl-1.5 pr-1.5 sm:pl-2 sm:pr-2 rounded-full bg-[#1b1c22]/70 backdrop-blur-2xl border border-white/20 shadow-[0_8px_32px_rgba(0,0,0,0.25)] flex items-center justify-between z-30 pointer-events-auto text-slate-200" style="-webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px);">
+      
+      <!-- Left: Status Badges & Save Status -->
+      <div class="flex items-center gap-1.5 sm:gap-2 min-w-0 shrink">
+        <!-- Status Badge -->
+        <div v-if="isCollabActive" class="h-8 px-2.5 rounded-full bg-emerald-950/70 border border-emerald-500/40 flex items-center gap-1.5 text-xs font-semibold text-emerald-300 shadow-sm cursor-help shrink-0" title="Live Team Collaboration Active">
+          <Users class="w-3.5 h-3.5 text-emerald-400" />
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span v-if="!isHeaderCompact" class="truncate max-w-[100px]">{{ roomStore.currentRoom?.whiteboardHostName || 'Team' }}</span>
+        </div>
+        <div v-else-if="isPublicCanvas" class="h-8 px-2.5 rounded-full bg-sky-950/70 border border-sky-500/40 flex items-center gap-1.5 text-xs font-semibold text-sky-300 shadow-sm cursor-help shrink-0" title="Public in Room Album">
+          <Globe class="w-3.5 h-3.5 text-sky-400" />
+          <span v-if="!isHeaderCompact">Public</span>
+        </div>
+        <div v-else class="h-8 px-2.5 rounded-full bg-white/10 border border-white/15 flex items-center gap-1.5 text-xs font-semibold text-slate-300 shadow-sm cursor-help shrink-0" title="Personal Draft">
+          <Lock class="w-3.5 h-3.5 text-slate-400" />
+          <span v-if="!isHeaderCompact">Draft</span>
         </div>
 
-        <p class="text-slate-300 leading-relaxed text-[11px] sm:text-xs">
-          {{ aiError.suggestion }}
-        </p>
-
-        <!-- Collapsible Diagnostic Details -->
-        <div v-if="aiError.attempts && aiError.attempts.length > 0" class="border border-slate-800 rounded-xl bg-slate-950/60 overflow-hidden">
-          <button
-            @click="showAiErrorDetails = !showAiErrorDetails"
-            class="w-full px-3 py-1.5 flex items-center justify-between text-[11px] text-slate-400 hover:text-slate-300 transition"
-          >
-            <span>Diagnostic Attempts ({{ aiError.attempts.length }} models attempted)</span>
-            <component :is="showAiErrorDetails ? ChevronUp : ChevronDown" class="w-3.5 h-3.5" />
-          </button>
-
-          <div v-if="showAiErrorDetails" class="px-3 py-2 border-t border-slate-800/80 space-y-1.5 max-h-40 overflow-y-auto custom-scrollbar text-[10px] font-mono">
-            <div
-              v-for="(att, idx) in aiError.attempts"
-              :key="idx"
-              class="p-1.5 rounded bg-slate-900/80 border border-slate-800 text-slate-300"
-            >
-              <div class="text-rose-400 font-semibold">{{ att.model }}:</div>
-              <div class="text-slate-400 break-words mt-0.5">{{ att.error }}</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Action Buttons -->
-        <div class="flex items-center justify-between pt-1 border-t border-slate-800/60 text-xs">
-          <button
-            @click="copyErrorDetails"
-            class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition flex items-center gap-1.5 text-[11px]"
-          >
-            <Check v-if="errorCopied" class="w-3.5 h-3.5 text-emerald-400" />
-            <Copy v-else class="w-3.5 h-3.5 text-slate-400" />
-            <span>{{ errorCopied ? 'Copied' : 'Copy Diagnostic Log' }}</span>
-          </button>
-
-          <div class="flex items-center gap-1.5">
-            <button
-              @click="retryGenerateAIObject"
-              class="px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition flex items-center gap-1.5 text-[11px]"
-            >
-              <RefreshCw class="w-3.5 h-3.5" /> Retry
-            </button>
-            <button
-              @click="aiError = null"
-              class="px-2.5 py-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-300 transition text-[11px]"
-            >Dismiss</button>
-          </div>
-        </div>
+        <!-- Save Status Button (Directly next to status badge, never pushes Undo/Redo) -->
+        <button @click="handleQuickSave" class="h-8 rounded-full transition text-xs font-medium flex items-center justify-center gap-1.5 cursor-pointer hover:bg-white/10 text-slate-300 border border-transparent whitespace-nowrap shrink-0" :class="isHeaderCompact ? 'w-8 p-0' : 'px-2.5'" title="Save manually (Ctrl+S)">
+          <Loader2 v-if="saveStatus === 'saving'" class="w-3.5 h-3.5 text-slate-300 animate-spin" />
+          <CloudOff v-else-if="saveStatus === 'offline'" class="w-3.5 h-3.5 text-amber-400" />
+          <Cloud class="w-3.5 h-3.5 text-slate-300" v-else />
+          <span v-if="!isHeaderCompact" class="hidden md:inline">{{ saveStatus === 'saving' ? 'Saving...' : saveStatus === 'offline' ? 'Offline' : 'Saved' }}</span>
+        </button>
       </div>
-    </transition>
 
-
-    <div
-      class="absolute bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1.5 sm:gap-2 transition-all duration-300 w-max max-w-[96%] overflow-visible flex-nowrap"
-      :class="[
-        isStackedToolbar ? 'flex-col items-center' : 'flex-row',
-        { 'opacity-40 pointer-events-none select-none': isCurrentUserMuted }
-      ]"
-    >
-      <!-- AI Input / Redraw Container (Fixed width guarantees rock-solid toolbar stability) -->
-      <div
-        class="flex flex-col gap-1.5 transition-opacity duration-200 shrink-0"
-        :class="[
-          { 'opacity-15': isHoveringSend },
-          isStackedToolbar ? 'w-[220px] max-w-[92vw]' : 'w-[150px] sm:w-[200px]'
-        ]"
-      >
-        <!-- State 1: SVG Generation from Text in progress -->
-        <div v-if="isGeneratingSvg" class="h-9 sm:h-10 px-3 bg-slate-900/95 text-sky-400 text-xs font-medium rounded-2xl flex items-center justify-between gap-2 border border-slate-700 shadow-xl">
-          <span class="flex items-center gap-1.5 min-w-0 truncate">
-            <Loader2 class="w-3.5 h-3.5 animate-spin text-sky-400 shrink-0" />
-            <span class="truncate">Generating...</span>
-          </span>
-          <button
-            @click="abortAiGeneration"
-            class="px-2 py-0.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-semibold transition cursor-pointer shrink-0"
-          >
-            Stop
-          </button>
+      <!-- Right: Actions (Undo / Redo, Send View, Share / Stop Sharing, Close) -->
+      <div class="flex items-center gap-1 sm:gap-1.5 shrink-0 ml-auto">
+        <!-- Undo / Redo Pinned to the Left of Send View (Never covers Send View) -->
+        <div class="flex items-center bg-white/10 border border-white/15 rounded-full p-0.5 shadow-sm shrink-0 mr-0.5 sm:mr-1">
+          <button @click="undo" class="w-7 h-7 flex items-center justify-center rounded-full hover:bg-white/15 text-slate-200 transition cursor-pointer" :disabled="!canUndo" :class="{'opacity-30 cursor-not-allowed': !canUndo}" title="Undo (Ctrl+Z)"><Undo2 class="w-3.5 h-3.5" /></button>
+          <button @click="redo" class="w-7 h-7 flex items-center justify-center rounded-full hover:bg-white/15 text-slate-200 transition cursor-pointer" :disabled="!canRedo" :class="{'opacity-30 cursor-not-allowed': !canRedo}" title="Redo (Ctrl+Y)"><Redo2 class="w-3.5 h-3.5" /></button>
         </div>
 
-        <!-- State 2: AI Sketch Redraw in progress -->
-        <div v-else-if="isAiRedrawing" class="h-9 sm:h-10 px-3 bg-slate-900/95 text-violet-300 text-xs font-medium rounded-2xl flex items-center justify-between gap-2 border border-violet-700/60 shadow-xl">
-          <span class="flex items-center gap-1.5 min-w-0 truncate">
-            <Loader2 class="w-3.5 h-3.5 animate-spin text-fuchsia-400 shrink-0" />
-            <span class="truncate">Redrawing...</span>
-          </span>
-          <span class="text-[10px] text-violet-300/80 font-mono">SVG</span>
-        </div>
-
-        <!-- State 3: Object selected -> Text input box transforms into AI Redraw button -->
-        <button
-          v-else-if="hasSelection"
-          @click="triggerAiRedrawSketch"
-          :disabled="isArrowNodeEditing"
-          class="h-9 sm:h-10 px-3 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 active:scale-[0.98] text-white rounded-2xl shadow-xl flex items-center justify-center gap-1.5 text-xs font-semibold transition cursor-pointer border border-violet-400/30"
-          :class="{ 'opacity-40 pointer-events-none cursor-not-allowed': isArrowNodeEditing }"
-          title="AI Redraw selected sketch as vector (SVG)"
-        >
-          <Sparkles class="w-3.5 h-3.5 text-yellow-300 shrink-0" />
-          <span class="truncate">AI Redraw</span>
-          <span class="text-[10px] px-1 py-0.2 bg-white/20 rounded font-mono font-normal shrink-0">SVG</span>
+        <!-- Send View -->
+        <button @click="handleSendToChat" :disabled="isSendingView" class="h-8 rounded-full bg-white/10 hover:bg-white/15 text-slate-200 font-semibold text-xs transition cursor-pointer shadow-sm flex items-center justify-center gap-1.5 border border-white/15 disabled:opacity-50" :class="isHeaderCompact ? 'w-8 p-0' : 'px-3'" title="Send snapshot to chat">
+          <Loader2 v-if="isSendingView" class="w-3.5 h-3.5 text-sky-400 animate-spin" />
+          <Send v-else class="w-3.5 h-3.5 text-sky-400" />
+          <span v-if="!isHeaderCompact">Send View</span>
         </button>
 
-        <!-- State 4: Default -> Text input AI vector generation form -->
-        <form v-else @submit.prevent="generateAIObject" class="flex items-center h-9 sm:h-10 bg-white/95 rounded-2xl shadow-xl border border-slate-200 p-1" :class="{ 'opacity-40 pointer-events-none cursor-not-allowed': isArrowNodeEditing }">
-          <input :disabled="isArrowNodeEditing" v-model="aiPrompt" type="text" :placeholder="isStackedToolbar ? 'AI Vector icon, chart...' : 'AI Vector...'" class="flex-1 bg-transparent px-2 py-1 text-xs focus:outline-none text-slate-700 placeholder-slate-400 min-w-0" />
-          <button type="submit" :disabled="!aiPrompt.trim() || isArrowNodeEditing" class="p-1 sm:p-1.5 rounded-xl bg-indigo-100 text-indigo-600 hover:bg-indigo-200 transition disabled:opacity-50 disabled:cursor-not-allowed shrink-0 cursor-pointer" title="Generate AI Vector">
-            <Sparkles class="w-3.5 h-3.5" />
-          </button>
-        </form>
-      </div>
-
-      <!-- Main Tools Bar -->
-      <div
-        class="h-9 sm:h-10 rounded-2xl border flex items-center transition-all duration-200 shrink-0"
-        :class="[
-          isHoveringSend ? 'bg-white/10 border-white/10 shadow-none' : 'bg-white/95 border-slate-200 shadow-xl',
-          isNarrowToolbar ? 'p-1 gap-0.5' : 'p-1 sm:p-1.5 gap-0.5 sm:gap-1'
-        ]"
-      >
-        <!-- Tool items that dim when hovering send -->
-        <div
-          class="flex items-center transition-opacity duration-200"
-          :class="[
-            { 'opacity-15': isHoveringSend },
-            isNarrowToolbar ? 'gap-0.5' : 'gap-0.5 sm:gap-1'
-          ]"
-        >
-          <button @click="toggleMode(false)" class="rounded-xl transition cursor-pointer" :class="[currentTool === 'select' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500', isNarrowToolbar ? 'p-1' : 'p-1.5']" title="Select / Move">
-            <MousePointer2 class="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-          </button>
-          
-          <div class="relative">
-            <button
-              @click="toggleMode(true); isBrushMenuOpen = !isBrushMenuOpen"
-              class="rounded-xl transition flex items-center gap-1 cursor-pointer"
-              :class="[
-                currentTool !== 'select' && currentTool !== 'text' && currentTool !== 'sticky' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500',
-                isNarrowToolbar ? 'p-1' : 'p-1.5',
-                { 'opacity-40 pointer-events-none cursor-not-allowed': isArrowNodeEditing }
-              ]"
-              :disabled="isArrowNodeEditing"
-              title="Draw & Shapes"
-            >
-              <Pencil class="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+        <!-- Share / Stop Sharing (Icon only when compact, stable width when wide) -->
+        <div :class="isHeaderCompact ? 'w-8' : 'w-[110px]'" class="flex items-center justify-end shrink-0 transition-all">
+          <template v-if="!isCollabActive && !isPublicCanvas">
+            <button @click="handlePublish" :disabled="isCurrentUserMuted || isPublishing" class="w-full h-8 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition cursor-pointer shadow-md flex items-center justify-center gap-1.5 disabled:opacity-50" :class="isHeaderCompact ? 'p-0' : 'px-2'">
+              <Loader2 v-if="isPublishing" class="w-3.5 h-3.5 animate-spin" />
+              <Share2 v-else class="w-3.5 h-3.5" />
+              <span v-if="!isHeaderCompact">{{ isPublishing ? 'Sharing...' : 'Share' }}</span>
             </button>
+          </template>
+
+          <template v-else>
+            <button @click="handleConfirmMakePrivate" :disabled="isConvertingToPrivate" class="w-full h-8 rounded-full bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs transition cursor-pointer shadow-[0_0_12px_rgba(244,63,94,0.4)] flex items-center justify-center gap-1.5 disabled:opacity-50 border border-rose-400/30" :class="isHeaderCompact ? 'p-0' : 'px-2'" title="Stop sharing and revert to private whiteboard">
+              <Loader2 v-if="isConvertingToPrivate" class="w-3.5 h-3.5 animate-spin" />
+              <span v-else class="relative flex h-2 w-2">
+                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-200 opacity-75"></span>
+                <span class="relative inline-flex rounded-full h-2 w-2 bg-white"></span>
+              </span>
+              <span v-if="!isHeaderCompact">{{ isConvertingToPrivate ? 'Stopping...' : 'Stop Sharing' }}</span>
+            </button>
+          </template>
+        </div>
+
+        <!-- Close Window Button -->
+        <div class="h-4 w-px bg-white/15 mx-0.5"></div>
+        <button 
+          @click="handleCloseRequest" 
+          class="w-8 h-8 rounded-full flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/10 transition cursor-pointer shrink-0" 
+          title="Close Whiteboard (Esc)">
+          <X class="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+
+    <!-- FLOATING LEFT TOOLBAR COLUMN (Toolbar + Attached Node Editing Capsule) -->
+    <div class="absolute top-16 left-3 flex flex-col items-center z-30 pointer-events-auto">
+      
+      <!-- 1. Left Toolbar Capsule (Air / Glass Pill, rounded-full, overflow-visible) -->
+      <div class="relative w-12 flex flex-col items-center p-1.5 overflow-visible" :class="{ 'opacity-40 pointer-events-none': isCurrentUserMuted }">
+        <!-- Separate background layer with backdrop-filter so flyouts don't have an ancestor backdrop root -->
+        <div class="absolute inset-0 rounded-full bg-[#1b1c22]/70 backdrop-blur-2xl border border-white/20 shadow-[0_8px_32px_rgba(0,0,0,0.25)] pointer-events-none -z-10" style="-webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px);"></div>
+        
+        <!-- Select Tool -->
+        <button 
+          @mouseenter="scheduleCloseFlyout"
+          @click="toggleMode(false); closeFlyoutImmediately(); activeSidebarPanel = ''; currentTool = 'select';" 
+          class="w-9 h-9 flex flex-col items-center justify-center rounded-full mb-1 transition cursor-pointer" 
+          :class="activeFlyoutMenu === null && activeSidebarPanel === '' && currentTool === 'select' && !isDrawingMode ? 'bg-white/20 text-white shadow ring-1 ring-white/30' : 'text-slate-300 hover:text-white hover:bg-white/10'" 
+          title="Select (V)">
+          <MousePointer2 class="w-4 h-4" />
+          <span class="text-[8px] font-medium leading-none mt-0.5">Select</span>
+        </button>
+
+        <!-- Pen Tool (Hover opens toolbox, Direct click toggles freehand draw) -->
+        <div class="relative mb-1" @mouseenter="handleToolMouseEnter('pen')" @mouseleave="handleToolMouseLeave">
+          <button 
+            @click="handlePenDirectClick" 
+            class="w-9 h-9 flex flex-col items-center justify-center rounded-full transition cursor-pointer" 
+            :class="(activeFlyoutMenu === 'pen' || isDrawingMode || currentTool === 'draw') ? 'bg-white/20 text-white shadow ring-1 ring-white/30' : 'text-slate-300 hover:text-white hover:bg-white/10'" 
+            title="Pen & Drawing Tools (Hover to open toolbox, click to draw)">
+            <Pencil class="w-4 h-4 text-white" />
+            <span class="text-[8px] font-medium leading-none mt-0.5">Pen</span>
+          </button>
+
+          <!-- Unified Flyout Menu: Pen & Drawing Tools -->
+          <Transition
+            enter-active-class="transition duration-150 ease-out"
+            enter-from-class="opacity-0 translate-x-1"
+            enter-to-class="opacity-100 translate-x-0"
+            leave-active-class="transition duration-100 ease-in"
+            leave-from-class="opacity-100 translate-x-0"
+            leave-to-class="opacity-0 translate-x-1">
+            <div 
+              v-if="activeFlyoutMenu === 'pen'" 
+              @mouseenter="cancelCloseFlyout" 
+              @mouseleave="scheduleCloseFlyout" 
+              class="absolute left-full ml-2.5 top-0 w-[180px] bg-[#1b1c22]/75 backdrop-blur-2xl border border-white/20 rounded-2xl shadow-[0_16px_40px_rgba(0,0,0,0.35)] p-2.5 flex flex-col gap-2 z-50 text-slate-200 select-none before:absolute before:-left-3 before:top-0 before:w-3 before:h-full"
+              style="-webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px);">
+              <div class="px-1 text-xs font-bold text-slate-300 uppercase tracking-wider">Pen & Tools</div>
             
-            <div v-if="isBrushMenuOpen && isDrawingMode" class="absolute bottom-full mb-3 left-1/2 -translate-x-1/2 bg-white rounded-xl shadow-2xl border border-slate-200 p-3 flex flex-col gap-3 min-w-[140px] z-50 animate-in fade-in zoom-in-95">
-              <div class="flex items-center justify-between gap-1">
-                <button v-for="size in strokeSizes" :key="size.value" @click="strokeWidth = size.value; isBrushMenuOpen = false" class="px-2 py-1 rounded-lg text-[10px] font-bold transition flex-1 cursor-pointer" :class="strokeWidth === size.value ? 'bg-indigo-100 text-indigo-700' : 'text-slate-400 hover:text-slate-600 bg-slate-50'">
-                  {{ size.label }}
+            <button 
+              @click="toggleMode(true); currentTool = 'draw'; closeFlyoutImmediately();" 
+              class="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-medium transition cursor-pointer"
+              :class="(isDrawingMode && currentTool === 'draw') ? 'bg-indigo-600/40 text-indigo-200 border border-indigo-400/50 shadow-sm' : 'text-slate-300 hover:text-white hover:bg-white/10'"
+              title="Freehand Pen">
+              <Pencil class="w-4 h-4 text-white shrink-0" />
+              <span>Pen</span>
+            </button>
+
+            <div class="h-px bg-white/15 my-0.5"></div>
+
+            <div class="px-1 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Lines</div>
+            <div class="grid grid-cols-2 gap-1.5">
+              <button 
+                @click="addShape('line')" 
+                class="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-medium transition cursor-pointer"
+                :class="currentTool === 'line' ? 'bg-indigo-600/40 text-indigo-200 border border-indigo-400/50 shadow-sm' : 'text-slate-300 hover:text-white hover:bg-white/10'"
+                title="Straight Line">
+                <Minus class="w-4 h-4 text-white shrink-0" />
+                <span>Line</span>
+              </button>
+              <button 
+                @click="addShape('arrow')" 
+                class="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-medium transition cursor-pointer"
+                :class="currentTool === 'arrow' ? 'bg-indigo-600/40 text-indigo-200 border border-indigo-400/50 shadow-sm' : 'text-slate-300 hover:text-white hover:bg-white/10'"
+                title="Arrow">
+                <ArrowUpRight class="w-4 h-4 text-white shrink-0" />
+                <span>Arrow</span>
+              </button>
+            </div>
+
+            <div class="h-px bg-white/15 my-0.5"></div>
+
+            <div class="px-1 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Shapes</div>
+            <div class="grid grid-cols-3 gap-1.5 justify-items-center">
+              <button 
+                @click="addShape('rect')" 
+                class="w-full flex flex-col items-center justify-center py-1.5 rounded-lg transition cursor-pointer"
+                :class="currentTool === 'rect' ? 'bg-indigo-600/40 text-indigo-200 border border-indigo-400/50 shadow-sm' : 'text-slate-300 hover:text-white hover:bg-white/10'"
+                title="Rectangle">
+                <Square class="w-4 h-4 text-white" />
+                <span class="text-xs font-medium mt-0.5">Rect</span>
+              </button>
+              <button 
+                @click="addShape('circle')" 
+                class="w-full flex flex-col items-center justify-center py-1.5 rounded-lg transition cursor-pointer"
+                :class="currentTool === 'circle' ? 'bg-indigo-600/40 text-indigo-200 border border-indigo-400/50 shadow-sm' : 'text-slate-300 hover:text-white hover:bg-white/10'"
+                title="Circle">
+                <Circle class="w-4 h-4 text-white" />
+                <span class="text-xs font-medium mt-0.5">Circle</span>
+              </button>
+              <button 
+                @click="addShape('triangle')" 
+                class="w-full flex flex-col items-center justify-center py-1.5 rounded-lg transition cursor-pointer"
+                :class="currentTool === 'triangle' ? 'bg-indigo-600/40 text-indigo-200 border border-indigo-400/50 shadow-sm' : 'text-slate-300 hover:text-white hover:bg-white/10'"
+                title="Triangle">
+                <Triangle class="w-4 h-4 text-white" />
+                <span class="text-xs font-medium mt-0.5">Tri</span>
+              </button>
+            </div>
+
+            <div class="h-px bg-white/15 my-0.5"></div>
+
+            <div class="px-1 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Thickness</div>
+            <div class="flex items-center gap-1.5 px-0.5">
+              <button 
+                v-for="size in strokeSizes" 
+                :key="size.value" 
+                @click="setStrokeThickness(size.value)" 
+                class="flex-1 py-1 rounded-md text-xs font-medium transition border cursor-pointer text-center" 
+                :class="strokeWidth === size.value ? 'bg-indigo-600 text-white border-indigo-400 shadow' : 'bg-white/5 text-slate-300 border-white/10 hover:text-white hover:bg-white/10'" 
+                :title="`${size.label} (${size.value}px)`">
+                {{ size.label }}
+              </button>
+            </div>
+
+            <button 
+              v-if="activeArrow" 
+              @click="enterArrowNodeEditing(activeArrow); closeFlyoutImmediately();" 
+              class="w-full mt-1 py-1.5 rounded-lg bg-indigo-900/60 hover:bg-indigo-900/90 border border-indigo-500/40 text-indigo-200 font-semibold text-xs transition cursor-pointer flex items-center justify-center gap-1.5">
+              <Waypoints class="w-3.5 h-3.5 text-white" /> Edit Nodes
+            </button>
+          </div>
+          </Transition>
+        </div>
+
+        <!-- Text Tool -->
+        <button 
+          @mouseenter="scheduleCloseFlyout"
+          @click="selectTextTool(); closeFlyoutImmediately();" 
+          class="w-9 h-9 flex flex-col items-center justify-center rounded-full mb-1 transition cursor-pointer" 
+          :class="currentTool === 'text' ? 'bg-white/20 text-white shadow ring-1 ring-white/30' : 'text-slate-300 hover:text-white hover:bg-white/10'" 
+          title="Text Tool (T)">
+          <Type class="w-4 h-4" />
+          <span class="text-[8px] font-medium leading-none mt-0.5">Text</span>
+        </button>
+
+        <!-- Notes Tool (Color syncs with selectedStickyColor, Hover to choose color, Click to place note) -->
+        <div class="relative mb-1" @mouseenter="handleToolMouseEnter('note')" @mouseleave="handleToolMouseLeave">
+          <button 
+            @click="handleNoteToolClick" 
+            class="w-9 h-9 flex flex-col items-center justify-center rounded-full transition cursor-pointer" 
+            :class="(activeFlyoutMenu === 'note' || currentTool === 'sticky') ? 'bg-white/20 text-white shadow ring-1 ring-white/30' : 'text-slate-300 hover:text-white hover:bg-white/10'" 
+            title="Sticky Note (Hover to choose color, click to place)">
+            <StickyNote class="w-4 h-4 transition-colors" :style="{ color: selectedStickyColor.bg }" />
+            <span class="text-[8px] font-medium leading-none mt-0.5">Notes</span>
+          </button>
+
+          <!-- Unified Flyout Menu: Note Color -->
+          <Transition
+            enter-active-class="transition duration-150 ease-out"
+            enter-from-class="opacity-0 translate-x-1"
+            enter-to-class="opacity-100 translate-x-0"
+            leave-active-class="transition duration-100 ease-in"
+            leave-from-class="opacity-100 translate-x-0"
+            leave-to-class="opacity-0 translate-x-1">
+            <div 
+              v-if="activeFlyoutMenu === 'note'" 
+              @mouseenter="cancelCloseFlyout" 
+              @mouseleave="scheduleCloseFlyout" 
+              class="absolute left-full ml-2.5 top-0 w-[180px] bg-[#1b1c22]/75 backdrop-blur-2xl border border-white/20 rounded-2xl shadow-[0_16px_40px_rgba(0,0,0,0.35)] p-2.5 flex flex-col gap-2 z-50 text-slate-200 select-none before:absolute before:-left-3 before:top-0 before:w-3 before:h-full"
+              style="-webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px);">
+              <div class="px-1 text-xs font-bold text-slate-300 uppercase tracking-wider">Note Color</div>
+              <div class="flex flex-col gap-1.5">
+                <button 
+                  v-for="color in stickyColors" 
+                  :key="color.name" 
+                  @click.stop="handleSelectNoteColor(color)" 
+                  class="w-full h-7 rounded-lg flex items-center justify-between px-2.5 transition shadow-sm cursor-pointer border" 
+                  :class="selectedStickyColor.name === color.name ? 'ring-2 ring-indigo-400 ring-offset-1 ring-offset-[#2a2c33] border-white' : 'border-white/10 hover:border-white/30 hover:scale-[1.02]'" 
+                  :style="{ backgroundColor: color.bg }">
+                  <span class="flex items-center gap-2">
+                    <span class="w-3 h-3 rounded-full border border-black/10 shrink-0" :style="{ backgroundColor: color.text }"></span>
+                    <span class="text-xs font-semibold" :style="{ color: color.text }">{{ color.name }}</span>
+                  </span>
+                  <Check v-if="selectedStickyColor.name === color.name" class="w-3.5 h-3.5" :style="{ color: color.text }" />
                 </button>
               </div>
-              <div class="h-px bg-slate-100"></div>
-              <div class="flex items-center gap-1 justify-between">
-                <button @click="addShape('rect')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Rectangle"><Square class="w-4 h-4" /></button>
-                <button @click="addShape('circle')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Circle / Ellipse"><Circle class="w-4 h-4" /></button>
-                <button @click="addShape('triangle')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Triangle"><Triangle class="w-4 h-4" /></button>
-                <button @click="addShape('line')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" title="Line"><Minus class="w-4 h-4" /></button>
-                <button @click="addShape('arrow')" class="p-1.5 hover:bg-slate-100 rounded text-slate-500 cursor-pointer" :class="{ 'bg-indigo-100 text-indigo-600': currentTool === 'arrow' }" title="Arrow Line (Arrow Brush)"><ArrowUpRight class="w-4 h-4" /></button>
-              </div>
             </div>
-          </div>
-          
-          <button
-            @click="addText"
-            class="rounded-xl transition cursor-pointer"
-            :class="[
-              currentTool === 'text' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500',
-              isNarrowToolbar ? 'p-1' : 'p-1.5',
-              { 'opacity-40 pointer-events-none cursor-not-allowed': isArrowNodeEditing }
-            ]"
-            :disabled="isArrowNodeEditing"
-            title="Add Text"
-          >
-            <Type class="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+          </Transition>
+        </div>
+
+        <div class="w-6 h-px bg-white/15 my-1"></div>
+
+        <!-- Color Palette (Applies to all shapes, arrows, lines, and groups) -->
+        <div class="relative mb-1" @mouseenter="handleToolMouseEnter('color')" @mouseleave="handleToolMouseLeave">
+          <button @click="handleColorDirectClick" class="w-9 h-9 flex flex-col items-center justify-center rounded-full transition cursor-pointer text-slate-300 hover:text-white hover:bg-white/10" :class="activeFlyoutMenu === 'color' ? 'bg-white/20 text-white shadow ring-1 ring-white/30' : ''" title="Color Palette">
+            <span class="w-4 h-4 rounded-full border border-white/40 shadow-sm block" :style="{ backgroundColor: activeColor }"></span>
+            <span class="text-[8px] font-medium leading-none mt-0.5">Color</span>
           </button>
 
-          <!-- Sticky Note Tool -->
-          <div class="relative">
-            <button
-              @click="addSticky(); isStickyMenuOpen = !isStickyMenuOpen"
-              class="rounded-xl transition flex items-center gap-1 cursor-pointer"
-              :class="[
-                currentTool === 'sticky' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500',
-                isNarrowToolbar ? 'p-1' : 'p-1.5',
-                { 'opacity-40 pointer-events-none cursor-not-allowed': isArrowNodeEditing }
-              ]"
-              :disabled="isArrowNodeEditing"
-              title="Sticky Note"
-            >
-              <StickyNote class="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-            </button>
-            <div
-              v-if="isStickyMenuOpen"
-              class="absolute bottom-full mb-3 left-1/2 -translate-x-1/2 bg-white rounded-xl shadow-2xl border border-slate-200 p-2 flex items-center gap-1.5 z-50 min-w-max animate-in fade-in zoom-in-95"
-            >
-              <button
-                v-for="color in stickyColors"
-                :key="color.name"
-                @click="addSticky(color); isStickyMenuOpen = false"
-                class="w-5 h-5 rounded-full border-2 transition transform hover:scale-110 cursor-pointer"
-                :class="selectedStickyColor.name === color.name ? 'border-indigo-500 scale-110 shadow-sm' : 'border-black/10 hover:border-black/30'"
-                :style="{ backgroundColor: color.bg }"
-                :title="color.name"
-              ></button>
-            </div>
-          </div>
-          
-          <div class="w-px h-4 bg-slate-200 mx-0.5 transition-opacity duration-200" :class="{ 'opacity-15': isHoveringSend }"></div>
-          
-          <!-- Colors: Full swatches when wide, single picker when compact -->
-          <template v-if="isFullColorsVisible">
-            <div class="flex items-center gap-1">
-              <button v-for="color in colors" :key="color" @click="applyColorToSelected(color)" class="w-4 h-4 sm:w-5 sm:h-5 rounded-full border-2 transition transform hover:scale-110 cursor-pointer" :class="activeColor === color ? 'border-indigo-400 scale-110 shadow-sm' : 'border-transparent opacity-80 hover:opacity-100'" :style="{ backgroundColor: color }"></button>
-            </div>
-          </template>
-          <template v-else>
-            <div class="relative">
-              <button
-                @click="isColorPickerOpen = !isColorPickerOpen"
-                class="rounded-xl hover:bg-slate-100 flex items-center gap-0.5 transition cursor-pointer"
-                :class="isNarrowToolbar ? 'p-0.5' : 'p-1'"
-                title="Change Color"
-              >
-                <span class="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full border border-black/20 shadow-xs" :style="{ backgroundColor: activeColor }"></span>
-                <ChevronUp v-if="isColorPickerOpen" class="w-3 h-3 text-slate-400" />
-                <ChevronDown v-else class="w-3 h-3 text-slate-400" />
-              </button>
-              <div
-                v-if="isColorPickerOpen"
-                class="absolute bottom-full mb-3 left-1/2 -translate-x-1/2 bg-white rounded-xl shadow-2xl border border-slate-200 p-2 flex items-center gap-1.5 z-50 min-w-max animate-in fade-in zoom-in-95"
-              >
-                <button
-                  v-for="color in colors"
-                  :key="color"
-                  @click="applyColorToSelected(color); isColorPickerOpen = false"
-                  class="w-5 h-5 rounded-full border-2 transition transform hover:scale-110 cursor-pointer"
-                  :class="activeColor === color ? 'border-indigo-400 scale-110 shadow-sm' : 'border-transparent opacity-80 hover:opacity-100'"
-                  :style="{ backgroundColor: color }"
-                ></button>
+          <!-- Unified Flyout Menu: Color Palette -->
+          <Transition
+            enter-active-class="transition duration-150 ease-out"
+            enter-from-class="opacity-0 translate-x-1"
+            enter-to-class="opacity-100 translate-x-0"
+            leave-active-class="transition duration-100 ease-in"
+            leave-from-class="opacity-100 translate-x-0"
+            leave-to-class="opacity-0 translate-x-1">
+            <div 
+              v-if="activeFlyoutMenu === 'color'" 
+              @mouseenter="cancelCloseFlyout" 
+              @mouseleave="scheduleCloseFlyout" 
+              class="absolute left-full ml-2.5 top-0 w-[180px] bg-[#1b1c22]/75 backdrop-blur-2xl border border-white/20 rounded-2xl shadow-[0_16px_40px_rgba(0,0,0,0.35)] p-2.5 flex flex-col gap-2 z-50 text-slate-200 select-none before:absolute before:-left-3 before:top-0 before:w-3 before:h-full"
+              style="-webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px);">
+              <div class="px-1 text-xs font-bold text-slate-300 uppercase tracking-wider">Color Palette</div>
+              <div class="grid grid-cols-5 gap-2 justify-items-center py-1">
+                <button 
+                  v-for="color in colors" 
+                  :key="color" 
+                  @click.stop="applyColorToSelected(color)" 
+                  class="w-6 h-6 shrink-0 rounded-full border border-white/20 transition-transform hover:scale-115 cursor-pointer shadow-sm flex items-center justify-center" 
+                  :class="activeColor === color ? 'ring-2 ring-indigo-400 ring-offset-2 ring-offset-[#2a2c33] scale-110' : ''" 
+                  :style="{ backgroundColor: color }">
+                  <span v-if="color === '#ffffff'" class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
+                </button>
               </div>
             </div>
-          </template>
-          
-          <div class="w-px h-4 bg-slate-200 mx-0.5 transition-opacity duration-200" :class="{ 'opacity-15': isHoveringSend }"></div>
-          
-          <div class="flex items-center" :class="isNarrowToolbar ? 'gap-0.5' : 'gap-0.5 sm:gap-1'">
-            <input ref="fileInputRef" type="file" accept="image/*" class="hidden" @change="handleImageUpload" />
-            <button @click="fileInputRef?.click()" :disabled="isArrowNodeEditing" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="[isNarrowToolbar ? 'p-1' : 'p-1.5', { 'opacity-40 pointer-events-none cursor-not-allowed': isArrowNodeEditing }]" title="Add Image"><ImageIcon class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
-            <button @click="undo" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="[{'opacity-50 cursor-not-allowed': !canUndo}, isNarrowToolbar ? 'p-1' : 'p-1.5']" title="Undo (Ctrl+Z)" :disabled="!canUndo"><Undo2 class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
-            <button @click="redo" class="rounded-xl hover:bg-slate-100 text-slate-500 transition cursor-pointer" :class="[{'opacity-50 cursor-not-allowed': !canRedo}, isNarrowToolbar ? 'p-1' : 'p-1.5']" title="Redo (Ctrl+Y / Ctrl+Shift+Z)" :disabled="!canRedo"><Redo2 class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
-            <button @click="deleteSelected" class="rounded-xl hover:bg-rose-100 text-rose-500 transition cursor-pointer" :class="isNarrowToolbar ? 'p-1' : 'p-1.5'" title="Delete Selected (Del)"><Trash2 class="w-3.5 h-3.5 sm:w-4 sm:h-4" /></button>
-          </div>
+          </Transition>
         </div>
-        
-        <div class="w-px h-4 bg-slate-200 mx-0.5 transition-opacity duration-200" :class="{ 'opacity-15': isHoveringSend }"></div>
-        
-        <!-- Send Viewport Button: always fully interactive and bright -->
-        <button
-          @click="handleSendToChat"
-          @mouseenter="isHoveringSend = true"
-          @mouseleave="isHoveringSend = false"
-          class="rounded-xl bg-sky-500 hover:bg-sky-600 active:bg-sky-700 text-white transition-all flex items-center gap-1.5 text-xs font-medium cursor-pointer shadow-lg shrink-0 select-none z-30 opacity-100"
-          :class="[
-            isSendTextVisible ? 'px-2.5 py-1 sm:py-1.5' : isNarrowToolbar ? 'p-1' : 'p-1.5 px-2',
-            isHoveringSend ? 'ring-2 ring-sky-300 scale-105' : 'shadow-xs'
-          ]"
-          title="Send visible viewport area to chat"
-        >
-          <Send class="w-3.5 h-3.5" />
-          <span v-if="isSendTextVisible">Send Viewport</span>
+
+        <!-- Duplicate (formerly Copy) -->
+        <button 
+          @mouseenter="scheduleCloseFlyout"
+          @click="duplicateSelected" 
+          :disabled="!hasSelection" 
+          class="w-9 h-9 flex flex-col items-center justify-center rounded-full mb-1 transition cursor-pointer" 
+          :class="hasSelection ? 'text-slate-300 hover:text-white hover:bg-white/10' : 'text-slate-600 opacity-40 cursor-not-allowed'" 
+          title="Duplicate (Ctrl+D)">
+          <Copy class="w-4 h-4" />
+          <span class="text-[8px] font-medium leading-none mt-0.5">Duplicate</span>
         </button>
+
+        <!-- Lock / Unlock -->
+        <button 
+          @mouseenter="scheduleCloseFlyout"
+          @click="toggleLockSelected" 
+          :disabled="!hasSelection" 
+          class="w-9 h-9 flex flex-col items-center justify-center rounded-full mb-1 transition cursor-pointer" 
+          :class="hasSelection ? (isObjectLocked ? 'text-amber-400 bg-amber-950/40' : 'text-slate-300 hover:text-white hover:bg-white/10') : 'text-slate-600 opacity-40 cursor-not-allowed'" 
+          :title="isObjectLocked ? 'Unlock (Ctrl+L)' : 'Lock (Ctrl+L)'">
+          <component :is="isObjectLocked ? Lock : Unlock" class="w-4 h-4" />
+          <span class="text-[8px] font-medium leading-none mt-0.5">{{ isObjectLocked ? 'Unlock' : 'Lock' }}</span>
+        </button>
+
+        <!-- Delete -->
+        <button 
+          @mouseenter="scheduleCloseFlyout"
+          @click="deleteSelected" 
+          :disabled="!hasSelection" 
+          class="w-9 h-9 flex flex-col items-center justify-center rounded-full mb-1 transition cursor-pointer" 
+          :class="hasSelection ? 'text-slate-400 hover:text-rose-400 hover:bg-rose-950/30' : 'text-slate-600 opacity-40 cursor-not-allowed'" 
+          title="Delete (Del)">
+          <Trash2 class="w-4 h-4" />
+          <span class="text-[8px] font-medium leading-none mt-0.5">Delete</span>
+        </button>
+
+        <div class="w-6 h-px bg-white/15 my-1"></div>
+
+        <!-- AI Magic (Hover to open popup, click to toggle) -->
+        <div class="relative mb-1" @mouseenter="handleToolMouseEnter('ai')" @mouseleave="handleToolMouseLeave">
+          <button 
+            @click="activeFlyoutMenu = activeFlyoutMenu === 'ai' ? null : 'ai'" 
+            class="w-9 h-9 flex flex-col items-center justify-center rounded-full transition cursor-pointer border border-transparent" 
+            :class="activeFlyoutMenu === 'ai' ? 'bg-white/20 border-violet-500/50 text-violet-300 shadow-[0_0_15px_rgba(139,92,246,0.15)] ring-1 ring-violet-400/40' : 'text-slate-300 hover:text-violet-300 hover:bg-white/10'" 
+            title="AI Magic">
+            <Loader2 v-if="isGeneratingSvg || isAiRedrawing" class="w-4 h-4 text-violet-400 animate-spin" />
+            <Sparkles v-else class="w-4 h-4 text-violet-400" />
+            <span class="text-[8px] font-medium leading-none mt-0.5">Magic</span>
+          </button>
+
+          <!-- Unified Flyout Menu: AI Magic -->
+          <Transition
+            enter-active-class="transition duration-150 ease-out"
+            enter-from-class="opacity-0 translate-x-1"
+            enter-to-class="opacity-100 translate-x-0"
+            leave-active-class="transition duration-100 ease-in"
+            leave-from-class="opacity-100 translate-x-0"
+            leave-to-class="opacity-0 translate-x-1">
+            <div 
+              v-if="activeFlyoutMenu === 'ai'" 
+              @mouseenter="cancelCloseFlyout" 
+              @mouseleave="scheduleCloseFlyout" 
+              class="absolute left-full ml-2.5 top-0 w-[185px] bg-[#1b1c22]/75 backdrop-blur-2xl border border-white/20 rounded-2xl shadow-[0_16px_40px_rgba(0,0,0,0.35)] p-2.5 flex flex-col gap-2 z-50 text-slate-200 select-none before:absolute before:-left-3 before:top-0 before:w-3 before:h-full"
+              style="-webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px);">
+              <div class="px-1 text-xs font-bold text-violet-300 flex items-center gap-1.5 uppercase tracking-wider">
+                <Sparkles class="w-3.5 h-3.5 text-violet-400" /> AI Magic
+              </div>
+
+              <!-- Tool 1: AI Vector Generation -->
+              <div class="bg-white/[0.04] backdrop-blur-md border border-white/15 rounded-xl p-2.5 shadow-sm flex flex-col gap-2">
+                <div class="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Generate Vector</div>
+                
+                <div v-if="isGeneratingSvg" class="flex items-center justify-between p-1.5 bg-indigo-950/60 border border-indigo-500/40 rounded-lg">
+                   <div class="flex items-center gap-1.5 text-indigo-300 text-[9px] font-bold">
+                     <Loader2 class="w-3 h-3 animate-spin" /> Generating...
+                   </div>
+                   <button @click="abortAiGeneration" class="px-1.5 py-0.5 rounded bg-rose-600 hover:bg-rose-500 text-white text-[8px] font-bold transition cursor-pointer">Stop</button>
+                </div>
+                <form v-else @submit.prevent="generateAIObject(); closeFlyoutImmediately();" class="flex flex-col gap-1.5">
+                  <textarea 
+                    v-model="aiPrompt" 
+                    :disabled="isArrowNodeEditing" 
+                    rows="2" 
+                    placeholder="e.g. Robot, diagram..." 
+                    class="w-full bg-white/10 hover:bg-white/15 focus:bg-white/20 border border-white/25 focus:border-violet-400/80 rounded-xl p-2.5 text-xs text-white placeholder-slate-400/80 focus:outline-none focus:ring-1 focus:ring-violet-400/50 shadow-[inset_0_1px_3px_rgba(0,0,0,0.2)] backdrop-blur-md transition resize-none custom-scrollbar disabled:opacity-50 leading-relaxed">
+                  </textarea>
+                  <button type="submit" :disabled="!aiPrompt.trim() || isArrowNodeEditing" class="w-full py-1.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white rounded-lg text-xs font-bold shadow-sm transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 cursor-pointer">
+                    <Sparkles class="w-3 h-3" /> Generate
+                  </button>
+                </form>
+              </div>
+
+              <!-- Tool 2: AI Sketch Redraw -->
+              <div class="bg-white/[0.04] backdrop-blur-md border border-white/15 rounded-xl p-2.5 shadow-sm flex flex-col gap-2">
+                <div class="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Sketch to Vector</div>
+                
+                <div v-if="isAiRedrawing" class="flex items-center justify-between p-1.5 bg-fuchsia-950/60 border border-fuchsia-500/40 rounded-lg">
+                   <div class="flex items-center gap-1.5 text-fuchsia-300 text-[9px] font-bold">
+                     <Loader2 class="w-3 h-3 animate-spin" /> Redrawing...
+                   </div>
+                </div>
+                <div v-else-if="!hasSelection" class="p-2 border border-dashed border-white/15 rounded-lg text-center">
+                  <span class="text-xs text-slate-400">Select sketch first</span>
+                </div>
+                <button v-else @click="triggerAiRedrawSketch(); closeFlyoutImmediately();" :disabled="isArrowNodeEditing" class="w-full py-1.5 bg-gradient-to-r from-fuchsia-600 to-violet-600 hover:from-fuchsia-500 hover:to-violet-500 text-white rounded-lg text-xs font-bold shadow-sm transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 border border-fuchsia-400/30 cursor-pointer">
+                  <Sparkles class="w-3 h-3 text-yellow-300" /> Redraw
+                </button>
+              </div>
+            </div>
+          </Transition>
+        </div>
+
+        <!-- Upload -->
+        <input ref="fileInputRef" type="file" accept="image/*" class="hidden" @change="handleImageUpload" />
+        <button @mouseenter="scheduleCloseFlyout" @click="fileInputRef?.click()" :disabled="isArrowNodeEditing" class="w-9 h-9 flex flex-col items-center justify-center rounded-full transition cursor-pointer" :class="{'mb-1': activeArrow || isArrowNodeEditing, 'mb-0': !activeArrow && !isArrowNodeEditing, 'opacity-40 cursor-not-allowed': isArrowNodeEditing, 'text-slate-300 hover:text-white hover:bg-white/10': !isArrowNodeEditing}" title="Upload Image">
+          <UploadCloud class="w-4 h-4" />
+          <span class="text-[8px] font-medium leading-none mt-0.5">Upload</span>
+        </button>
+
+        <!-- If arrow selected alone: Pop out purple Node Edit button! -->
+        <template v-if="activeArrow && !isArrowNodeEditing">
+          <div class="w-6 h-px bg-white/20 my-1"></div>
+          <button 
+            @mouseenter="scheduleCloseFlyout"
+            @click="enterArrowNodeEditing(activeArrow)" 
+            class="w-9 h-9 flex flex-col items-center justify-center rounded-full bg-violet-600 hover:bg-violet-500 text-white transition cursor-pointer shadow-[0_0_14px_rgba(139,92,246,0.55)] ring-2 ring-violet-400/60 animate-pulse hover:animate-none" 
+            title="Edit Curve Nodes (節點編輯)">
+            <Waypoints class="w-4 h-4 text-white" />
+            <span class="text-[7px] font-bold leading-none mt-0.5">Nodes</span>
+          </button>
+        </template>
+
+        <!-- Node Editing Controls (Merged directly into Left Toolbar Capsule) -->
+        <template v-if="isArrowNodeEditing">
+          <div class="w-6 h-px bg-white/20 my-1"></div>
+          <div class="w-8 h-8 rounded-full bg-violet-600/70 flex items-center justify-center text-white mb-1 shadow-inner ring-1 ring-violet-400" title="Node Editing Mode">
+            <Waypoints class="w-4 h-4 text-white" />
+          </div>
+          <button v-if="selectedNodeIndices.size > 0" @click="deleteSelectedArrowNodes" class="w-8 h-8 rounded-full bg-rose-600/80 hover:bg-rose-500 text-white flex items-center justify-center transition cursor-pointer shadow-sm mb-1" :title="`Delete ${selectedNodeIndices.size} selected nodes`">
+            <Trash2 class="w-4 h-4" />
+          </button>
+          <button @click="exitArrowNodeEditing" class="w-9 h-9 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex flex-col items-center justify-center transition cursor-pointer shadow-md ring-2 ring-emerald-400/50" title="Exit Node Editing (Done / 完成)">
+            <Check class="w-4 h-4" />
+            <span class="text-[7px] font-bold leading-none mt-0.5">Done</span>
+          </button>
+        </template>
       </div>
     </div>
 
     <!-- Right-Click Context Menu -->
-    <div
-      v-if="contextMenu.visible"
-      :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
-      class="fixed z-50 min-w-[210px] bg-slate-900/95 backdrop-blur-md border border-slate-700/80 rounded-2xl shadow-2xl p-1.5 text-xs text-slate-200 select-none animate-in fade-in zoom-in-95 duration-100"
-      @click.stop
-    >
-      <!-- When selection is active -->
+    <div v-if="contextMenu.visible" :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }" class="fixed z-[100] min-w-[220px] bg-[#202124] border border-slate-700 rounded-xl shadow-2xl py-2 text-sm text-slate-200 font-medium select-none animate-in fade-in zoom-in-95 duration-100" @click.stop>
       <template v-if="hasSelection">
-        <!-- AI Redraw Sketch to SVG (single direct action) -->
-        <button
-          @click="triggerAiRedrawSketch(); contextMenu.visible = false"
-          :disabled="isAiRedrawing"
-          class="w-full flex items-center justify-between px-3 py-1.5 rounded-xl bg-violet-950/40 hover:bg-violet-900/60 text-violet-200 hover:text-white transition cursor-pointer mb-1 border border-violet-500/20"
-        >
-          <span class="flex items-center gap-2">
-            <Loader2 v-if="isAiRedrawing" class="w-3.5 h-3.5 animate-spin text-fuchsia-400" />
-            <Sparkles v-else class="w-3.5 h-3.5 text-fuchsia-400" />
-            <span class="font-medium">AI Redraw (SVG)</span>
-          </span>
-          <span class="text-[10px] text-fuchsia-400/80 font-mono">AI</span>
+        <button @click="triggerAiRedrawSketch(); contextMenu.visible = false" :disabled="isAiRedrawing" class="w-full flex items-center justify-between px-4 py-2 hover:bg-fuchsia-950/50 hover:text-fuchsia-300 transition cursor-pointer mb-1 text-fuchsia-400">
+          <span class="flex items-center gap-2"><Sparkles class="w-4 h-4" /> AI Redraw (SVG)</span>
         </button>
-
-        <div class="my-1 border-t border-slate-800"></div>
-
-        <button
-          @click="copySelection(); contextMenu.visible = false"
-          class="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
-        >
-          <span class="flex items-center gap-2"><Copy class="w-3.5 h-3.5 text-sky-400" /> Copy</span>
-          <span class="text-[10px] text-slate-400 font-mono">Ctrl+C</span>
+        <div class="my-1 border-t border-slate-700/80"></div>
+        <button @click="copySelection(); contextMenu.visible = false" class="w-full flex items-center justify-between px-4 py-2 hover:bg-slate-800 transition cursor-pointer">
+          <span class="flex items-center gap-2"><Copy class="w-4 h-4 text-slate-400" /> Copy</span><span class="text-[10px] text-slate-400 font-mono">Ctrl+C</span>
         </button>
-        <button
-          @click="cutSelection(); contextMenu.visible = false"
-          class="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
-        >
-          <span class="flex items-center gap-2"><Scissors class="w-3.5 h-3.5 text-amber-400" /> Cut</span>
-          <span class="text-[10px] text-slate-400 font-mono">Ctrl+X</span>
-        </button>
-        <button
-          @click="toggleLockSelected(); contextMenu.visible = false"
-          class="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
-        >
-          <span class="flex items-center gap-2">
-            <component :is="isObjectLocked ? Lock : Unlock" class="w-3.5 h-3.5" :class="isObjectLocked ? 'text-amber-400' : 'text-slate-400'" />
-            {{ isObjectLocked ? 'Unlock Object' : 'Lock Object' }}
-          </span>
-          <span class="text-[10px] text-slate-400 font-mono">Ctrl+L</span>
+        <button @click="cutSelection(); contextMenu.visible = false" class="w-full flex items-center justify-between px-4 py-2 hover:bg-slate-800 transition cursor-pointer">
+          <span class="flex items-center gap-2"><Scissors class="w-4 h-4 text-slate-400" /> Cut</span><span class="text-[10px] text-slate-400 font-mono">Ctrl+X</span>
         </button>
       </template>
-
-      <!-- Paste (always visible by default) -->
-      <button
-        @click="handlePasteAction(contextMenuScenePoint || undefined); contextMenu.visible = false"
-        class="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
-      >
-        <span class="flex items-center gap-2"><ClipboardPaste class="w-3.5 h-3.5 text-emerald-400" /> Paste Here</span>
-        <span class="text-[10px] text-slate-400 font-mono">Ctrl+V</span>
+      <button @click="handlePasteAction(contextMenuScenePoint || undefined); contextMenu.visible = false" class="w-full flex items-center justify-between px-4 py-2 hover:bg-slate-800 transition cursor-pointer">
+        <span class="flex items-center gap-2"><ClipboardPaste class="w-4 h-4 text-slate-400" /> Paste</span><span class="text-[10px] text-slate-400 font-mono">Ctrl+V</span>
       </button>
-
-      <div v-if="hasSelection" class="my-1 border-t border-slate-800"></div>
-
-      <!-- Layer Ordering -->
       <template v-if="hasSelection">
-        <button
-          @click="bringToFront(); contextMenu.visible = false"
-          class="w-full flex items-center gap-2 px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
-        >
-          <BringToFront class="w-3.5 h-3.5 text-indigo-400" /> Bring to Front
-        </button>
-        <button
-          @click="bringForward(); contextMenu.visible = false"
-          class="w-full flex items-center gap-2 px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
-        >
-          <MoveUp class="w-3.5 h-3.5 text-indigo-400" /> Move Forward
-        </button>
-        <button
-          @click="sendBackwards(); contextMenu.visible = false"
-          class="w-full flex items-center gap-2 px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
-        >
-          <MoveDown class="w-3.5 h-3.5 text-indigo-400" /> Move Backward
-        </button>
-        <button
-          @click="sendToBack(); contextMenu.visible = false"
-          class="w-full flex items-center gap-2 px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
-        >
-          <SendToBack class="w-3.5 h-3.5 text-indigo-400" /> Send to Back
-        </button>
-
-        <div class="my-1 border-t border-slate-800"></div>
-
-        <!-- Group / Ungroup -->
-        <button
-          v-if="isMultiSelection"
-          @click="groupObjects(); contextMenu.visible = false"
-          class="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
-        >
-          <span class="flex items-center gap-2"><Group class="w-3.5 h-3.5 text-violet-400" /> Group Objects</span>
-          <span class="text-[10px] text-slate-400 font-mono">Ctrl+G</span>
-        </button>
-        <button
-          v-if="isGroupSelected"
-          @click="ungroupObjects(); contextMenu.visible = false"
-          class="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
-        >
-          <span class="flex items-center gap-2"><Ungroup class="w-3.5 h-3.5 text-violet-400" /> Ungroup</span>
-          <span class="text-[10px] text-slate-400 font-mono">Ctrl+Shift+G</span>
-        </button>
-
-        <div class="my-1 border-t border-slate-800"></div>
-
-        <!-- Delete -->
-        <button
-          @click="deleteSelected(); contextMenu.visible = false"
-          class="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-rose-950/50 text-rose-400 hover:text-rose-300 transition cursor-pointer"
-        >
-          <span class="flex items-center gap-2"><Trash2 class="w-3.5 h-3.5" /> Delete</span>
-          <span class="text-[10px] text-rose-400/70 font-mono">Del</span>
-        </button>
+        <div class="my-1 border-t border-slate-700/80"></div>
+        <button @click="bringToFront(); contextMenu.visible = false" class="w-full flex items-center gap-2 px-4 py-2 hover:bg-slate-800 transition cursor-pointer"><BringToFront class="w-4 h-4 text-slate-400" /> Bring to Front</button>
+        <button @click="sendToBack(); contextMenu.visible = false" class="w-full flex items-center gap-2 px-4 py-2 hover:bg-slate-800 transition cursor-pointer"><SendToBack class="w-4 h-4 text-slate-400" /> Send to Back</button>
+        <div class="my-1 border-t border-slate-700/80"></div>
+        <button v-if="isMultiSelection" @click="groupObjects(); contextMenu.visible = false" class="w-full flex items-center justify-between px-4 py-2 hover:bg-slate-800 transition cursor-pointer"><span class="flex items-center gap-2"><Group class="w-4 h-4 text-slate-400" /> Group</span><span class="text-[10px] text-slate-400 font-mono">Ctrl+G</span></button>
+        <button v-if="isGroupSelected" @click="ungroupObjects(); contextMenu.visible = false" class="w-full flex items-center justify-between px-4 py-2 hover:bg-slate-800 transition cursor-pointer"><span class="flex items-center gap-2"><Ungroup class="w-4 h-4 text-slate-400" /> Ungroup</span><span class="text-[10px] text-slate-400 font-mono">Ctrl+Shift+G</span></button>
+        <button @click="deleteSelected(); contextMenu.visible = false" class="w-full flex items-center justify-between px-4 py-2 hover:bg-rose-950/50 text-rose-400 transition cursor-pointer"><span class="flex items-center gap-2"><Trash2 class="w-4 h-4" /> Delete</span><span class="text-[10px] text-rose-400/70 font-mono">Del</span></button>
       </template>
-
-      <!-- If no object selected -->
-      <template v-if="!hasSelection">
-        <button
-          @click="selectAll(); contextMenu.visible = false"
-          class="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-slate-800 text-slate-200 hover:text-white transition cursor-pointer"
-        >
-          <span class="flex items-center gap-2"><MousePointer2 class="w-3.5 h-3.5 text-slate-400" /> Select All</span>
-          <span class="text-[10px] text-slate-400 font-mono">Ctrl+A</span>
-        </button>
-      </template>
-    </div>
-
-    <!-- Shortcuts Cheatsheet Modal -->
-    <div
-      v-if="showShortcutsModal"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
-      @click.self="showShortcutsModal = false"
-    >
-      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-lg w-full shadow-2xl text-slate-100 space-y-4 animate-in fade-in zoom-in-95">
-        <div class="flex items-center justify-between pb-2 border-b border-slate-800">
-          <div class="flex items-center gap-2 font-bold text-sm text-slate-200">
-            <HelpCircle class="w-4 h-4 text-indigo-400" />
-            <span>Whiteboard Keyboard Shortcuts</span>
-          </div>
-          <button @click="showShortcutsModal = false" class="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer">
-            <X class="w-4 h-4" />
-          </button>
-        </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-          <!-- Quick Save -->
-          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <span class="text-slate-300 font-medium">Quick Save</span>
-            <div class="flex items-center gap-1">
-              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Ctrl</kbd>
-              <span class="text-slate-500 text-[10px]">+</span>
-              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">S</kbd>
-            </div>
-          </div>
-          <!-- Lock / Unlock -->
-          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <span class="text-slate-300 font-medium">Lock / Unlock</span>
-            <div class="flex items-center gap-1">
-              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Ctrl</kbd>
-              <span class="text-slate-500 text-[10px]">+</span>
-              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">L</kbd>
-            </div>
-          </div>
-          <!-- Group Objects -->
-          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <span class="text-slate-300 font-medium">Group</span>
-            <div class="flex items-center gap-1">
-              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Ctrl</kbd>
-              <span class="text-slate-500 text-[10px]">+</span>
-              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">G</kbd>
-            </div>
-          </div>
-          <!-- Ungroup -->
-          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <span class="text-slate-300 font-medium">Ungroup</span>
-            <div class="flex items-center gap-1">
-              <kbd class="px-1.5 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Ctrl</kbd>
-              <span class="text-slate-500 text-[10px]">+</span>
-              <kbd class="px-1.5 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Shift</kbd>
-              <span class="text-slate-500 text-[10px]">+</span>
-              <kbd class="px-1.5 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">G</kbd>
-            </div>
-          </div>
-          <!-- Copy / Paste -->
-          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <span class="text-slate-300 font-medium">Copy</span>
-            <div class="flex items-center gap-1">
-              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Ctrl</kbd>
-              <span class="text-slate-500 text-[10px]">+</span>
-              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">C</kbd>
-            </div>
-          </div>
-          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <span class="text-slate-300 font-medium">Paste</span>
-            <div class="flex items-center gap-1">
-              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Ctrl</kbd>
-              <span class="text-slate-500 text-[10px]">+</span>
-              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">V</kbd>
-            </div>
-          </div>
-          <!-- Cut / Delete -->
-          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <span class="text-slate-300 font-medium">Cut</span>
-            <div class="flex items-center gap-1">
-              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Ctrl</kbd>
-              <span class="text-slate-500 text-[10px]">+</span>
-              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">X</kbd>
-            </div>
-          </div>
-          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <span class="text-slate-300 font-medium">Delete</span>
-            <div class="flex items-center gap-1">
-              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-rose-300 font-semibold shadow-xs">Del</kbd>
-              <span class="text-slate-500 text-[10px]">/</span>
-              <kbd class="px-1.5 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-rose-300 font-semibold shadow-xs">⌫</kbd>
-            </div>
-          </div>
-          <!-- Undo -->
-          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <span class="text-slate-300 font-medium">Undo</span>
-            <div class="flex items-center gap-1">
-              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Ctrl</kbd>
-              <span class="text-slate-500 text-[10px]">+</span>
-              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Z</kbd>
-            </div>
-          </div>
-          <!-- Redo -->
-          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <span class="text-slate-300 font-medium">Redo</span>
-            <div class="flex items-center gap-1">
-              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Ctrl</kbd>
-              <span class="text-slate-500 text-[10px]">+</span>
-              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Y</kbd>
-            </div>
-          </div>
-          <!-- Select All -->
-          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <span class="text-slate-300 font-medium">Select All</span>
-            <div class="flex items-center gap-1">
-              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Ctrl</kbd>
-              <span class="text-slate-500 text-[10px]">+</span>
-              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">A</kbd>
-            </div>
-          </div>
-          <!-- Zoom -->
-          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <span class="text-slate-300 font-medium">Zoom Canvas</span>
-            <div class="flex items-center gap-1">
-              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Ctrl</kbd>
-              <span class="text-slate-500 text-[10px]">+</span>
-              <kbd class="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Wheel</kbd>
-            </div>
-          </div>
-          <!-- Pan -->
-          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
-            <span class="text-slate-300 font-medium">Pan Canvas</span>
-            <div class="flex items-center gap-1">
-              <kbd class="px-1.5 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Alt+Wheel</kbd>
-              <span class="text-slate-500 text-[10px]">/</span>
-              <kbd class="px-1.5 py-0.5 rounded-md bg-slate-800 border border-slate-700 border-b-2 border-b-slate-600 font-mono text-[10px] text-indigo-300 font-semibold shadow-xs">Mid Drag</kbd>
-            </div>
-          </div>
-          <div class="col-span-1 sm:col-span-2 p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80 text-[11px] text-slate-300 flex items-center gap-2">
-            <span class="text-indigo-400 font-bold shrink-0">💡 Note:</span>
-            <span><strong class="text-indigo-300">Group Isolation:</strong> Double-click any group or use <kbd class="px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded-md font-mono text-[10px] text-slate-200">Ctrl+Drag</kbd> to edit individual elements. Press <kbd class="px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded-md font-mono text-[10px] text-slate-200">ESC</kbd> or click "Exit" to return.</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Unsaved Changes Confirmation Modal (English) -->
-    <div
-      v-if="showCloseConfirmModal"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
-      @click.self="handleCancelCloseModal"
-    >
-      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-sm w-full shadow-2xl text-slate-100 space-y-4 animate-in fade-in zoom-in-95">
-        <div class="flex items-center gap-3">
-          <div class="p-2.5 rounded-xl bg-amber-500/20 text-amber-400">
-            <AlertTriangle class="w-6 h-6" />
-          </div>
-          <div>
-            <h3 class="font-bold text-base text-slate-100">Save Whiteboard?</h3>
-            <p class="text-xs text-slate-400">You have unsaved changes on your sketchpad.</p>
-          </div>
-        </div>
-        <p class="text-xs text-slate-300 leading-relaxed">
-          Would you like to save this whiteboard as an asset in the Room Album and post it to chat, or discard your modifications?
-        </p>
-        <div class="flex items-center justify-end gap-2 pt-2">
-          <button
-            @click="handleCancelCloseModal"
-            class="px-3 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-slate-800 border border-slate-700 transition cursor-pointer"
-          >
-            Cancel
-          </button>
-          <button
-            @click="handleConfirmDiscard"
-            class="px-3 py-2 rounded-xl text-xs font-semibold text-rose-400 hover:bg-rose-950/40 border border-rose-500/30 transition cursor-pointer"
-          >
-            Discard Changes
-          </button>
-          <button
-            @click="handleConfirmSave"
-            class="px-4 py-2 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-md transition cursor-pointer"
-          >
-            Save to Assets
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Modal: Confirm Make Private -->
-    <div
-      v-if="showPrivateConfirmModal"
-      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs"
-      @click.self="showPrivateConfirmModal = false"
-    >
-      <div class="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-5 space-y-4 animate-in fade-in zoom-in-95">
-        <div class="flex items-center gap-3 text-rose-400">
-          <div class="p-2 rounded-xl bg-rose-500/10 border border-rose-500/20">
-            <Lock class="w-5 h-5 text-rose-400" />
-          </div>
-          <h3 class="text-sm font-bold text-white">Make Board Private?</h3>
-        </div>
-        <p class="text-xs text-slate-300 leading-relaxed">
-          Converting to private will immediately <strong>exit other room members</strong> from this whiteboard. They will no longer be able to view or edit it.
-        </p>
-        <div class="flex items-center justify-end gap-2 pt-2">
-          <button
-            @click="showPrivateConfirmModal = false"
-            class="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition cursor-pointer"
-          >
-            Cancel
-          </button>
-          <button
-            @click="handleConfirmMakePrivate"
-            :disabled="isConvertingToPrivate"
-            class="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold transition cursor-pointer flex items-center gap-1.5 shadow"
-          >
-            <Loader2 v-if="isConvertingToPrivate" class="w-3.5 h-3.5 animate-spin" />
-            <span>Confirm & Make Private</span>
-          </button>
-        </div>
-      </div>
     </div>
   </div>
 </template>

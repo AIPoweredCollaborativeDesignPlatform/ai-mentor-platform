@@ -10,6 +10,7 @@ export interface Participant {
   isOnline?: boolean;
   lastSeen?: number;
   joinedAt?: number;
+  activeWhiteboardId?: string | null;
 }
 
 export type SensitivityLevel = 'Strict' | 'Conservative' | 'Exploratory';
@@ -50,6 +51,8 @@ export interface MessageItem {
   senderAvatar: string;
   type: 'text' | 'file' | 'ai_asset' | 'whiteboard_state';
   content: string;
+  actionOptions?: string[];
+  pollVotes?: Record<string, { uid: string; name: string; avatar: string; option: string }>;
   timestamp: number;
   status?: 'sending' | 'delivered' | 'failed';
   replyTo?: {

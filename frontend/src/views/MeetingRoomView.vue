@@ -35,7 +35,10 @@ import {
   ChevronDown,
   ChevronUp,
   EyeOff,
-  Settings
+  Settings,
+  CheckCircle2,
+  Plus,
+  ShieldCheck
 } from 'lucide-vue-next';
 
 import ParametricViewer3D from '../components/ParametricViewer3D.vue';
@@ -47,6 +50,7 @@ import HostControlDrawer from '../components/HostControlDrawer.vue';
 import AlertModal from '../components/AlertModal.vue';
 import PdfViewerModal from '../components/PdfViewerModal.vue';
 import CollaborativeWhiteboard from '../components/CollaborativeWhiteboard.vue';
+import * as fabric from 'fabric';
 import { currentLocale, setLocale, t, type SupportedLocale } from '../i18n';
 
 const route = useRoute();
@@ -74,6 +78,8 @@ watch(isWhiteboardOpen, (isOpen) => {
 
 const isLocalWhiteboardPublisher = ref(false);
 const isActiveWhiteboardPrivate = ref(false);
+const activeWhiteboardIsPublic = ref(false);
+const activeWhiteboardCreatorUid = ref<string | null>(null);
 
 const startWhiteboardResize = (e: MouseEvent) => {
   e.preventDefault();
@@ -116,21 +122,40 @@ watch(() => roomStore.currentRoom?.whiteboardActive, (isActive, wasActive) => {
       }
     }
   }
-  if (wasActive === true && isActive === false) {
+  if (isActive === false) {
     if (isLocalWhiteboardPublisher.value) {
       // Keep publisher's whiteboard open seamlessly as a Personal Board!
       isLocalWhiteboardPublisher.value = false;
       isActiveWhiteboardPrivate.value = true;
+      activeWhiteboardIsPublic.value = false;
       return;
     }
-    if (isJoiningSharedBoard.value && isWhiteboardOpen.value) {
+    // Any participant viewing or joining a shared board MUST be kicked out to prevent parallel whiteboards!
+    if (isWhiteboardOpen.value && !isActiveWhiteboardPrivate.value) {
       isWhiteboardOpen.value = false;
       isJoiningSharedBoard.value = false;
       isActiveWhiteboardPrivate.value = false;
+      activeWhiteboardIsPublic.value = false;
+      activeWhiteboardCreatorUid.value = null;
       activeWhiteboardAssetId.value = null;
       currentWhiteboardJson.value = undefined;
       roomStore.pushToast('Collaboration Ended', 'The shared whiteboard session has ended.', 'info');
     }
+  }
+});
+
+// Keep active whiteboard privacy status in sync if message updates in Firestore (e.g. made private or published)
+watch(() => {
+  if (!activeWhiteboardAssetId.value) return null;
+  const asset = roomStore.currentRoom?.messages.find(m => m.id === activeWhiteboardAssetId.value);
+  return asset?.metadata?.isPrivate;
+}, (isPrivate) => {
+  if (isPrivate === true) {
+    isActiveWhiteboardPrivate.value = true;
+    activeWhiteboardIsPublic.value = false;
+  } else if (isPrivate === false) {
+    isActiveWhiteboardPrivate.value = false;
+    activeWhiteboardIsPublic.value = true;
   }
 });
 
@@ -146,13 +171,14 @@ const isWhiteboardSharedSession = computed(() => {
     }
   }
 
-  // 3. Otherwise, check if room has an active whiteboard and this user is joined/publishing
+  // 3. Otherwise, check if room has an active whiteboard broadcast and this user is joined/publishing
   if (!roomStore.currentRoom?.whiteboardActive) return false;
   if (isLocalWhiteboardPublisher.value) return true;
   if (isJoiningSharedBoard.value) return true;
   if (activeWhiteboardAssetId.value) {
+    const hostUid = roomStore.currentRoom?.whiteboardHostUid;
     const asset = roomStore.currentRoom?.messages.find(m => m.id === activeWhiteboardAssetId.value);
-    if (asset && !asset.metadata?.isPrivate && (asset.metadata?.wasPublished || asset.metadata?.isSharedPost)) {
+    if (asset && !asset.metadata?.isPrivate && (!hostUid || asset.metadata?.creatorUid === hostUid || asset.senderUid === hostUid)) {
       return true;
     }
   }
@@ -169,6 +195,8 @@ const handleOpenNewWhiteboard = async () => {
   }
   // Always open a clean, new blank whiteboard (entering collab is done via chat message or assets library)
   isActiveWhiteboardPrivate.value = true;
+  activeWhiteboardIsPublic.value = false;
+  activeWhiteboardCreatorUid.value = authStore.uid;
   isJoiningSharedBoard.value = false;
   isLocalWhiteboardPublisher.value = false;
   activeWhiteboardAssetId.value = null;
@@ -178,6 +206,10 @@ const handleOpenNewWhiteboard = async () => {
 };
 
 const handleJoinSharedWhiteboard = async () => {
+  if (!roomStore.currentRoom?.whiteboardActive) {
+    roomStore.pushToast('Session Ended', 'The shared whiteboard session is no longer active.', 'warning');
+    return;
+  }
   if (isWhiteboardOpen.value && whiteboardRef.value?.hasUnsavedChanges) {
     try {
       await whiteboardRef.value?.triggerAutoSaveAsAsset();
@@ -186,6 +218,8 @@ const handleJoinSharedWhiteboard = async () => {
     }
   }
   isActiveWhiteboardPrivate.value = false;
+  activeWhiteboardIsPublic.value = true;
+  activeWhiteboardCreatorUid.value = roomStore.currentRoom?.whiteboardHostUid || null;
   isJoiningSharedBoard.value = true;
   const hostUid = roomStore.currentRoom?.whiteboardHostUid;
   const existingShared = roomStore.currentRoom?.messages.find(m => 
@@ -237,17 +271,25 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string, expli
   const existingMsg = targetAssetId ? roomStore.currentRoom?.messages.find(m => m.id === targetAssetId) : null;
 
   // Strict privacy determination:
-  // If explicitly marked as private, or if the asset in database was private, or if isPrivateParam is true:
   let isPrivate = true;
-  if (isActiveWhiteboardPrivate.value) {
-    isPrivate = true;
-  } else if (existingMsg?.metadata?.isPrivate) {
-    isPrivate = true;
-  } else if (isPrivateParam !== undefined) {
+  if (isPrivateParam !== undefined) {
     isPrivate = isPrivateParam;
+  } else if (isActiveWhiteboardPrivate.value) {
+    isPrivate = true;
+  } else if (activeWhiteboardIsPublic.value) {
+    isPrivate = false;
+  } else if (existingMsg?.metadata?.isPrivate === true) {
+    isPrivate = true;
+  } else if (existingMsg?.metadata?.isPrivate === false && (existingMsg.metadata?.wasPublished || existingMsg.metadata?.isSharedPost)) {
+    isPrivate = false;
   } else {
     isPrivate = !isWhiteboardSharedSession.value;
   }
+  
+  // Sync the local state back so MeetingRoomView knows about the change!
+  isActiveWhiteboardPrivate.value = isPrivate;
+  activeWhiteboardIsPublic.value = !isPrivate;
+
 
   // A session is shared ONLY if it is not private AND isWhiteboardSharedSession is true
   const isShared = !isPrivate && isWhiteboardSharedSession.value;
@@ -271,22 +313,26 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string, expli
   } else {
     // Ownership verification for personal/private mode: if editing another user's asset, fork into a new personal asset
     const isOwner = existingMsg ? (existingMsg.metadata?.creatorUid === authStore.uid || existingMsg.senderUid === authStore.uid) : true;
-    if (targetAssetId && !isOwner) {
+    if (isPrivate && targetAssetId && !isOwner) {
       targetAssetId = null;
       activeWhiteboardAssetId.value = null;
     }
   }
 
-  const wasPublished = isShared ? true : false;
+  const wasPublished = Boolean(existingMsg?.metadata?.wasPublished || !isPrivate);
+  const isSharedPost = Boolean(existingMsg?.metadata?.isSharedPost || !isPrivate);
+  const creatorUid = existingMsg?.metadata?.creatorUid || (isShared ? hostUid : authStore.uid);
+  const creatorName = existingMsg?.metadata?.creatorName || (isShared ? hostName : (authStore.displayName || 'Participant'));
+  const creatorAvatar = existingMsg?.metadata?.creatorAvatar || (isShared ? (roomStore.currentRoom?.participants[hostUid]?.avatar || '🎨') : (authStore.avatar || '🎨'));
 
   const meta = {
     whiteboardJson: json,
     isPrivate,
-    isSharedPost: isShared,
+    isSharedPost,
     wasPublished,
-    creatorUid: isShared ? hostUid : authStore.uid,
-    creatorName: isShared ? hostName : (authStore.displayName || 'Participant'),
-    creatorAvatar: isShared ? (roomStore.currentRoom?.participants[hostUid]?.avatar || '🎨') : (authStore.avatar || '🎨'),
+    creatorUid,
+    creatorName,
+    creatorAvatar,
     isAutoSave: true
   };
 
@@ -295,7 +341,7 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string, expli
     await roomStore.updateCustomMessage(targetAssetId, {
       fileData: {
         type: 'image',
-        url: isPrivate ? '' : previewUrl, // Private whiteboards never keep/update thumbnail
+        url: previewUrl,
         name: 'whiteboard.jpg',
         size: 0
       },
@@ -303,15 +349,20 @@ const handleSaveWhiteboardState = async (json: string, previewUrl: string, expli
     });
   } else {
     // Create new whiteboard asset under appropriate owner
+    const existingContent = existingMsg?.content;
+    const content = isPrivate
+      ? (wasPublished && existingContent && !existingContent.includes('Personal Draft') ? existingContent : 'Personal Draft')
+      : `${hostName} shared a collaborative whiteboard`;
+
     const newId = await roomStore.sendCustomMessage({
       senderUid: authStore.uid,
       senderName: authStore.displayName || 'Participant',
       senderAvatar: authStore.avatar || '🎨',
       type: 'whiteboard_state',
-      content: isPrivate ? 'Personal Draft' : `${hostName} shared a collaborative whiteboard`,
+      content,
       fileData: {
         type: 'image',
-        url: isPrivate ? '' : previewUrl, // Private whiteboards never keep/update thumbnail
+        url: previewUrl,
         name: 'whiteboard.jpg',
         size: 0
       },
@@ -346,13 +397,10 @@ const openWhiteboardState = async (msg: any) => {
   if (msg.type !== 'whiteboard_state') return;
   const isHost = roomStore.currentRoom?.whiteboardHostUid === authStore.uid || msg.metadata?.creatorUid === authStore.uid || msg.senderUid === authStore.uid;
   if (msg.metadata?.isPrivate && !isHost) {
-    roomStore.pushToast('Access Restricted', '此畫布已設為不公開（僅限建立者開啟）', 'warning');
+    roomStore.pushToast('Access Restricted', 'This whiteboard is set to private by its creator.', 'warning');
     return;
   }
-  if (roomStore.currentRoom?.whiteboardActive && (msg.metadata?.isSharedPost || !msg.metadata?.isPrivate)) {
-    await handleJoinSharedWhiteboard();
-    return;
-  }
+
   // If already viewing this exact asset on open whiteboard and canvas is not blank, no need to reload
   const isCanvasBlank = whiteboardRef.value ? (whiteboardRef.value as any).isBlankCanvas?.() : false;
   if (isWhiteboardOpen.value && activeWhiteboardAssetId.value === msg.id && !isJoiningSharedBoard.value && !isCanvasBlank) {
@@ -366,18 +414,55 @@ const openWhiteboardState = async (msg: any) => {
       console.warn('Auto save before opening asset error:', e);
     }
   }
-  // Open locally with asset JSON; DO NOT involuntarily trigger broadcast session!
+
   const isPrivateAsset = !!msg.metadata?.isPrivate;
+  const isPublicAsset = !isPrivateAsset && (!!msg.metadata?.wasPublished || !!msg.metadata?.isSharedPost || !msg.metadata?.isPrivate);
+
   isActiveWhiteboardPrivate.value = isPrivateAsset;
+  activeWhiteboardIsPublic.value = isPublicAsset;
+  activeWhiteboardCreatorUid.value = msg.metadata?.creatorUid || msg.senderUid || null;
+
   if (isPrivateAsset) {
     isLocalWhiteboardPublisher.value = false;
     isJoiningSharedBoard.value = false;
+  } else {
+    // Check if room currently has an active broadcast AND this board is the active shared board:
+    const hostUid = roomStore.currentRoom?.whiteboardHostUid;
+    const isThisBoardLive = roomStore.currentRoom?.whiteboardActive && (
+      (!hostUid || msg.metadata?.creatorUid === hostUid || msg.senderUid === hostUid)
+    );
+    if (isThisBoardLive) {
+      isJoiningSharedBoard.value = true;
+      if (hostUid === authStore.uid) {
+        isLocalWhiteboardPublisher.value = true;
+      }
+    } else {
+      isJoiningSharedBoard.value = false;
+      isLocalWhiteboardPublisher.value = false;
+    }
   }
+
   activeWhiteboardAssetId.value = msg.id;
   currentWhiteboardJson.value = msg.metadata?.whiteboardJson || null;
   whiteboardSessionKey.value = 'wb_asset_' + msg.id + '_' + Date.now();
   isWhiteboardOpen.value = true;
 };
+
+// Get participants currently active/viewing a specific whiteboard asset
+const getActiveWhiteboardUsers = (assetId: string) => {
+  if (!roomStore.currentRoom?.participants) return [];
+  const parts = Object.values(roomStore.currentRoom.participants);
+  return parts.filter(p => p.status === 'approved' && p.isOnline !== false && p.activeWhiteboardId === assetId);
+};
+
+// Sync active public whiteboard presence to participant profile
+watch([isWhiteboardOpen, activeWhiteboardAssetId, isActiveWhiteboardPrivate], ([isOpen, assetId, isPrivate]) => {
+  if (isOpen && assetId && !isPrivate) {
+    roomStore.updateParticipantWhiteboard(assetId);
+  } else {
+    roomStore.updateParticipantWhiteboard(null);
+  }
+}, { immediate: true });
 
 const activeAssetTab = ref<'public' | 'personal'>('public');
 
@@ -443,6 +528,203 @@ const albumItems = computed(() => {
   return visibleAlbumItems.value;
 });
 
+// Client-side thumbnail cache for whiteboard drafts
+const draftThumbnails = ref<Record<string, string>>({});
+const isProcessingDraft = new Set<string>();
+
+const renderWhiteboardThumbnail = async (jsonStr: string): Promise<string> => {
+  if (!jsonStr) return '';
+  try {
+    const rawData = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
+    const width = 400;
+    const height = 250;
+
+    const canvasEl = document.createElement('canvas');
+    canvasEl.width = width;
+    canvasEl.height = height;
+
+    const staticCanvas = new fabric.StaticCanvas(canvasEl, {
+      width,
+      height,
+      renderOnAddRemove: false
+    });
+
+    await staticCanvas.loadFromJSON(rawData);
+    staticCanvas.getObjects().forEach((o: any) => o.setCoords());
+
+    const objs = staticCanvas.getObjects();
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+    objs.forEach((o: any) => {
+      if (o.isSystemObject || o.id === 'workspace-bg') return;
+      const br = o.getBoundingRect ? o.getBoundingRect(true) : {
+        left: o.left || 0,
+        top: o.top || 0,
+        width: (o.width || 0) * (o.scaleX || 1),
+        height: (o.height || 0) * (o.scaleY || 1)
+      };
+      if (br.left < minX) minX = br.left;
+      if (br.top < minY) minY = br.top;
+      if (br.left + br.width > maxX) maxX = br.left + br.width;
+      if (br.top + br.height > maxY) maxY = br.top + br.height;
+    });
+
+    const hasContent = minX !== Infinity && maxX > minX && maxY > minY;
+    let vpt: number[] = [1, 0, 0, 1, 0, 0];
+
+    if (hasContent) {
+      const pad = 60;
+      const bw = Math.max(100, (maxX - minX) + pad * 2);
+      const bh = Math.max(100, (maxY - minY) + pad * 2);
+      const scale = Math.min(width / bw, height / bh);
+
+      const cx = (minX + maxX) / 2;
+      const cy = (minY + maxY) / 2;
+
+      vpt = [
+        scale, 0,
+        0, scale,
+        (width / 2) - cx * scale,
+        (height / 2) - cy * scale
+      ];
+    } else {
+      // Clean center of standard workspace (3200 x 2000)
+      const scale = Math.min(width / 3200, height / 2000);
+      vpt = [
+        scale, 0,
+        0, scale,
+        (width / 2) - 1600 * scale,
+        (height / 2) - 1000 * scale
+      ];
+    }
+
+    (staticCanvas as any).setViewportTransform(vpt);
+    staticCanvas.renderAll();
+
+    const outCanvas = document.createElement('canvas');
+    outCanvas.width = width;
+    outCanvas.height = height;
+    const ctx = outCanvas.getContext('2d');
+    if (!ctx) {
+      staticCanvas.dispose();
+      return '';
+    }
+
+    // Always fill light background so JPEG never turns black
+    ctx.fillStyle = '#f8fafc';
+    ctx.fillRect(0, 0, width, height);
+
+    if (!hasContent) {
+      ctx.strokeStyle = '#cbd5e1';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      ctx.strokeRect(20, 20, width - 40, height - 40);
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = 'bold 13px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Blank Canvas', width / 2, height / 2 + 5);
+    } else {
+      ctx.drawImage(canvasEl, 0, 0);
+    }
+
+    const resultDataUrl = outCanvas.toDataURL('image/jpeg', 0.85);
+    staticCanvas.dispose();
+    return resultDataUrl;
+  } catch (e) {
+    console.warn('renderWhiteboardThumbnail error:', e);
+    const outCanvas = document.createElement('canvas');
+    outCanvas.width = 400;
+    outCanvas.height = 250;
+    const ctx = outCanvas.getContext('2d');
+    if (ctx) {
+      ctx.fillStyle = '#f8fafc';
+      ctx.fillRect(0, 0, 400, 250);
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = 'bold 13px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Whiteboard Draft', 200, 130);
+      return outCanvas.toDataURL('image/jpeg', 0.85);
+    }
+    return '';
+  }
+};
+
+const getAssetThumbnail = (msg: any) => {
+  // If memory cache has generated thumbnail, use it
+  if (draftThumbnails.value[msg.id]) return draftThumbnails.value[msg.id];
+
+  // If fileData.url exists and is NOT a tiny black data URL artifact (< 3500 bytes)
+  if (msg.fileData?.url) {
+    if (msg.fileData.url.startsWith('data:image/') && msg.fileData.url.length < 3500) {
+      return ''; // Trigger automatic regeneration
+    }
+    return msg.fileData.url;
+  }
+  return '';
+};
+
+const generateDraftThumbnail = async (msg: any) => {
+  if (!msg || !msg.id || isProcessingDraft.has(msg.id)) return;
+  const jsonStr = msg.metadata?.whiteboardJson;
+  if (!jsonStr) return;
+
+  isProcessingDraft.add(msg.id);
+  try {
+    const dataUrl = await renderWhiteboardThumbnail(jsonStr);
+    if (dataUrl) {
+      draftThumbnails.value[msg.id] = dataUrl;
+
+      // Persist good thumbnail to Firestore
+      if (msg.metadata?.creatorUid === authStore.uid || msg.senderUid === authStore.uid) {
+        await roomStore.updateCustomMessage(msg.id, {
+          fileData: {
+            name: 'whiteboard.jpg',
+            size: 0,
+            type: 'image',
+            url: dataUrl
+          }
+        });
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to generate draft thumbnail for msg', msg.id, e);
+  } finally {
+    isProcessingDraft.delete(msg.id);
+  }
+};
+
+watch(
+  () => [currentTabAllItems.value, isAssetsDrawerOpen.value, activeAssetTab.value],
+  ([items, isOpen]) => {
+    if (!isOpen || !items || !Array.isArray(items)) return;
+    items.forEach((m) => {
+      if (m.type === 'whiteboard_state' && m.metadata?.whiteboardJson) {
+        if (!draftThumbnails.value[m.id] || !getAssetThumbnail(m)) {
+          generateDraftThumbnail(m);
+        }
+      }
+    });
+  },
+  { immediate: true, deep: true }
+);
+
+// Eagerly pre-generate thumbnails for all personal drafts in the background so opening the drawer is instantaneous
+watch(
+  () => allPersonalAlbumItems.value,
+  (items) => {
+    if (!items || !Array.isArray(items)) return;
+    items.forEach((m) => {
+      if (m.type === 'whiteboard_state' && m.metadata?.whiteboardJson) {
+        if (!draftThumbnails.value[m.id] || !getAssetThumbnail(m)) {
+          generateDraftThumbnail(m);
+        }
+      }
+    });
+  },
+  { immediate: true, deep: true }
+);
+
 const pageEnteredAt = ref(Date.now());
 
 // Filtered messages for the main chat stream:
@@ -483,9 +765,12 @@ const visibleChatMessages = computed(() => {
       if (m.metadata?.assetId && roomStore.currentRoom?.messages.some(other => other.id === m.metadata.assetId)) {
         return false;
       }
-      // Routine personal drafts that were never published should never clutter the chat stream
-      if (!m.metadata?.wasPublished && (m.content?.includes('Personal Draft') || m.metadata?.isPrivate)) {
-        return false;
+      // If a whiteboard is private, ONLY show it in chat if it was originally published/shared before.
+      // Routine personal drafts and unshared personal boards MUST NEVER appear in the team chat stream!
+      if (m.metadata?.isPrivate) {
+        if (!m.metadata?.wasPublished) {
+          return false;
+        }
       }
     }
 
@@ -686,9 +971,71 @@ watch(inputMessage, () => {
   adjustTextarea();
 });
 
+const isMentionMenuOpen = ref(false);
+const mentionQuery = ref('');
+const mentionMenuIndex = ref(0);
+const mentionMatchStart = ref(-1);
+
+const checkMentionTrigger = () => {
+  const el = textareaRef.value;
+  if (!el) return;
+  const cursorPos = el.selectionStart;
+  const textBefore = el.value.slice(0, cursorPos);
+  const match = textBefore.match(/(?:^|\s)@([^\s@]*)$/);
+  if (match) {
+    mentionQuery.value = match[1].toLowerCase();
+    mentionMatchStart.value = textBefore.lastIndexOf('@' + match[1]);
+    isMentionMenuOpen.value = true;
+    mentionMenuIndex.value = 0;
+  } else {
+    isMentionMenuOpen.value = false;
+    mentionMatchStart.value = -1;
+  }
+};
+
+const mentionCandidates = computed(() => {
+  const q = mentionQuery.value;
+  const list: Array<{ id: string; name: string; avatar: string; handle: string; isAi: boolean; subtitle?: string }> = [
+    { id: 'mentor', name: 'AI Mentor', avatar: '✨', handle: '@mentor', isAi: true, subtitle: 'Ask AI Design Mentor' }
+  ];
+  if (roomStore.currentRoom?.participants) {
+    for (const [uid, p] of Object.entries(roomStore.currentRoom.participants)) {
+      if (p.status === 'approved') {
+        list.push({
+          id: uid,
+          name: p.displayName || 'Participant',
+          avatar: p.avatar || '👤',
+          handle: `@${p.displayName || 'Participant'}`,
+          isAi: false,
+          subtitle: p.isHost ? 'Host' : 'Member'
+        });
+      }
+    }
+  }
+  if (!q) return list;
+  return list.filter((c) => c.name.toLowerCase().includes(q) || c.handle.toLowerCase().includes(q));
+});
+
+const selectMentionCandidate = (candidate: { handle: string }) => {
+  const el = textareaRef.value;
+  if (!el || mentionMatchStart.value === -1) return;
+  const before = inputMessage.value.slice(0, mentionMatchStart.value);
+  const after = inputMessage.value.slice(el.selectionStart);
+  const insertText = `${candidate.handle} `;
+  inputMessage.value = before + insertText + after;
+  isMentionMenuOpen.value = false;
+  nextTick(() => {
+    el.focus();
+    const newPos = before.length + insertText.length;
+    el.setSelectionRange(newPos, newPos);
+    adjustTextarea();
+  });
+};
+
 const onInputTextarea = () => {
   adjustTextarea();
   roomStore.setMyTyping(true);
+  checkMentionTrigger();
 };
 
 const formatTypingText = (users: { displayName: string }[]) => {
@@ -748,6 +1095,24 @@ const getDisplayMessageContent = (msg: MessageItem) => {
   return msg.content;
 };
 
+// Date Separator for Chat Stream (When crossing calendar days)
+const shouldShowDateDivider = (msg: MessageItem, index: number) => {
+  if (index === 0) return true;
+  const prevMsg = visibleChatMessages.value[index - 1];
+  if (!prevMsg) return true;
+  const currDate = new Date(msg.timestamp).toDateString();
+  const prevDate = new Date(prevMsg.timestamp).toDateString();
+  return currDate !== prevDate;
+};
+
+const formatMessageDate = (timestamp: number) => {
+  const d = new Date(timestamp);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}/${month}/${day}`;
+};
+
 // Web Audio Notification Chime & Mute State
 const isSoundMuted = ref(localStorage.getItem('ai_mentor_sound_muted') === 'true');
 const toggleSoundMute = () => {
@@ -788,12 +1153,30 @@ const playNotificationSound = () => {
   }
 };
 
+const isMentioningMe = (msg: MessageItem) => {
+  if (!msg || !msg.content || !authStore.displayName) return false;
+  const contentLower = msg.content.toLowerCase();
+  const nameLower = authStore.displayName.toLowerCase().trim();
+  const uidLower = authStore.uid.toLowerCase();
+  return (
+    contentLower.includes(`@${nameLower}`) ||
+    contentLower.includes(`@${uidLower}`)
+  );
+};
+
 let lastKnownMsgCount = 0;
 watch(() => roomStore.currentRoom?.messages.length, (newCount) => {
   if (newCount && lastKnownMsgCount && newCount > lastKnownMsgCount) {
     const latest = roomStore.currentRoom?.messages[roomStore.currentRoom.messages.length - 1];
     if (latest && latest.senderUid !== authStore.uid && latest.senderUid !== 'system') {
       playNotificationSound();
+      if (isMentioningMe(latest)) {
+        roomStore.pushToast(
+          latest.senderUid === 'ai_mentor' ? '✨ AI Mentor tagged you' : `💬 ${latest.senderName} tagged you`,
+          latest.content.slice(0, 100),
+          'info'
+        );
+      }
     }
   }
   lastKnownMsgCount = newCount || 0;
@@ -843,10 +1226,65 @@ const handleSend = async () => {
 
 const handleTextareaKeyDown = (e: KeyboardEvent) => {
   if (e.isComposing || (e as any).keyCode === 229) return;
+
+  if (isMentionMenuOpen.value && mentionCandidates.value.length > 0) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      mentionMenuIndex.value = (mentionMenuIndex.value + 1) % mentionCandidates.value.length;
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      mentionMenuIndex.value = (mentionMenuIndex.value - 1 + mentionCandidates.value.length) % mentionCandidates.value.length;
+      return;
+    }
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault();
+      selectMentionCandidate(mentionCandidates.value[mentionMenuIndex.value]);
+      return;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      isMentionMenuOpen.value = false;
+      return;
+    }
+  }
+
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     handleSend();
   }
+};
+
+const activeCustomPollInput = ref<Record<string, boolean>>({});
+const customPollText = ref<Record<string, string>>({});
+
+const getOptionVoters = (msg: MessageItem, option: string) => {
+  if (!msg.pollVotes) return [];
+  return Object.values(msg.pollVotes).filter((v) => v && v.option === option);
+};
+
+const isMyVote = (msg: MessageItem, option: string) => {
+  if (!msg.pollVotes || !authStore.uid) return false;
+  return msg.pollVotes[authStore.uid]?.option === option;
+};
+
+const handleVoteOption = async (messageId: string, option: string) => {
+  if (isMeetingClosed.value) return;
+  const me = roomStore.currentRoom?.participants?.[authStore.uid];
+  if (me?.isMuted) return;
+  await roomStore.votePollOption(messageId, option);
+};
+
+const handleAddCustomOption = async (messageId: string) => {
+  if (isMeetingClosed.value) return;
+  const me = roomStore.currentRoom?.participants?.[authStore.uid];
+  if (me?.isMuted) return;
+  const text = customPollText.value[messageId]?.trim();
+  if (!text) return;
+  await roomStore.addCustomPollOption(messageId, text);
+  customPollText.value[messageId] = '';
+  activeCustomPollInput.value[messageId] = false;
 };
 
 const handleSendQuickThumbsUp = async () => {
@@ -859,33 +1297,59 @@ const handleSendQuickThumbsUp = async () => {
   });
 };
 
+const handleSendOption = async (option: string) => {
+  if (isMeetingClosed.value) return;
+  const me = roomStore.currentRoom?.participants?.[authStore.uid];
+  if (me?.isMuted) return;
+  await roomStore.sendMessage(option);
+  nextTick(() => {
+    scrollToBottom();
+  });
+};
+
 const handleRefineModel = async (msg: MessageItem, customPrompt?: string) => {
   if (isMeetingClosed.value) return;
   await roomStore.refineMeshyModel(msg, customPrompt);
 };
 
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
+
 const formatMessageText = (text: string) => {
   if (!text) return '';
-  // Escape HTML first to prevent XSS
-  const escaped = text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-    
-  // Markdown links: [title](url) -> <a href="url" target="_blank" class="text-sky-400 hover:underline">title</a>
-  let html = escaped.replace(
-    /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, 
-    '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-sky-400 hover:underline pointer-events-auto" data-link="true">$1</a>'
-  );
-  
-  // Bare URLs: https://... -> <a href="...">https://...</a> (but avoid double replacing inside already replaced tags)
-  // Simplified generic approach for bare URLs:
-  html = html.replace(
-    /(^|\s)(https?:\/\/[^\s<]+)/g,
-    '$1<a href="$2" target="_blank" rel="noopener noreferrer" class="text-sky-400 hover:underline pointer-events-auto" data-link="true">$2</a>'
-  );
 
-  return html;
+  // Check if text has markdown blocks: headers, lists, codeblocks, blockquotes, tables, or multiple paragraphs
+  const hasMarkdownBlocks = /^(?:#{1,6}\s|```|[-*+]\s|\d+\.\s|>\s|\|)/m.test(text) || text.includes('\n\n');
+
+  let rawHtml: string;
+  if (!hasMarkdownBlocks) {
+    // Standard chat message or single paragraph:
+    // parse inline to retain links, bold, italics, inline code, @mentions
+    // and map single newlines to <br> without wrapping in <p>...</p>\n
+    rawHtml = marked.parseInline(text, { breaks: true, gfm: true }) as string;
+  } else {
+    // Multi-paragraph or structured markdown (e.g. AI mentor structured output, tables, code blocks):
+    rawHtml = (marked.parse(text, { breaks: true, gfm: true }) as string).trim();
+  }
+
+  // Make links open in new tab and styled correctly
+  const styledHtml = rawHtml.replace(/<a href="/g, '<a target="_blank" rel="noopener noreferrer" class="text-sky-400 hover:underline font-semibold pointer-events-auto" data-link="true" href="');
+  return DOMPurify.sanitize(styledHtml, { ADD_ATTR: ['target', 'data-link'] });
+};
+
+const reactionEmojiList = ['👍', '❤️', '😂', '😮', '😢', '🎉'];
+
+const getEmojiVoters = (msg: MessageItem, emoji: string): string[] => {
+  return msg.reactions?.[emoji] || [];
+};
+
+const isEmojiSelectedByMe = (msg: MessageItem, emoji: string): boolean => {
+  return (msg.reactions?.[emoji] || []).includes(authStore.uid);
+};
+
+const hasActiveReactions = (msg: MessageItem): boolean => {
+  if (!msg.reactions) return false;
+  return Object.values(msg.reactions).some(uids => Array.isArray(uids) && uids.length > 0);
 };
 
 const handleMessageClick = (e: MouseEvent) => {
@@ -1115,7 +1579,9 @@ watch(() => roomStore.myStatus, (newStatus) => {
 
 watch(() => roomStore.currentRoom?.messages?.length, (newLen, oldLen) => {
   if (newLen && newLen !== oldLen) {
-    scrollToBottom();
+    if (!showScrollFab.value) {
+      scrollToBottom();
+    }
   }
 }, { immediate: true });
 
@@ -1222,6 +1688,7 @@ onUnmounted(() => {
   document.removeEventListener('visibilitychange', handleVisibilityChange);
   clearTimeout(scrollbarTimer);
   clearTimeout(accessCheckTimer);
+  roomStore.updateParticipantWhiteboard(null);
   roomStore.stopListening();
 });
 </script>
@@ -1408,11 +1875,20 @@ onUnmounted(() => {
     >
       <div class="max-w-5xl mx-auto w-full p-3 sm:p-5 space-y-3">
         <div
-          v-for="msg in visibleChatMessages"
+          v-for="(msg, idx) in visibleChatMessages"
           :key="msg.id"
           :id="'msg_' + msg.id"
           class="transition-colors duration-500 rounded-xl"
         >
+          <!-- Date Separator when crossing calendar days -->
+          <div v-if="shouldShowDateDivider(msg, idx)" class="flex items-center justify-center my-3.5 gap-3 select-none">
+            <div class="h-px bg-slate-700/40 flex-1 max-w-[120px] sm:max-w-[160px]"></div>
+            <span class="text-[11px] font-mono font-medium text-slate-500 tracking-wider">
+              {{ formatMessageDate(msg.timestamp) }}
+            </span>
+            <div class="h-px bg-slate-700/40 flex-1 max-w-[120px] sm:max-w-[160px]"></div>
+          </div>
+
         <!-- Centered Subtle System Status Pill -->
         <div v-if="msg.senderUid === 'system'" class="flex justify-center my-2.5">
           <div class="px-3.5 py-1 rounded-full bg-slate-900/70 border border-slate-800/80 text-[11px] text-slate-400 font-medium shadow-xs text-center max-w-md">
@@ -1442,49 +1918,9 @@ onUnmounted(() => {
             class="flex flex-col min-w-0 group/msg relative"
             :class="[
               msg.senderUid === authStore.uid ? 'items-end' : 'items-start',
-              msg.type === 'ai_asset' ? 'w-full max-w-2xl sm:max-w-3xl' : 'max-w-2xl'
+              msg.type === 'ai_asset' ? 'w-full max-w-full sm:max-w-3xl' : 'max-w-[85%] sm:max-w-[75%] md:max-w-[70%]'
             ]"
           >
-            <!-- Unified Hover Action Bar (Emojis, Reply, Copy) -->
-            <div
-              v-if="!isMeetingClosed && msg.senderUid !== 'system'"
-              class="absolute -top-4 z-30 hidden group-hover/msg:flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-slate-900/95 border border-slate-700/90 shadow-xl backdrop-blur-sm select-none transition-all duration-150 animate-in fade-in zoom-in-90"
-              :class="msg.senderUid === authStore.uid ? 'right-0' : 'left-0'"
-            >
-              <!-- 6 Emojis -->
-              <button
-                v-for="emoji in ['👍', '❤️', '😂', '😮', '😢', '🎉']"
-                :key="emoji"
-                @click.stop="roomStore.toggleMessageReaction(msg.id, emoji)"
-                class="w-6 h-6 rounded-full hover:bg-slate-700/80 flex items-center justify-center text-xs sm:text-sm transition transform hover:scale-130 active:scale-95 cursor-pointer"
-                :class="{ 'bg-sky-500/25 ring-1 ring-sky-400/50 scale-110': msg.reactions?.[emoji]?.includes(authStore.uid) }"
-                :title="`React ${emoji}`"
-              >
-                {{ emoji }}
-              </button>
-
-              <!-- Subtle Divider -->
-              <div class="h-3.5 w-px bg-slate-700/80 mx-0.5"></div>
-
-              <!-- Reply Button -->
-              <button
-                @click.stop="replyToMessage(msg)"
-                class="p-1 rounded-full hover:bg-slate-700/80 text-slate-400 hover:text-sky-400 transition cursor-pointer"
-                title="Reply"
-              >
-                <CornerUpLeft class="w-3.5 h-3.5" />
-              </button>
-
-              <!-- Copy Button -->
-              <button
-                @click.stop="copyMessageContent(msg)"
-                class="p-1 rounded-full hover:bg-slate-700/80 text-slate-400 hover:text-emerald-400 transition cursor-pointer"
-                title="Copy message"
-              >
-                <Copy class="w-3.5 h-3.5" />
-              </button>
-            </div>
-
             <!-- Sender info (Self: [11:25] [You], Others: [Name] [11:25]) -->
             <div class="flex items-center gap-1.5 mb-0.5 text-[11px] text-slate-400">
               <template v-if="msg.senderUid === authStore.uid">
@@ -1545,15 +1981,21 @@ onUnmounted(() => {
             <!-- Bubble Content (for text, documents, assets, or media with captions) -->
             <div
               v-else
-              class="px-3.5 py-2 rounded-2xl text-sm leading-relaxed shadow whitespace-pre-wrap break-words min-w-0"
+              class="px-3.5 py-2 rounded-2xl text-sm leading-relaxed shadow break-words min-w-0 w-fit max-w-full transition-all duration-200"
               :class="[
                 msg.senderUid === authStore.uid ? 'bg-sky-600 text-white rounded-tr-xs' : '',
                 msg.senderUid !== authStore.uid && msg.senderUid !== 'ai_mentor' ? 'bg-slate-900 border border-slate-800 text-slate-200 rounded-tl-xs' : '',
-                msg.senderUid === 'ai_mentor' ? 'bg-slate-900 border border-sky-500/40 text-sky-100 rounded-tl-xs shadow-sky-950/30' : '',
+                msg.senderUid === 'ai_mentor' ? 'bg-sky-950/50 border border-sky-500/40 text-sky-100 rounded-tl-xs shadow-sky-950/30' : '',
+                isMentioningMe(msg) ? 'ring-2 ring-amber-400/90 bg-amber-950/35 border-amber-500/60 shadow-amber-900/20 shadow-lg' : '',
                 msg.replyTo ? 'min-w-[180px] sm:min-w-[200px]' : '',
-                msg.type === 'ai_asset' ? 'w-full' : 'max-w-[88%] sm:max-w-[80%]'
+                msg.type === 'ai_asset' ? 'w-full' : ''
               ]"
             >
+              <!-- Mentioned You Badge -->
+              <div v-if="isMentioningMe(msg)" class="inline-flex items-center gap-1 mb-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 select-none">
+                <span>@ You were mentioned</span>
+              </div>
+
               <!-- Quote reply preview if this message replies to someone -->
               <div
                 v-if="msg.replyTo"
@@ -1566,7 +2008,8 @@ onUnmounted(() => {
               <!-- Message Text (Collapsible if > 260 chars) -->
               <div
                 v-if="msg.content && (!msg.type.startsWith('file') || (!msg.content.startsWith('Shared image:') && !msg.content.startsWith('Shared video:') && !msg.content.startsWith('Shared document:')))"
-                class="whitespace-pre-wrap break-words prose prose-sm prose-invert max-w-none text-slate-200"
+                class="break-words max-w-none message-content"
+                :class="msg.senderUid === authStore.uid ? 'text-white' : 'text-slate-200'"
               >
                 <div
                   v-html="formatMessageText(getDisplayMessageContent(msg))"
@@ -1580,6 +2023,116 @@ onUnmounted(() => {
                   <component :is="isMessageExpanded(msg.id) ? ChevronUp : ChevronDown" class="w-3 h-3" />
                   {{ isMessageExpanded(msg.id) ? 'Show less' : 'Show more' }}
                 </button>
+              </div>
+              
+              <!-- AI Action Options / Interactive Polls & Voting Card -->
+              <div
+                v-if="msg.actionOptions && msg.actionOptions.length > 0"
+                class="mt-3 p-2.5 rounded-xl bg-slate-950/70 border border-sky-500/25 shadow-inner"
+              >
+                <div class="flex items-center justify-between gap-2 mb-2 px-1 text-[11px] font-semibold text-sky-300">
+                  <div class="flex items-center gap-1.5">
+                    <Sparkles class="w-3.5 h-3.5 text-sky-400" />
+                    <span>Interactive Poll & Decisions</span>
+                  </div>
+                  <span class="text-[10px] text-slate-400 font-normal">
+                    {{ Object.keys(msg.pollVotes || {}).length }} voted
+                  </span>
+                </div>
+
+                <div class="space-y-1.5">
+                  <div
+                    v-for="(option, idx) in msg.actionOptions"
+                    :key="idx"
+                    @click="handleVoteOption(msg.id, option)"
+                    class="group relative flex items-center justify-between p-2 rounded-lg border transition-all cursor-pointer text-xs"
+                    :class="[
+                      isMyVote(msg, option)
+                        ? 'bg-sky-500/20 border-sky-400 text-sky-100 ring-1 ring-sky-400/50 shadow-sm'
+                        : 'bg-slate-900/90 border-slate-800 hover:border-slate-700 text-slate-300 hover:bg-slate-800/80'
+                    ]"
+                  >
+                    <!-- Left: Choice text and radio indicator -->
+                    <div class="flex items-center gap-2 min-w-0 pr-2">
+                      <div
+                        class="w-4 h-4 rounded-full border flex items-center justify-center shrink-0 transition"
+                        :class="isMyVote(msg, option) ? 'border-sky-400 bg-sky-500 text-slate-950' : 'border-slate-600 bg-slate-800'"
+                      >
+                        <CheckCircle2 v-if="isMyVote(msg, option)" class="w-3 h-3 text-slate-950 stroke-[3]" />
+                      </div>
+                      <span class="truncate font-medium">{{ option }}</span>
+                    </div>
+
+                    <!-- Right: Voter Avatar Badges & Count -->
+                    <div class="flex items-center gap-1.5 shrink-0">
+                      <div
+                        v-if="getOptionVoters(msg, option).length > 0"
+                        class="flex -space-x-1.5 overflow-hidden py-0.5"
+                      >
+                        <span
+                          v-for="voter in getOptionVoters(msg, option).slice(0, 4)"
+                          :key="voter.uid"
+                          :title="voter.name"
+                          class="inline-flex items-center justify-center w-5 h-5 rounded-full ring-1 ring-slate-900 bg-slate-800 text-[10px] select-none shadow-xs"
+                        >
+                          {{ voter.avatar || '👤' }}
+                        </span>
+                        <span
+                          v-if="getOptionVoters(msg, option).length > 4"
+                          class="inline-flex items-center justify-center w-5 h-5 rounded-full ring-1 ring-slate-900 bg-slate-700 text-[9px] font-bold text-slate-200"
+                        >
+                          +{{ getOptionVoters(msg, option).length - 4 }}
+                        </span>
+                      </div>
+                      <span
+                        v-if="getOptionVoters(msg, option).length > 0"
+                        class="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
+                        :class="isMyVote(msg, option) ? 'bg-sky-500/30 text-sky-200' : 'bg-slate-800 text-slate-400'"
+                      >
+                        {{ getOptionVoters(msg, option).length }}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Custom Option Input / Toggle -->
+                <div class="mt-2 pt-2 border-t border-slate-800/80">
+                  <div v-if="!activeCustomPollInput[msg.id]">
+                    <button
+                      type="button"
+                      @click="activeCustomPollInput[msg.id] = true"
+                      class="inline-flex items-center gap-1 text-[11px] text-sky-400 hover:text-sky-300 font-medium cursor-pointer transition px-1 py-0.5"
+                    >
+                      <Plus class="w-3.5 h-3.5" />
+                      <span>Add custom idea / vote option</span>
+                    </button>
+                  </div>
+                  <div v-else class="flex items-center gap-1.5 mt-1">
+                    <input
+                      v-model="customPollText[msg.id]"
+                      @keydown.enter.prevent="handleAddCustomOption(msg.id)"
+                      type="text"
+                      placeholder="Type your own option idea..."
+                      class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500"
+                      autofocus
+                    />
+                    <button
+                      type="button"
+                      @click="handleAddCustomOption(msg.id)"
+                      :disabled="!customPollText[msg.id]?.trim()"
+                      class="px-2.5 py-1 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition shadow"
+                    >
+                      Add & Vote
+                    </button>
+                    <button
+                      type="button"
+                      @click="activeCustomPollInput[msg.id] = false"
+                      class="p-1 text-slate-400 hover:text-slate-200 rounded-lg hover:bg-slate-800 cursor-pointer"
+                    >
+                      <X class="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
               </div>
 
               <!-- Embedded File / Media Attachment -->
@@ -1686,13 +2239,11 @@ onUnmounted(() => {
               <!-- Embedded Whiteboard Share Card -->
               <div
                 v-else-if="msg.type === 'whiteboard_state'"
-                class="mt-2 rounded-xl overflow-hidden shadow-lg relative border transition max-w-[210px] sm:max-w-[250px] bg-slate-900 select-none cursor-pointer group"
+                class="mt-2 rounded-xl overflow-hidden shadow-lg relative border transition max-w-[210px] sm:max-w-[250px] select-none cursor-pointer group"
                 :class="[
-                  msg.metadata?.isPrivate
-                    ? 'border-slate-800 bg-slate-950/80 hover:border-slate-700'
-                    : (roomStore.currentRoom?.whiteboardActive && (msg.metadata?.isSharedPost || !msg.metadata?.isPrivate))
-                      ? 'border-emerald-500/40 hover:border-emerald-400 shadow-emerald-950/20'
-                      : 'border-indigo-500/40 hover:border-indigo-500'
+                  (msg.metadata?.isPrivate || !roomStore.currentRoom?.whiteboardActive)
+                    ? 'border-slate-800 bg-slate-950/70 opacity-75 grayscale-[35%] hover:border-slate-700'
+                    : 'border-emerald-500/50 hover:border-emerald-400 shadow-emerald-950/30 bg-slate-900'
                 ]"
                 @click="openWhiteboardState(msg)"
               >
@@ -1703,38 +2254,34 @@ onUnmounted(() => {
                     :src="msg.fileData.url"
                     class="w-full h-full object-cover transition duration-300 group-hover:scale-105"
                   />
-                  <!-- Private: thumbnail removed completely, pure gray background with Lock icon -->
+                  <!-- Private: thumbnail removed completely, clean indicator -->
                   <div
                     v-else-if="msg.metadata?.isPrivate"
-                    class="w-full h-full bg-slate-800 flex flex-col items-center justify-center text-slate-400 select-none p-4 text-center"
+                    class="w-full h-full bg-slate-900 flex flex-col items-center justify-center text-slate-400 select-none p-4 text-center"
                   >
-                    <div class="w-10 h-10 rounded-full bg-slate-700/70 border border-slate-600/50 flex items-center justify-center mb-1.5 shadow-sm">
-                      <Lock class="w-5 h-5 text-slate-300" />
+                    <div class="w-10 h-10 rounded-full bg-slate-800 border border-slate-700/60 flex items-center justify-center mb-1.5 shadow-sm">
+                      <Lock class="w-5 h-5 text-slate-400" />
                     </div>
-                    <span class="text-[11px] font-semibold text-slate-300 tracking-wide">不公開畫布</span>
-                    <span class="text-[9px] text-slate-400 mt-0.5">縮圖已移除</span>
+                    <span class="text-xs font-semibold text-slate-300 tracking-wide">Private Whiteboard</span>
                   </div>
                   <!-- Non-private fallback when no image yet -->
                   <div v-else class="text-slate-600 flex flex-col items-center">
                     <Palette class="w-8 h-8 opacity-40" />
                   </div>
 
-                  <!-- Private Badge (Top Right) -->
+                  <!-- Active Live Badge vs Ended Badge (Top Right) -->
                   <div
-                    v-if="msg.metadata?.isPrivate"
-                    class="absolute top-1.5 right-1.5 z-10 px-2 py-0.5 rounded-full bg-slate-900/90 border border-slate-700/80 text-slate-400 text-[9px] font-bold shadow flex items-center gap-1 backdrop-blur-xs"
-                  >
-                    <Lock class="w-2.5 h-2.5 text-slate-400" />
-                    <span>不公開</span>
-                  </div>
-
-                  <!-- Active Live Badge (Top Right) -->
-                  <div
-                    v-else-if="roomStore.currentRoom?.whiteboardActive && (msg.metadata?.isSharedPost || !msg.metadata?.isPrivate)"
+                    v-if="roomStore.currentRoom?.whiteboardActive && (msg.metadata?.isSharedPost || !msg.metadata?.isPrivate)"
                     class="absolute top-1.5 right-1.5 z-10 px-1.5 py-0.5 rounded-full bg-emerald-500/90 text-white text-[9px] font-bold shadow flex items-center gap-1 animate-pulse"
                   >
                     <span class="w-1.5 h-1.5 rounded-full bg-white"></span>
                     <span>Live</span>
+                  </div>
+                  <div
+                    v-else
+                    class="absolute top-1.5 right-1.5 z-10 px-1.5 py-0.5 rounded-full bg-slate-800/90 text-slate-400 text-[9px] font-medium border border-slate-700/60 shadow flex items-center gap-1"
+                  >
+                    <span>Ended</span>
                   </div>
 
                   <!-- Active Join / Open Hover Action -->
@@ -1743,7 +2290,7 @@ onUnmounted(() => {
                   >
                     <span class="bg-indigo-600 hover:bg-indigo-500 text-white px-2.5 py-1 rounded-lg text-xs font-bold shadow-lg flex items-center gap-1.5 transition">
                       <Palette class="w-3.5 h-3.5" />
-                      {{ msg.metadata?.isPrivate ? '開啟私有畫布' : (roomStore.currentRoom?.whiteboardActive ? '加入協作畫布' : '開啟畫布') }}
+                      {{ msg.metadata?.isPrivate ? 'Open Private Board' : (roomStore.currentRoom?.whiteboardActive ? 'Join Live Board' : 'Open Whiteboard') }}
                     </span>
                   </div>
                 </div>
@@ -1753,15 +2300,14 @@ onUnmounted(() => {
                   <span class="text-slate-300 font-medium truncate max-w-[140px]">
                     {{ msg.metadata?.creatorName || msg.senderName }}'s Board
                   </span>
-                  <span v-if="msg.metadata?.isPrivate" class="text-slate-500 font-semibold text-[9px] shrink-0 flex items-center gap-1">
-                    <Lock class="w-2.5 h-2.5" />
-                    不公開
+                  <span v-if="msg.metadata?.isPrivate" class="text-slate-500 font-medium text-[9px] shrink-0">
+                    Private
                   </span>
                   <span v-else-if="roomStore.currentRoom?.whiteboardActive && (msg.metadata?.isSharedPost || !msg.metadata?.isPrivate)" class="text-emerald-400 font-semibold text-[9px] shrink-0">
                     Active
                   </span>
                   <span v-else class="text-slate-500 text-[9px] shrink-0">
-                    Saved
+                    Ended
                   </span>
                 </div>
               </div>
@@ -1790,26 +2336,64 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <!-- Emoji Reaction Counter Pills Underneath Message Bubble -->
+            <!-- Unified Bottom Action Toolbar (Emoji Reactions, Reply, Copy) -->
             <div
-              v-if="msg.reactions && Object.values(msg.reactions).some(u => u && u.length > 0)"
-              class="flex flex-wrap items-center gap-1 mt-1 z-10 select-none"
-              :class="msg.senderUid === authStore.uid ? 'justify-end' : 'justify-start'"
+              v-if="!isMeetingClosed && msg.senderUid !== 'system'"
+              class="mt-1 flex items-center select-none z-10 transition-all duration-150"
+              :class="[
+                msg.senderUid === authStore.uid ? 'justify-end' : 'justify-start',
+                hasActiveReactions(msg) ? 'opacity-100' : 'opacity-0 group-hover/msg:opacity-100 pointer-events-none group-hover/msg:pointer-events-auto'
+              ]"
             >
-              <template v-for="(uids, emoji) in msg.reactions" :key="emoji">
+              <div
+                class="flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-slate-900/95 border border-slate-700/80 shadow-md backdrop-blur-sm text-xs transition-all duration-150"
+              >
+                <!-- 6 Emojis -->
                 <button
-                  v-if="uids && uids.length > 0"
-                  @click="roomStore.toggleMessageReaction(msg.id, String(emoji))"
-                  class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[11px] font-medium border transition cursor-pointer select-none"
-                  :class="uids.includes(authStore.uid)
-                    ? 'bg-sky-600/30 border-sky-400/80 text-sky-200 shadow-xs'
-                    : 'bg-slate-900/90 border-slate-700/80 text-slate-300 hover:bg-slate-800'"
-                  :title="`${uids.length} reaction${uids.length > 1 ? 's' : ''}`"
+                  v-for="emoji in reactionEmojiList"
+                  :key="emoji"
+                  @click.stop="roomStore.toggleMessageReaction(msg.id, emoji)"
+                  class="flex items-center gap-1 px-1.5 py-0.5 rounded-full transition transform active:scale-90 cursor-pointer text-xs"
+                  :class="[
+                    isEmojiSelectedByMe(msg, emoji)
+                      ? 'bg-sky-500/30 border border-sky-400/90 text-sky-200 ring-2 ring-sky-400/80 shadow-xs font-semibold scale-105'
+                      : (getEmojiVoters(msg, emoji).length > 0
+                        ? 'bg-slate-800/80 text-slate-300 border border-slate-700/80 hover:bg-slate-700'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-800/60 hidden group-hover/msg:inline-flex')
+                  ]"
+                  :title="isEmojiSelectedByMe(msg, emoji) ? `Remove ${emoji}` : `React ${emoji}`"
                 >
                   <span class="text-xs">{{ emoji }}</span>
-                  <span class="text-[10px] font-bold opacity-90">{{ uids.length }}</span>
+                  <span
+                    v-if="getEmojiVoters(msg, emoji).length > 0"
+                    class="text-[10px] font-bold"
+                    :class="isEmojiSelectedByMe(msg, emoji) ? 'text-sky-300' : 'text-slate-400'"
+                  >
+                    {{ getEmojiVoters(msg, emoji).length }}
+                  </span>
                 </button>
-              </template>
+
+                <!-- Subtle Divider (visible on hover) -->
+                <div class="hidden group-hover/msg:block h-3.5 w-px bg-slate-700/80 mx-0.5"></div>
+
+                <!-- Reply Button (visible on hover) -->
+                <button
+                  @click.stop="replyToMessage(msg)"
+                  class="hidden group-hover/msg:inline-flex p-1 rounded-full text-slate-400 hover:text-sky-300 hover:bg-slate-800 transition cursor-pointer"
+                  title="Reply"
+                >
+                  <CornerUpLeft class="w-3.5 h-3.5" />
+                </button>
+
+                <!-- Copy Button (visible on hover) -->
+                <button
+                  @click.stop="copyMessageContent(msg)"
+                  class="hidden group-hover/msg:inline-flex p-1 rounded-full text-slate-400 hover:text-emerald-300 hover:bg-slate-800 transition cursor-pointer"
+                  title="Copy message"
+                >
+                  <Copy class="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
 
             <!-- AI Mentor Failure / 503 Retry with Flash Button -->
@@ -2075,22 +2659,55 @@ onUnmounted(() => {
             <Palette class="w-4 h-4 text-indigo-400" />
           </button>
 
-          <!-- Textarea Input with Clipboard Paste -->
-          <textarea
-            ref="textareaRef"
-            v-model="inputMessage"
-            @input="onInputTextarea"
-            @paste="handlePaste"
-            @keydown="handleTextareaKeyDown"
-            :disabled="isMeetingClosed || roomStore.currentRoom?.participants[authStore.uid]?.isMuted"
-            :placeholder="isMeetingClosed
-              ? 'This meeting has been closed. Chat is in read-only mode.'
-              : roomStore.currentRoom?.participants[authStore.uid]?.isMuted
-                ? 'You have been muted by the host.'
-                : 'Type a message (e.g. @Mentor)...'"
-            class="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-base sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500 transition resize-none min-h-[44px] max-h-32 overflow-y-auto disabled:opacity-50"
-            rows="1"
-          ></textarea>
+          <!-- Textarea Input with Clipboard Paste & Mention Popover -->
+          <div class="relative flex-1 min-w-0">
+            <!-- Mention Autocomplete Popover -->
+            <div
+              v-if="isMentionMenuOpen && mentionCandidates.length > 0"
+              class="absolute bottom-full left-0 mb-2 w-72 sm:w-80 bg-slate-900/95 border border-slate-700/80 rounded-xl shadow-2xl p-1.5 backdrop-blur-md z-50 max-h-56 overflow-y-auto"
+            >
+              <div class="px-2 py-1 text-[10px] font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-800 mb-1 flex items-center justify-between">
+                <span>{{ t('room.mentionMember') }}</span>
+                <span class="text-[9px] text-slate-500">↑↓ to navigate · Enter to select</span>
+              </div>
+              <button
+                v-for="(cand, idx) in mentionCandidates"
+                :key="cand.id"
+                type="button"
+                @mousedown.prevent="selectMentionCandidate(cand)"
+                class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left transition cursor-pointer text-xs"
+                :class="idx === mentionMenuIndex ? 'bg-sky-600/30 text-white ring-1 ring-sky-500' : 'hover:bg-slate-800 text-slate-200'"
+              >
+                <div class="w-6 h-6 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center shrink-0 text-sm">
+                  {{ cand.avatar }}
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="font-medium truncate flex items-center gap-1.5">
+                    <span>{{ cand.name }}</span>
+                    <span v-if="cand.isAi" class="text-[9px] px-1 py-0.2 rounded bg-sky-500/20 text-sky-300 font-bold">AI</span>
+                    <span v-else-if="cand.subtitle === 'Host'" class="text-[9px] px-1 py-0.2 rounded bg-indigo-500/20 text-indigo-300 font-medium">Host</span>
+                  </div>
+                  <div class="text-[10px] text-slate-400 font-mono">{{ cand.handle }}</div>
+                </div>
+              </button>
+            </div>
+
+            <textarea
+              ref="textareaRef"
+              v-model="inputMessage"
+              @input="onInputTextarea"
+              @paste="handlePaste"
+              @keydown="handleTextareaKeyDown"
+              :disabled="isMeetingClosed || roomStore.currentRoom?.participants[authStore.uid]?.isMuted"
+              :placeholder="isMeetingClosed
+                ? 'This meeting has been closed. Chat is in read-only mode.'
+                : roomStore.currentRoom?.participants[authStore.uid]?.isMuted
+                  ? 'You have been muted by the host.'
+                  : 'Type a message (e.g. @Mentor or @Name)...'"
+              class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-base sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500 transition resize-none min-h-[44px] max-h-32 overflow-y-auto disabled:opacity-50"
+              rows="1"
+            ></textarea>
+          </div>
 
           <!-- Quick Thumbs-Up (When empty) OR Send Button (When text/attachment present) -->
           <button
@@ -2148,7 +2765,9 @@ onUnmounted(() => {
           :initialJson="currentWhiteboardJson"
           :activeAssetId="activeWhiteboardAssetId"
           :isSharedSession="isWhiteboardSharedSession"
-          @close="isWhiteboardOpen = false; isJoiningSharedBoard = false; isLocalWhiteboardPublisher = false; isActiveWhiteboardPrivate = false; activeWhiteboardAssetId = null; currentWhiteboardJson = undefined;"
+          :isPublic="activeWhiteboardIsPublic"
+          :assetCreatorUid="activeWhiteboardCreatorUid"
+          @close="isWhiteboardOpen = false; isJoiningSharedBoard = false; isLocalWhiteboardPublisher = false; isActiveWhiteboardPrivate = false; activeWhiteboardIsPublic = false; activeWhiteboardCreatorUid = null; activeWhiteboardAssetId = null; currentWhiteboardJson = undefined;"
           @share="handleShareWhiteboard"
           @save-state="handleSaveWhiteboardState"
         />
@@ -2157,7 +2776,7 @@ onUnmounted(() => {
 
     <!-- Assets / Album Drawer -->
     <div
-      class="fixed bottom-0 right-0 z-40 w-full sm:w-80 bg-slate-900 border-l border-slate-800 shadow-2xl flex flex-col transform transition-transform duration-300 ease-in-out"
+      class="fixed bottom-0 right-0 z-[100] w-full sm:w-80 bg-slate-900 border-l border-slate-800 shadow-2xl flex flex-col transform transition-transform duration-300 ease-in-out"
       :style="{ top: drawerTopOffset, height: `calc(100dvh - ${drawerTopOffset})` }"
       :class="isAssetsDrawerOpen ? 'translate-x-0' : 'translate-x-full'"
     >
@@ -2221,49 +2840,73 @@ onUnmounted(() => {
             <!-- Whiteboard States (Editable) -->
             <div
               v-if="msg.type === 'whiteboard_state'"
-              class="aspect-square rounded-xl bg-slate-950 border-2 overflow-hidden cursor-pointer transition group relative shadow-md border-indigo-500/40 hover:border-indigo-400"
+              class="relative aspect-square cursor-pointer transition group"
               @click="!isManagingAssets && (openWhiteboardState(msg), isAssetsDrawerOpen = false)"
               title="Click to edit whiteboard"
             >
-              <img
-                v-if="!msg.metadata?.isPrivate && msg.fileData?.url"
-                :src="msg.fileData.url"
-                class="w-full h-full object-cover group-hover:scale-105 transition duration-300 opacity-85"
-              />
+              <div class="w-full h-full rounded-xl bg-slate-950 border-2 overflow-hidden shadow-md border-indigo-500/40 hover:border-indigo-400 relative">
+                <img
+                  v-if="getAssetThumbnail(msg)"
+                  :src="getAssetThumbnail(msg)"
+                  class="w-full h-full object-cover group-hover:scale-105 transition duration-300 bg-white"
+                />
+                <div v-else class="w-full h-full bg-slate-900 flex flex-col items-center justify-center text-slate-400 gap-1.5 p-2 text-center">
+                  <Palette class="w-6 h-6 opacity-60 animate-pulse text-indigo-400" />
+                  <span class="text-[9px] text-slate-300 font-medium">繪製縮圖中...</span>
+                </div>
+                <!-- Badge -->
+                <div class="absolute top-1 left-1 bg-indigo-950/90 text-indigo-300 px-1.5 py-0.5 rounded text-[8px] font-bold border border-indigo-500/50 backdrop-blur-sm flex items-center gap-1 z-10 shadow">
+                  <Lock v-if="msg.metadata?.isPrivate" class="w-2.5 h-2.5 text-amber-400" />
+                  <Palette v-else class="w-2.5 h-2.5 text-indigo-400" />
+                  <span>{{ msg.metadata?.isPrivate ? 'Private' : 'Whiteboard' }}</span>
+                </div>
+                <!-- Hide/Unhide Button in Manage Mode -->
+                <button
+                  v-if="isManagingAssets"
+                  @click.stop="handleToggleHideAsset(msg)"
+                  class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-white text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5 bg-rose-600 hover:bg-rose-500"
+                  title="Hide this asset"
+                >
+                  <EyeOff class="w-2.5 h-2.5" />
+                  <span>Hide</span>
+                </button>
+                <!-- Creator Name Pill (Bottom) -->
+                <div class="absolute bottom-1 left-1 right-1 bg-slate-950/85 px-1.5 py-0.5 rounded text-[8px] text-slate-300 font-medium truncate backdrop-blur-xs z-10 flex items-center gap-1">
+                  <span class="text-[9px]">{{ msg.metadata?.creatorAvatar || msg.senderAvatar || '🎨' }}</span>
+                  <span class="truncate">{{ msg.metadata?.creatorName || msg.senderName || 'Member' }}</span>
+                </div>
+                <!-- Hover Overlay -->
+                <div v-if="!isManagingAssets" class="absolute inset-0 bg-indigo-950/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
+                  <span class="bg-indigo-600 text-white px-2 py-0.5 rounded text-[9px] font-bold shadow flex items-center gap-1">
+                    <PenTool class="w-2.5 h-2.5" /> Edit
+                  </span>
+                </div>
+              </div>
+
+              <!-- Active Viewers Avatars on Public Whiteboards (Slightly overflows top-right corner, 50% larger, NO background underlay pill) -->
               <div
-                v-else-if="msg.metadata?.isPrivate"
-                class="w-full h-full bg-slate-800 flex flex-col items-center justify-center text-slate-400 select-none p-2 text-center"
+                v-if="!msg.metadata?.isPrivate && getActiveWhiteboardUsers(msg.id).length && !isManagingAssets"
+                class="absolute -top-2.5 -right-2.5 z-30 flex items-center -space-x-1.5 pointer-events-auto"
+                :title="getActiveWhiteboardUsers(msg.id).map(u => u.displayName).join(', ') + ' on this canvas'"
               >
-                <Lock class="w-5 h-5 text-slate-300 mb-1" />
-                <span class="text-[9px] font-semibold text-slate-300">不公開</span>
-              </div>
-              <div v-else class="w-full h-full bg-slate-900 flex items-center justify-center text-slate-600">
-                <Palette class="w-6 h-6 opacity-40" />
-              </div>
-              <!-- Badge -->
-              <div class="absolute top-1 left-1 bg-indigo-950/90 text-indigo-300 px-1.5 py-0.5 rounded text-[8px] font-bold border border-indigo-500/50 backdrop-blur-sm flex items-center gap-1 z-10 shadow">
-                <Palette class="w-2.5 h-2.5 text-indigo-400" />
-                <span>Whiteboard</span>
-              </div>
-              <!-- Hide/Unhide Button in Manage Mode -->
-              <button
-                v-if="isManagingAssets"
-                @click.stop="handleToggleHideAsset(msg)"
-                class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-white text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5 bg-rose-600 hover:bg-rose-500"
-                title="Hide this asset"
-              >
-                <EyeOff class="w-2.5 h-2.5" />
-                <span>Hide</span>
-              </button>
-              <!-- Creator Name Pill (Bottom) -->
-              <div class="absolute bottom-1 left-1 right-1 bg-slate-950/85 px-1.5 py-0.5 rounded text-[8px] text-slate-300 font-medium truncate backdrop-blur-xs z-10 flex items-center gap-1">
-                <span class="text-[9px]">{{ msg.metadata?.creatorAvatar || msg.senderAvatar || '🎨' }}</span>
-                <span class="truncate">{{ msg.metadata?.creatorName || msg.senderName || 'Member' }}</span>
-              </div>
-              <!-- Hover Overlay -->
-              <div v-if="!isManagingAssets" class="absolute inset-0 bg-indigo-950/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
-                <span class="bg-indigo-600 text-white px-2 py-0.5 rounded text-[9px] font-bold shadow flex items-center gap-1">
-                  <PenTool class="w-2.5 h-2.5" /> Edit
+                <div
+                  v-for="u in getActiveWhiteboardUsers(msg.id).slice(0, 3)"
+                  :key="u.uid"
+                  class="relative"
+                >
+                  <span
+                    class="w-6 h-6 rounded-full flex items-center justify-center text-xs bg-slate-800 border-2 border-sky-400 shadow-lg select-none ring-1 ring-slate-950"
+                    :title="u.displayName"
+                  >
+                    {{ u.avatar || '👤' }}
+                  </span>
+                  <span class="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-400 ring-1 ring-slate-950 animate-pulse" />
+                </div>
+                <span
+                  v-if="getActiveWhiteboardUsers(msg.id).length > 3"
+                  class="w-5 h-5 rounded-full bg-sky-600 text-white text-[9px] font-bold flex items-center justify-center border-2 border-slate-900 shadow-md ring-1 ring-slate-950"
+                >
+                  +{{ getActiveWhiteboardUsers(msg.id).length - 3 }}
                 </span>
               </div>
             </div>
@@ -2348,6 +2991,56 @@ onUnmounted(() => {
               <Palette class="w-6 h-6 text-amber-400 mb-1 mt-2" />
               <span class="text-[9px] text-amber-300 font-medium truncate w-full px-1">{{ msg.assetPayload?.title || 'Moodboard' }}</span>
             </div>
+
+            <!-- Summary / Contract Documents -->
+            <div
+              v-else-if="msg.type === 'ai_asset' && (msg.assetType === 'summary' || msg.assetType === 'contract')"
+              class="aspect-square rounded-xl bg-violet-950/30 border flex flex-col items-center justify-center text-center p-2 cursor-pointer transition relative group border-violet-500/30 hover:bg-violet-900/50"
+              @click="!isManagingAssets && openDocument(msg.assetPayload?.title || (msg.assetType === 'contract' ? 'Team Agreement' : 'Executive Summary'), msg.assetPayload?.content || '')"
+              :title="msg.assetPayload?.title || 'View Document'"
+            >
+              <div class="absolute top-1 left-1 bg-violet-950/90 text-violet-300 px-1.5 py-0.5 rounded text-[8px] font-bold border border-violet-500/40 backdrop-blur-sm flex items-center gap-1">
+                <FileText class="w-2.5 h-2.5 text-violet-400" />
+                <span>{{ msg.assetType === 'contract' ? 'Agreement' : 'Doc' }}</span>
+              </div>
+              <!-- Hide Button in Manage Mode -->
+              <button
+                v-if="isManagingAssets"
+                @click.stop="handleToggleHideAsset(msg)"
+                class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-white text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5 bg-rose-600 hover:bg-rose-500"
+                title="Hide this asset"
+              >
+                <EyeOff class="w-2.5 h-2.5" />
+                <span>Hide</span>
+              </button>
+              <FileText class="w-6 h-6 text-violet-400 mb-1 mt-2" />
+              <span class="text-[9px] text-violet-300 font-medium truncate w-full px-1">{{ msg.assetPayload?.title || 'Summary' }}</span>
+            </div>
+
+            <!-- Fact Check Assets -->
+            <div
+              v-else-if="msg.type === 'ai_asset' && msg.assetType === 'fact_check'"
+              class="aspect-square rounded-xl bg-emerald-950/30 border flex flex-col items-center justify-center text-center p-2 cursor-pointer transition relative group border-emerald-500/30 hover:bg-emerald-900/50"
+              @click="!isManagingAssets && scrollToMessage(msg.id)"
+              title="View Fact Check in chat"
+            >
+              <div class="absolute top-1 left-1 bg-emerald-950/90 text-emerald-300 px-1.5 py-0.5 rounded text-[8px] font-bold border border-emerald-500/40 backdrop-blur-sm flex items-center gap-1">
+                <ShieldCheck class="w-2.5 h-2.5 text-emerald-400" />
+                <span>Verify</span>
+              </div>
+              <!-- Hide Button in Manage Mode -->
+              <button
+                v-if="isManagingAssets"
+                @click.stop="handleToggleHideAsset(msg)"
+                class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-white text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5 bg-rose-600 hover:bg-rose-500"
+                title="Hide this asset"
+              >
+                <EyeOff class="w-2.5 h-2.5" />
+                <span>Hide</span>
+              </button>
+              <ShieldCheck class="w-6 h-6 text-emerald-400 mb-1 mt-2" />
+              <span class="text-[9px] text-emerald-300 font-medium truncate w-full px-1">{{ msg.assetPayload?.claim || msg.assetPayload?.verdict || 'Fact Check' }}</span>
+            </div>
           </template>
         </div>
 
@@ -2365,44 +3058,41 @@ onUnmounted(() => {
               <!-- Hidden Whiteboard States -->
               <div
                 v-if="msg.type === 'whiteboard_state'"
-                class="aspect-square rounded-xl bg-slate-950 border-2 overflow-hidden cursor-pointer transition group relative shadow-md border-amber-500/40 hover:border-amber-400"
+                class="relative aspect-square cursor-pointer transition group"
                 @click="!isManagingAssets && (openWhiteboardState(msg), isAssetsDrawerOpen = false)"
                 title="Click to edit hidden whiteboard"
               >
-                <img
-                  v-if="!msg.metadata?.isPrivate && msg.fileData?.url"
-                  :src="msg.fileData.url"
-                  class="w-full h-full object-cover group-hover:scale-105 transition duration-300 opacity-70"
-                />
-                <div
-                  v-else-if="msg.metadata?.isPrivate"
-                  class="w-full h-full bg-slate-800 flex flex-col items-center justify-center text-slate-400 select-none p-2 text-center"
-                >
-                  <Lock class="w-5 h-5 text-slate-300 mb-1" />
-                  <span class="text-[9px] font-semibold text-slate-300">不公開</span>
-                </div>
-                <div v-else class="w-full h-full bg-slate-900 flex items-center justify-center text-slate-600">
-                  <Palette class="w-6 h-6 opacity-40" />
-                </div>
-                <!-- Badge -->
-                <div class="absolute top-1 left-1 bg-slate-950/90 text-amber-300 px-1.5 py-0.5 rounded text-[8px] font-bold border border-amber-500/50 backdrop-blur-sm flex items-center gap-1 z-10 shadow">
-                  <Palette class="w-2.5 h-2.5 text-amber-400" />
-                  <span>Hidden</span>
-                </div>
-                <!-- Unhide Button in Manage Mode -->
-                <button
-                  v-if="isManagingAssets"
-                  @click.stop="handleToggleHideAsset(msg)"
-                  class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-white text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5 bg-emerald-600 hover:bg-emerald-500"
-                  title="Unhide this asset"
-                >
-                  <Eye class="w-2.5 h-2.5" />
-                  <span>Unhide</span>
-                </button>
-                <!-- Creator Name Pill (Bottom) -->
-                <div class="absolute bottom-1 left-1 right-1 bg-slate-950/85 px-1.5 py-0.5 rounded text-[8px] text-slate-300 font-medium truncate backdrop-blur-xs z-10 flex items-center gap-1">
-                  <span class="text-[9px]">{{ msg.metadata?.creatorAvatar || msg.senderAvatar || '🎨' }}</span>
-                  <span class="truncate">{{ msg.metadata?.creatorName || msg.senderName || 'Member' }}</span>
+                <div class="w-full h-full rounded-xl bg-slate-950 border-2 overflow-hidden shadow-md border-amber-500/40 hover:border-amber-400 relative">
+                  <img
+                    v-if="getAssetThumbnail(msg)"
+                    :src="getAssetThumbnail(msg)"
+                    class="w-full h-full object-cover group-hover:scale-105 transition duration-300 bg-white"
+                  />
+                  <div v-else class="w-full h-full bg-slate-900 flex flex-col items-center justify-center text-slate-400 gap-1.5 p-2 text-center">
+                    <Palette class="w-6 h-6 opacity-60 animate-pulse text-amber-400" />
+                    <span class="text-[9px] text-slate-300 font-medium">繪製縮圖中...</span>
+                  </div>
+                  <!-- Badge -->
+                  <div class="absolute top-1 left-1 bg-slate-950/90 text-amber-300 px-1.5 py-0.5 rounded text-[8px] font-bold border border-amber-500/50 backdrop-blur-sm flex items-center gap-1 z-10 shadow">
+                    <Lock v-if="msg.metadata?.isPrivate" class="w-2.5 h-2.5 text-amber-400" />
+                    <Palette v-else class="w-2.5 h-2.5 text-amber-400" />
+                    <span>{{ msg.metadata?.isPrivate ? 'Hidden Private' : 'Hidden' }}</span>
+                  </div>
+                  <!-- Unhide Button in Manage Mode -->
+                  <button
+                    v-if="isManagingAssets"
+                    @click.stop="handleToggleHideAsset(msg)"
+                    class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-white text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5 bg-emerald-600 hover:bg-emerald-500"
+                    title="Unhide this asset"
+                  >
+                    <Eye class="w-2.5 h-2.5" />
+                    <span>Unhide</span>
+                  </button>
+                  <!-- Creator Name Pill (Bottom) -->
+                  <div class="absolute bottom-1 left-1 right-1 bg-slate-950/85 px-1.5 py-0.5 rounded text-[8px] text-slate-300 font-medium truncate backdrop-blur-xs z-10 flex items-center gap-1">
+                    <span class="text-[9px]">{{ msg.metadata?.creatorAvatar || msg.senderAvatar || '🎨' }}</span>
+                    <span class="truncate">{{ msg.metadata?.creatorName || msg.senderName || 'Member' }}</span>
+                  </div>
                 </div>
               </div>
 
@@ -2480,6 +3170,54 @@ onUnmounted(() => {
                 <Palette class="w-6 h-6 text-amber-400 mb-1 mt-2 opacity-70" />
                 <span class="text-[9px] text-amber-300 font-medium truncate w-full px-1">{{ msg.assetPayload?.title || 'Moodboard' }}</span>
               </div>
+
+              <!-- Hidden Documents -->
+              <div
+                v-else-if="msg.type === 'ai_asset' && (msg.assetType === 'summary' || msg.assetType === 'contract')"
+                class="aspect-square rounded-xl bg-slate-950 border flex flex-col items-center justify-center text-center p-2 cursor-pointer transition relative group border-amber-500/40 hover:border-amber-400"
+                @click="!isManagingAssets && openDocument(msg.assetPayload?.title || (msg.assetType === 'contract' ? 'Team Agreement' : 'Executive Summary'), msg.assetPayload?.content || '')"
+                :title="msg.assetPayload?.title || 'View hidden Document'"
+              >
+                <div class="absolute top-1 left-1 bg-slate-950/90 text-amber-300 px-1.5 py-0.5 rounded text-[8px] font-bold border border-amber-500/50 backdrop-blur-sm flex items-center gap-1">
+                  <FileText class="w-2.5 h-2.5 text-amber-400" />
+                  <span>Hidden Doc</span>
+                </div>
+                <button
+                  v-if="isManagingAssets"
+                  @click.stop="handleToggleHideAsset(msg)"
+                  class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-white text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5 bg-emerald-600 hover:bg-emerald-500"
+                  title="Unhide this asset"
+                >
+                  <Eye class="w-2.5 h-2.5" />
+                  <span>Unhide</span>
+                </button>
+                <FileText class="w-6 h-6 text-amber-400 mb-1 mt-2 opacity-70" />
+                <span class="text-[9px] text-amber-300 font-medium truncate w-full px-1">{{ msg.assetPayload?.title || 'Document' }}</span>
+              </div>
+
+              <!-- Hidden Fact Checks -->
+              <div
+                v-else-if="msg.type === 'ai_asset' && msg.assetType === 'fact_check'"
+                class="aspect-square rounded-xl bg-slate-950 border flex flex-col items-center justify-center text-center p-2 cursor-pointer transition relative group border-amber-500/40 hover:border-amber-400"
+                @click="!isManagingAssets && scrollToMessage(msg.id)"
+                title="View hidden Fact Check in chat"
+              >
+                <div class="absolute top-1 left-1 bg-slate-950/90 text-amber-300 px-1.5 py-0.5 rounded text-[8px] font-bold border border-amber-500/50 backdrop-blur-sm flex items-center gap-1">
+                  <ShieldCheck class="w-2.5 h-2.5 text-amber-400" />
+                  <span>Hidden</span>
+                </div>
+                <button
+                  v-if="isManagingAssets"
+                  @click.stop="handleToggleHideAsset(msg)"
+                  class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-white text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5 bg-emerald-600 hover:bg-emerald-500"
+                  title="Unhide this asset"
+                >
+                  <Eye class="w-2.5 h-2.5" />
+                  <span>Unhide</span>
+                </button>
+                <ShieldCheck class="w-6 h-6 text-amber-400 mb-1 mt-2 opacity-70" />
+                <span class="text-[9px] text-amber-300 font-medium truncate w-full px-1">{{ msg.assetPayload?.claim || msg.assetPayload?.verdict || 'Fact Check' }}</span>
+              </div>
             </template>
           </div>
         </div>
@@ -2490,7 +3228,7 @@ onUnmounted(() => {
     <div
       v-if="isAssetsDrawerOpen"
       @click="isAssetsDrawerOpen = false"
-      class="fixed inset-x-0 bottom-0 z-30 bg-black/60 transition-opacity"
+      class="fixed inset-x-0 bottom-0 z-[90] bg-black/60 transition-opacity"
       :style="{ top: drawerTopOffset }"
     ></div>
 
@@ -2637,5 +3375,38 @@ onUnmounted(() => {
 
 .custom-scrollbar.is-scrolling::-webkit-scrollbar-thumb {
   background: rgba(148, 163, 184, 0.55);
+}
+
+:deep(.message-content) {
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+:deep(.message-content p) {
+  margin-top: 0;
+  margin-bottom: 0.35rem;
+}
+:deep(.message-content p:last-child) {
+  margin-bottom: 0 !important;
+}
+:deep(.message-content ul),
+:deep(.message-content ol) {
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
+  padding-left: 1.25rem;
+}
+:deep(.message-content table) {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+}
+:deep(.message-content th),
+:deep(.message-content td) {
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  padding: 0.35rem 0.5rem;
+  text-align: left;
+}
+:deep(.message-content th) {
+  background: rgba(15, 23, 42, 0.4);
+  font-weight: 600;
 }
 </style>

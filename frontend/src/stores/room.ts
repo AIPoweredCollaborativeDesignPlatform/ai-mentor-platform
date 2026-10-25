@@ -175,18 +175,34 @@ export const useRoomStore = defineStore('room', () => {
 
   const checkRoomExists = async (pin: string): Promise<{ exists: boolean; roomName?: string }> => {
     const roomId = `room_${pin}`;
+    // Await auth readiness so token is attached to Firestore requests
+    await authStore.waitForAuthReady().catch(() => {});
+
     if (db) {
-      try {
-        const snap = await getDoc(doc(db, 'rooms', roomId));
-        if (snap.exists()) {
-          const data = snap.data() as RoomData;
-          if ((data as any).deletedAt) {
-            return { exists: false };
+      // Retry up to 3 times with progressive backoff in case of initial token handshake
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const snap = await getDoc(doc(db, 'rooms', roomId));
+          if (snap.exists()) {
+            const data = snap.data() as RoomData;
+            if ((data as any).deletedAt) {
+              return { exists: false };
+            }
+            return { exists: true, roomName: data.roomName };
+          } else {
+            // If the document does not exist and it's not the last attempt, quick pause and retry once more
+            if (attempt < 2) {
+              await new Promise((res) => setTimeout(res, 300));
+              continue;
+            }
+            break;
           }
-          return { exists: true, roomName: data.roomName };
+        } catch (e: any) {
+          console.warn(`checkRoomExists firestore check attempt ${attempt} failed:`, e?.code || e);
+          if (attempt < 3) {
+            await new Promise((res) => setTimeout(res, attempt * 350));
+          }
         }
-      } catch (e) {
-        console.warn('checkRoomExists firestore check failed:', e);
       }
     }
     const local = localStorage.getItem(`ai_room_${pin}`);
@@ -406,6 +422,7 @@ export const useRoomStore = defineStore('room', () => {
           active.push(t);
         }
       });
+      active.sort((a, b) => a.uid.localeCompare(b.uid));
       typingUsers.value = active;
     });
     unsubs.push(unsubTyping);
@@ -878,16 +895,37 @@ export const useRoomStore = defineStore('room', () => {
     if (db && authStore.uid) {
       try {
         await updateDoc(doc(db, 'rooms', currentRoom.value.roomId, 'participants', authStore.uid), {
-          isOnline: false
+          isOnline: false,
+          activeWhiteboardId: null
         });
       } catch (err) {
         console.error(err);
       }
     } else if (currentRoom.value.participants[authStore.uid]) {
       currentRoom.value.participants[authStore.uid].isOnline = false;
+      currentRoom.value.participants[authStore.uid].activeWhiteboardId = null;
       saveToStorage(currentRoom.value);
     }
     stopListening();
+  };
+
+  // Update participant active whiteboard presence
+  const updateParticipantWhiteboard = async (activeWhiteboardId: string | null) => {
+    if (!currentRoom.value) return;
+    if (db && authStore.uid) {
+      try {
+        await updateDoc(doc(db, 'rooms', currentRoom.value.roomId, 'participants', authStore.uid), {
+          activeWhiteboardId: activeWhiteboardId || null,
+          lastSeen: Date.now()
+        });
+      } catch (err) {
+        console.warn('Failed to update participant whiteboard presence:', err);
+      }
+    }
+    if (currentRoom.value.participants[authStore.uid]) {
+      currentRoom.value.participants[authStore.uid].activeWhiteboardId = activeWhiteboardId || null;
+      saveToStorage(currentRoom.value);
+    }
   };
 
   // End Meeting for All (Host action)
@@ -958,6 +996,8 @@ export const useRoomStore = defineStore('room', () => {
     }
   };
 
+  let lastTypingTime = 0;
+  
   const setMyTyping = async (isTyping: boolean) => {
     if (!currentRoom.value || !db || !authStore.uid) return;
     const roomId = currentRoom.value.roomId;
@@ -965,6 +1005,15 @@ export const useRoomStore = defineStore('room', () => {
 
     clearTimeout(typingTimeout);
     if (isTyping) {
+      const now = Date.now();
+      if (now - lastTypingTime < 2000) {
+        // Just extend timeout without hitting Firestore limits
+        typingTimeout = setTimeout(() => {
+          deleteDoc(typingRef).catch(() => {});
+        }, 3000);
+        return;
+      }
+      lastTypingTime = now;
       try {
         await setDoc(typingRef, {
           uid: authStore.uid,
@@ -977,6 +1026,7 @@ export const useRoomStore = defineStore('room', () => {
         }, 3000);
       } catch {}
     } else {
+      lastTypingTime = 0;
       try {
         await deleteDoc(typingRef);
       } catch {}
@@ -1113,7 +1163,8 @@ export const useRoomStore = defineStore('room', () => {
         mentorStore.config,
         isForced,
         currentAiAbortController.signal,
-        currentRoom.value.whiteboardMemories
+        currentRoom.value.whiteboardMemories,
+        currentRoom.value.participants
       );
 
       if (response.degradedFromPro) {
@@ -1134,7 +1185,7 @@ export const useRoomStore = defineStore('room', () => {
         const tripoKey = getStoredTripoApiKey();
 
         if (response.assetType === 'parametric_3d') {
-          const prompt3D = response.assetData?.title || latestText.replace(/@mentor/gi, '').trim();
+          const prompt3D = response.assetData?.prompt3D || response.assetData?.title || latestText.replace(/@mentor/gi, '').trim();
 
           // 3D Generation Background Task
           const run3DGeneration = async () => {
@@ -1308,7 +1359,7 @@ export const useRoomStore = defineStore('room', () => {
           await addAiMessage(response.aiMessage || '', 'fact_check', response.assetData);
         } else {
           mentorStore.recordCheckpoint(currentRoom.value.messages.length, 'Consensus guidance', 75);
-          await addAiMessage(response.aiMessage || '', null);
+          await addAiMessage(response.aiMessage || '', null, null, response.actionOptions);
         }
         aiStatus.value = 'idle';
         aiStatusDetail.value = 'Ready';
@@ -1355,7 +1406,7 @@ export const useRoomStore = defineStore('room', () => {
     }
   };
 
-  const addAiMessage = async (content: string, assetType?: any, assetPayload?: any) => {
+  const addAiMessage = async (content: string, assetType?: any, assetPayload?: any, actionOptions?: string[]) => {
     if (!currentRoom.value) return;
     const localId = `ai_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const aiMsg: MessageItem = {
@@ -1365,6 +1416,7 @@ export const useRoomStore = defineStore('room', () => {
       senderAvatar: '✨',
       type: assetType ? 'ai_asset' : 'text',
       content,
+      actionOptions: actionOptions || [],
       timestamp: Date.now(),
       assetType,
       assetPayload,
@@ -1531,56 +1583,58 @@ export const useRoomStore = defineStore('room', () => {
         }
       }
 
+      // User directive: "分享會變成直接複製一份去公開區 而非將私人區畫布移動到公開區 產生多份檔案"
+      // If sharing an existing private draft, update it in-place so it moves to public without creating duplicates
       if (existingAssetId) {
-        // Upgrade existing personal asset to public shared whiteboard!
-        // 1. Set isPrivate: false, wasPublished: true, isSharedPost: true
-        // 2. Update content from 'Personal Draft' to `${hostName} shared a collaborative whiteboard`
-        // 3. Set timestamp to Date.now() so it appears as a fresh card at the bottom of the chat!
-        // NO SECOND MESSAGE IS CREATED!
-        await updateCustomMessage(existingAssetId, {
-          content: `${hostName} shared a collaborative whiteboard`,
-          timestamp: Date.now(),
-          fileData: thumbnail ? {
-            type: 'image',
-            url: thumbnail,
-            name: 'whiteboard.jpg',
-            size: 0
-          } : undefined,
-          metadata: {
-            whiteboardJson: initialJson || '',
-            isPrivate: false,
-            wasPublished: true,
-            isSharedPost: true,
-            creatorUid: authStore.uid,
-            creatorName: hostName
-          }
-        });
-        return existingAssetId;
-      } else {
-        // Send a single whiteboard share card message to the chat stream
-        const newId = await sendCustomMessage({
-          senderUid: authStore.uid,
-          senderName: hostName,
-          senderAvatar: authStore.avatar || '🎨',
-          content: `${hostName} shared a collaborative whiteboard`,
-          type: 'whiteboard_state',
-          fileData: {
-            type: 'image',
-            url: thumbnail || '',
-            name: 'whiteboard.jpg',
-            size: 0
-          },
-          metadata: {
-            whiteboardJson: initialJson || '',
-            isPrivate: false,
-            wasPublished: true,
-            isSharedPost: true,
-            creatorUid: authStore.uid,
-            creatorName: hostName
-          }
-        });
-        return newId;
+        const existingMsg = currentRoom.value.messages.find(m => m.id === existingAssetId);
+        if (existingMsg) {
+          await updateCustomMessage(existingAssetId, {
+            content: `${hostName} shared a collaborative whiteboard`,
+            timestamp: Date.now(),
+            fileData: {
+              type: 'image',
+              url: thumbnail || '',
+              name: 'whiteboard.jpg',
+              size: 0
+            },
+            metadata: {
+              ...(existingMsg.metadata || {}),
+              whiteboardJson: initialJson || existingMsg.metadata?.whiteboardJson || '',
+              isPrivate: false,
+              wasPublished: true,
+              isSharedPost: true,
+              creatorUid: authStore.uid,
+              creatorName: hostName,
+              updatedAt: Date.now()
+            }
+          });
+          return existingAssetId;
+        }
       }
+
+      // If no existing asset was being edited, create a single new public whiteboard asset
+      const newId = await sendCustomMessage({
+        senderUid: authStore.uid,
+        senderName: hostName,
+        senderAvatar: authStore.avatar || '🎨',
+        content: `${hostName} shared a collaborative whiteboard`,
+        type: 'whiteboard_state',
+        fileData: {
+          type: 'image',
+          url: thumbnail || '',
+          name: 'whiteboard.jpg',
+          size: 0
+        },
+        metadata: {
+          whiteboardJson: initialJson || '',
+          isPrivate: false,
+          wasPublished: true,
+          isSharedPost: true,
+          creatorUid: authStore.uid,
+          creatorName: hostName
+        }
+      });
+      return newId;
     } catch (e) {
       console.error('Failed to start whiteboard:', e);
       alert('Failed to publish whiteboard: ' + ((e as any).message || String(e)));
@@ -1655,7 +1709,7 @@ export const useRoomStore = defineStore('room', () => {
             name: 'whiteboard.jpg',
             size: 0,
             type: 'image',
-            url: '' // Remove thumbnail URL completely so it is cleared in Firestore
+            url: asset.fileData?.url || '' // Keep preview URL so creator can see thumbnail in personal drafts
           },
           metadata: {
             ...(asset.metadata || {}),
@@ -1688,20 +1742,25 @@ export const useRoomStore = defineStore('room', () => {
 
   const updateCustomMessage = async (messageId: string, updates: Partial<MessageItem>) => {
     if (!currentRoom.value) return;
-    const now = Date.now();
     if (db) {
       try {
         const msgRef = doc(db, 'rooms', currentRoom.value.roomId, 'messages', messageId);
         const updateData: Record<string, any> = {
-          ...updates,
-          timestamp: now
+          ...updates
         };
+        // ONLY update timestamp if explicitly provided in updates!
+        // Never implicitly refresh timestamp on auto-save, close, reactions, or edits!
+        if (updates.timestamp !== undefined) {
+          updateData.timestamp = updates.timestamp;
+        } else {
+          delete updateData.timestamp;
+        }
         await updateDoc(msgRef, updateData);
 
-        // Optimistically update local message and move to top
+        // Optimistically update local message WITHOUT changing timestamp unless specified
         const localMsg = currentRoom.value.messages.find(m => m.id === messageId);
         if (localMsg) {
-          Object.assign(localMsg, updates, { timestamp: now });
+          Object.assign(localMsg, updates);
         }
       } catch (e) {
         console.warn('Failed to update custom message:', e);
@@ -1709,7 +1768,7 @@ export const useRoomStore = defineStore('room', () => {
     } else {
       const localMsg = currentRoom.value.messages.find(m => m.id === messageId);
       if (localMsg) {
-        Object.assign(localMsg, updates, { timestamp: now });
+        Object.assign(localMsg, updates);
         saveToStorage(currentRoom.value);
       }
     }
@@ -1753,6 +1812,86 @@ export const useRoomStore = defineStore('room', () => {
         });
       } catch (e) {
         console.warn('Failed to update reaction in Firestore:', e);
+      }
+    } else {
+      saveToStorage(currentRoom.value);
+    }
+  };
+
+  const votePollOption = async (messageId: string, option: string) => {
+    if (!currentRoom.value || !authStore.uid) return;
+    const msg = currentRoom.value.messages.find(m => m.id === messageId);
+    if (!msg) return;
+
+    const currentVotes: Record<string, { uid: string; name: string; avatar: string; option: string }> = { ...(msg.pollVotes || {}) };
+    const myUid = authStore.uid;
+    const existingVote = currentVotes[myUid];
+
+    if (existingVote && existingVote.option === option) {
+      // Toggle off / cancel vote
+      delete currentVotes[myUid];
+    } else {
+      // Vote for this option
+      currentVotes[myUid] = {
+        uid: myUid,
+        name: authStore.displayName || 'Participant',
+        avatar: authStore.avatar || '🦊',
+        option
+      };
+    }
+
+    // Optimistic local update
+    msg.pollVotes = currentVotes;
+
+    if (db) {
+      try {
+        const msgRef = doc(db, 'rooms', currentRoom.value.roomId, 'messages', messageId);
+        await updateDoc(msgRef, {
+          pollVotes: currentVotes
+        });
+      } catch (e) {
+        console.warn('Failed to update pollVotes in Firestore:', e);
+      }
+    } else {
+      saveToStorage(currentRoom.value);
+    }
+  };
+
+  const addCustomPollOption = async (messageId: string, customOption: string) => {
+    if (!currentRoom.value || !authStore.uid) return;
+    const cleanOption = customOption.trim();
+    if (!cleanOption) return;
+
+    const msg = currentRoom.value.messages.find(m => m.id === messageId);
+    if (!msg) return;
+
+    const options = Array.isArray(msg.actionOptions) ? [...msg.actionOptions] : [];
+    if (!options.includes(cleanOption)) {
+      options.push(cleanOption);
+    }
+
+    const currentVotes: Record<string, { uid: string; name: string; avatar: string; option: string }> = { ...(msg.pollVotes || {}) };
+    const myUid = authStore.uid;
+    currentVotes[myUid] = {
+      uid: myUid,
+      name: authStore.displayName || 'Participant',
+      avatar: authStore.avatar || '🦊',
+      option: cleanOption
+    };
+
+    // Optimistic local update
+    msg.actionOptions = options;
+    msg.pollVotes = currentVotes;
+
+    if (db) {
+      try {
+        const msgRef = doc(db, 'rooms', currentRoom.value.roomId, 'messages', messageId);
+        await updateDoc(msgRef, {
+          actionOptions: options,
+          pollVotes: currentVotes
+        });
+      } catch (e) {
+        console.warn('Failed to add custom poll option in Firestore:', e);
       }
     } else {
       saveToStorage(currentRoom.value);
@@ -1858,7 +1997,8 @@ export const useRoomStore = defineStore('room', () => {
         { ...mentorStore.config, modelTier: 'flash' },
         true,
         undefined,
-        currentRoom.value.whiteboardMemories
+        currentRoom.value.whiteboardMemories,
+        currentRoom.value.participants
       );
 
       if (response.shouldIntervene && response.aiMessage) {
@@ -1932,6 +2072,9 @@ export const useRoomStore = defineStore('room', () => {
     recordWhiteboardSnapshotMemory,
     retryAiMentorMessage,
     updateRoomInfo,
-    toggleMessageReaction
+    toggleMessageReaction,
+    votePollOption,
+    addCustomPollOption,
+    updateParticipantWhiteboard
   };
 });

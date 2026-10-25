@@ -165,6 +165,9 @@ watch(() => authStore.uid, (newUid) => {
 onMounted(async () => {
   generateFriendlyIdentity();
   
+  // Ensure Firebase Auth is fully initialized before checking room
+  await authStore.waitForAuthReady().catch(() => {});
+
   // Verify room exists first!
   let check: { exists: boolean; roomName?: string } = { exists: false, roomName: '' };
   if (roomStore.currentRoom?.pin === pin) {

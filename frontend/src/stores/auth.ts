@@ -40,6 +40,17 @@ export const useAuthStore = defineStore('auth', () => {
   const email = ref(localStorage.getItem('ai_mentor_email') || '');
   const isGoogleLinked = ref(localStorage.getItem('ai_mentor_google_linked') === 'true');
   const firebaseUser = ref<User | null>(null);
+  const isAuthReady = ref(!auth);
+  let authReadyResolve: ((user: User | null) => void) | null = null;
+  const authReadyPromise = new Promise<User | null>((resolve) => {
+    authReadyResolve = resolve;
+  });
+
+  const waitForAuthReady = async (): Promise<User | null> => {
+    if (!auth) return null;
+    if (isAuthReady.value) return firebaseUser.value || auth.currentUser;
+    return authReadyPromise;
+  };
 
   // Sync profile locally
   const updateProfile = (name: string, newAvatar: string) => {
@@ -129,6 +140,22 @@ export const useAuthStore = defineStore('auth', () => {
             console.warn('[Auth] Failed to load/sync user profile API keys:', err);
           }
         }
+      } else if (localStorage.getItem('ai_mentor_google_linked') !== 'true') {
+        // First-time guest visit: sign in anonymously so Firestore security rules pass immediately
+        try {
+          const cred = await signInAnonymously(auth!);
+          user = cred.user;
+          firebaseUser.value = user;
+          uid.value = user.uid;
+          localStorage.setItem('ai_mentor_uid', user.uid);
+        } catch (e) {
+          console.warn('[Auth] Anonymous sign-in fallback:', e);
+        }
+      }
+
+      if (!isAuthReady.value) {
+        isAuthReady.value = true;
+        authReadyResolve?.(user);
       }
     });
   }
@@ -324,6 +351,8 @@ export const useAuthStore = defineStore('auth', () => {
     upgradeWithGoogle,
     logoutGoogle,
     initGuestAuth,
-    syncUserApiKeys
+    syncUserApiKeys,
+    isAuthReady,
+    waitForAuthReady
   };
 });

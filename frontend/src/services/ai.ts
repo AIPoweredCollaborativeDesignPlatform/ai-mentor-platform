@@ -1,9 +1,10 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import type { MessageItem, MentorConfig } from '../types';
+import type { MessageItem, MentorConfig, Participant } from '../types';
 
 export interface AiActionResponse {
   shouldIntervene: boolean;
   aiMessage?: string;
+  actionOptions?: string[];
   assetType?: 'parametric_3d' | 'mesh_3d' | 'moodboard' | 'summary' | 'contract' | 'fact_check';
   assetData?: any;
 }
@@ -91,19 +92,74 @@ Describe the visual elements, diagram structures, flowcharts, UI wireframes, sti
   return '';
 }
 
+function buildParticipantDynamicsContext(
+  participants?: Record<string, Participant>,
+  messages: MessageItem[] = []
+): string {
+  if (!participants || Object.keys(participants).length === 0) return '';
+  const now = Date.now();
+  const participantList = Object.values(participants).filter((p) => p.status === 'approved');
+  if (participantList.length === 0) return '';
+
+  const lines: string[] = [];
+  lines.push('\n=== TEAM DYNAMICS & PARTICIPANT BACKGROUND PROFILES (INTERNAL FACILITATION MODEL) ===');
+  lines.push('*NOTICE FOR AI FACILITATOR: The following section provides an algorithmic background model of participant engagement, airtime balance, and stated preferences in this room. Use this model to adapt your tone, synthesize diverse perspectives, and proactively include quiet members. NEVER recite, quote, or output this diagnostic profiling text directly to the users.*');
+
+  for (const p of participantList) {
+    const userMsgs = messages.filter((m) => m.senderUid === p.uid);
+    const count = userMsgs.length;
+    const lastMsg = count > 0 ? userMsgs[userMsgs.length - 1] : null;
+    const secAgo = lastMsg ? Math.floor((now - lastMsg.timestamp) / 1000) : null;
+    const timeText = secAgo !== null ? (secAgo < 60 ? `${secAgo}s ago` : `${Math.floor(secAgo / 60)}m ago`) : 'Never spoken';
+
+    let activityStatus = 'Moderate';
+    if (count === 0) activityStatus = 'Silent (Has not spoken yet in this session)';
+    else if (secAgo !== null && secAgo > 600) activityStatus = 'Quiet (Inactive for >10 mins)';
+    else if (count >= 6) activityStatus = 'Active (Driving discussion)';
+
+    // Extract recent poll stances from user
+    const pollStances: string[] = [];
+    for (const m of messages) {
+      if (m.pollVotes && m.pollVotes[p.uid]) {
+        pollStances.push(`Voted "${m.pollVotes[p.uid].option}"`);
+      }
+    }
+
+    const sampleWords = userMsgs
+      .slice(-3)
+      .map((m) => m.content)
+      .join(' ')
+      .slice(0, 120)
+      .replace(/\n/g, ' ');
+
+    let desc = `- ${p.displayName || 'Participant'} (${p.avatar || '👤'})${p.isHost ? ' [Host]' : ' [Member]'}:
+  * Activity: ${activityStatus} (${count} msgs, last spoken: ${timeText})
+  * Stance / Poll Votes: ${pollStances.length > 0 ? pollStances.join(', ') : 'No poll votes yet'}
+  * Key Concerns/Snippet: "${sampleWords || 'No messages yet'}"`;
+
+    if (count === 0 || (secAgo !== null && secAgo > 600)) {
+      desc += `\n  * Facilitation Cue: Silent member. If relevant, warmly mention them by name (@${p.displayName}) to invite their perspective or vote.`;
+    }
+    lines.push(desc);
+  }
+
+  return lines.join('\n');
+}
+
 export async function analyzeDialogueWithGemini(
   messages: MessageItem[],
   config: MentorConfig,
   forced: boolean,
   abortSignal?: AbortSignal,
-  whiteboardMemories?: WhiteboardMemoryItem[]
+  whiteboardMemories?: WhiteboardMemoryItem[],
+  participants?: Record<string, Participant>
 ): Promise<AiActionResponse & { degradedFromPro?: boolean }> {
   const apiKey = getStoredGeminiApiKey();
 
   const langNames: Record<string, string> = {
     en: 'English',
-    'zh-TW': 'Traditional Chinese (Traditional Chinese)',
-    ja: 'Japanese (Japanese)',
+    'zh-TW': 'Traditional Chinese (繁體中文)',
+    ja: 'Japanese (日本語)',
     ko: 'Korean (한국어)'
   };
   const targetLang = langNames[config.meetingLanguage || 'zh-TW'] || 'Traditional Chinese';
@@ -127,8 +183,33 @@ export async function analyzeDialogueWithGemini(
   }
 
   const fullText = messages
-    .slice(-15) // Keep last 15 messages for richer context
-    .map((m) => `${m.senderName}: ${m.content}`)
+    .slice(-20) // Keep last 20 messages for richer context
+    .map((m) => {
+      let line = `${m.senderName}: ${m.content}`;
+      if (m.reactions && Object.keys(m.reactions).length > 0) {
+        const reactionParts: string[] = [];
+        for (const [emoji, uids] of Object.entries(m.reactions)) {
+          if (Array.isArray(uids) && uids.length > 0) {
+            const names = uids.map(uid => participants?.[uid]?.displayName || 'Member');
+            reactionParts.push(`${emoji} x${uids.length} (${names.join(', ')})`);
+          }
+        }
+        if (reactionParts.length > 0) {
+          line += `\n  [Message Reactions: ${reactionParts.join(' | ')}]`;
+        }
+      }
+      if (m.actionOptions && m.actionOptions.length > 0) {
+        const voteStats = m.actionOptions.map((opt) => {
+          const voters = Object.values(m.pollVotes || {}).filter((v) => v.option === opt);
+          if (voters.length > 0) {
+            return `"${opt}": ${voters.length} vote(s) (${voters.map((v) => `${v.avatar} ${v.name}`).join(', ')})`;
+          }
+          return `"${opt}": 0 votes`;
+        });
+        line += `\n  [Live Poll Status: ${voteStats.join(' | ')}]`;
+      }
+      return line;
+    })
     .join('\n');
 
   let whiteboardContext = '';
@@ -140,11 +221,14 @@ export async function analyzeDialogueWithGemini(
     whiteboardContext = `\n\nRecent Collaborative Whiteboard Evolution & Visual Milestones:\n${memoryLines}`;
   }
 
+  const dynamicsContext = buildParticipantDynamicsContext(participants, messages);
+
   const systemInstruction = `You are an expert AI Design Mentor & Product Strategy Facilitator in a collaborative design studio.
 Respond in ${targetLang}.
 Current Sensitivity: ${config.sensitivity}
 Features Enabled: 3D=${config.enable3D}, Moodboard=${config.enableMoodboard}, FactRetrieval=${config.enableFactRetrieval}, ProcessIntervention=${config.enableProcessIntervention}
 ${whiteboardContext}
+${dynamicsContext}
 
 Role & Capabilities:
 - Actively mentor and accelerate product, UI/UX, and industrial design collaboration.
@@ -152,10 +236,34 @@ Role & Capabilities:
   1. If @Mentor is explicitly mentioned or forced, you MUST intervene (shouldIntervene = true).
   2. If the user asks about the whiteboard/sketchpad, drawings, diagrams, or visual concepts, refer to the Whiteboard Evolution & Visual Milestones above.
   3. **Topic Drift & Focus Intervention**: If you observe the team drifting into off-topic chit-chat (e.g. gaming, gossip, unrelated banter) during an active design session, tactfully and constructively intervene with design facilitation advice to guide the team back to their creative design goals.
-  4. If asked to summarize, produce a structured design summary with Objectives, Discussed Ideas, Consensus, and Next Steps.
-  5. If asked to fact check or verify a specification/material/dimension, provide verified information with sources/context. IMPORTANT: For the "references" array, you MUST provide REAL, DIRECT web URLs (starting with http:// or https://) that link directly to the standard's official page, a Wikipedia page, or a trusted source.
-  6. If asked for 3D model: The 3D engine generates watertight static 3D meshes for industrial/product prototypes. (Output basic static dimensions, do not output any animation fields).
-  7. If asked for Moodboard:
+  4. **Stall & Progress Detection**: If you notice the discussion is circling the same topic without reaching a conclusion for several messages, proactively intervene and suggest actionable voting options, summaries, or next steps to push the team forward.
+  5. **Silent Member Inclusion**: If a specific team member has not spoken or contributed in a while (noted in the Team Dynamics profile above), warmly and politely invite them by name (@MemberName) to share their thoughts or vote.
+  6. **Message Emoji Reactions & Consensus Understanding**:
+     - Participants react to messages using emoji reactions:
+       * 👍: Agreement, approval, sign-off, consensus, or acknowledgment.
+       * ❤️: Enthusiastic support, favorite concept, deep resonance, or high alignment.
+       * 😂: Humor, amusement, witty remark, or lighthearted enjoyment.
+       * 😮: Surprise, novelty, curiosity, unexpected breakthrough, or intrigue.
+       * 😢: Hesitation, skepticism, doubt, difficulty, or concern.
+       * 🎉: Celebration, triumph, milestone completion, or congratulations.
+     - Carefully factor these emotional and agreement signals in [Message Reactions] into your assessment of team consensus. If an option or proposal receives widespread 👍 or ❤️, lean into it as the favored direction; if a message sparks 😢 or 😮, acknowledge the potential hesitation or question and help explore solutions.
+  7. **Interactive Actions (actionOptions) & Polls**: If you are suggesting options, votes, or decisions, ALWAYS provide 2 to 4 concise, actionable choices in the "actionOptions" array (e.g. ["Vote Option A", "Vote Option B", "Need more time"]). The frontend will render these as interactive poll cards with real-time voter avatars. If poll results are present in the transcript, acknowledge the team's tendency (e.g., "Seeing that the majority voted for...").
+  8. **Summary & Document Generation (Visual Tables & Matrices)**:
+     - When asked to summarize, evaluate options, compare concepts, or provide specifications, **ALWAYS format them as rich Markdown Tables ('| Header 1 | Header 2 |') or visual matrices**.
+     - Do NOT output pure unbroken paragraphs. Users rely on structured visual tables and matrices to make decisions.
+     - If discussing a Decision Matrix, Pugh Matrix, or Criteria Evaluation, explicitly construct a Markdown Table with evaluation criteria, options, and verdicts:
+       | Criteria / Dimension | Option A | Option B | Consensus / Tradeoff |
+       | :--- | :--- | :--- | :--- |
+       | Feasibility / Cost | ... | ... | ... |
+       | Aesthetic / UX | ... | ... | ... |
+     - Document structure should include:
+       ## 1. Objectives & Design Consensus
+       ## 2. Comparative Matrix & Evaluation Table
+       ## 3. Key Discussion Points
+       ## 4. Immediate Action Items & Ownership
+  9. If asked to fact check or verify a specification/material/dimension, provide verified information with sources/context. IMPORTANT: For the "references" array, you MUST provide REAL, DIRECT web URLs (starting with http:// or https://) that link directly to the standard's official page, a Wikipedia page, or a trusted source.
+  10. If asked for 3D model: The 3D engine generates watertight static 3D meshes for industrial/product prototypes. (Output basic static dimensions, do not output any animation fields).
+  11. If asked for Moodboard:
      - Moodboards are universal design research and ideation tools for ANY design discipline (digital UI/UX, product design, consumer electronics, lifestyle goods, mobility, branding, fashion, architecture).
      - DO NOT default or bias towards furniture or interior design unless the user specifically and explicitly asked for furniture/interior!
      - Synthesize authentic multidisciplinary research aligned with the team's discussion:
@@ -169,7 +277,7 @@ Role & Capabilities:
        * Card 2: User Persona / Context of Use or Lifestyle & Activity (authentic real-world user or scenario, e.g. "engineer in field workshop").
        * Card 3: Material, Texture & Finish (macro close-up texture, e.g. "weathered aircraft fuselage metal plates with rivets, industrial macro texture").
        * Card 4: Atmospheric Lighting, Palette or Brand Culture (cinematic volumetric lighting or brand aesthetic).
-     - Image prompts MUST be concrete, vivid English visual descriptions specifically matching the category and title (e.g., if title is "Battle-worn Fuselage", prompt must strictly describe "scratched battle-worn aircraft metal fuselage plates, weathered rivets, industrial macro texture", NEVER a human face; if title is "Nomadic Engineer", prompt must describe "hardware engineer working on laptop at portable field workbench with tools", NEVER abstract bubbles).
+     - Image prompts MUST be concrete, vivid English visual descriptions specifically matching the category and title.
      - Each image must include:
        { "title": string, "category": "Hero Concept" | "Persona / Context" | "Activity / Lifestyle" | "Material & Texture" | "Color & Lighting", "isAiGenerated": boolean, "prompt": string, "sourceUrl": string, "url": "https://image.pollinations.ai/prompt/" + encodeURIComponent(prompt) + "?width=600&height=450&nologo=true" }
 
@@ -177,11 +285,12 @@ Return ONLY a valid JSON object matching this schema:
 {
   "shouldIntervene": true,
   "aiMessage": "A concise, inspiring explanation of your guidance or asset in ${targetLang}",
+  "actionOptions": ["Option A", "Option B"], // Optional array of short strings for interactive voting/choices buttons
   "assetType": "parametric_3d" | "moodboard" | "summary" | "fact_check" | null,
   "assetData": {
-    // For parametric_3d: { "title": string, "meshType": "group", "components": [ { "shape": "box"|"cylinder"|"sphere"|"torus", "dimensions": object, "position": object, "material": { "color": string, "roughness": number, "metalness": number } } ] }
+    // For parametric_3d: { "title": string, "prompt3D": "Highly detailed text-to-3D prompt describing the physical product, shape, materials, textures, style, and lighting for Meshy/Tripo engines", "meshType": "group", "components": [ { "shape": "box"|"cylinder"|"sphere"|"torus", "dimensions": object, "position": object, "material": { "color": string, "roughness": number, "metalness": number } } ] }
     // For moodboard: { "title": string, "description": string, "keywords": string[], "images": [ { "title": string, "category": string, "isAiGenerated": boolean, "prompt": string, "sourceUrl": string, "url": string } ], "palette": [ { "hex": string, "name": string } ], "materials": [ { "name": string, "feature": string } ] }
-    // For summary: { "title": string, "content": string (Markdown formatted with ## Objectives, ## Key Ideas, ## Consensus, ## Action Items) }
+    // For summary: { "title": string, "content": string (Rich Markdown with ## Sections, Markdown Tables | Col 1 | Col 2 |, and bulleted Action Items) }
     // For fact_check: { "claim": string, "verdict": string, "details": string, "references": string[] }
   }
 }

@@ -333,7 +333,7 @@ const sensitivities: { id: SensitivityLevel; name: string; desc: string }[] = [
     >
       <div
         v-if="isOpen"
-        class="fixed inset-x-0 bottom-0 z-30 bg-slate-950/60 backdrop-blur-xs"
+        class="fixed inset-x-0 bottom-0 z-[90] bg-slate-950/60 backdrop-blur-xs"
         :style="{ top: topOffset }"
         @click="emit('close')"
       ></div>
@@ -341,7 +341,7 @@ const sensitivities: { id: SensitivityLevel; name: string; desc: string }[] = [
 
     <!-- Sliding Drawer Panel -->
     <div
-      class="fixed bottom-0 right-0 z-40 w-full max-w-md bg-slate-900 border-l border-slate-800 flex flex-col shadow-2xl transform transition-transform duration-300 ease-in-out"
+      class="fixed bottom-0 right-0 z-[100] w-full max-w-md bg-slate-900 border-l border-slate-800 flex flex-col shadow-2xl transform transition-transform duration-300 ease-in-out"
       :style="{ top: topOffset, height: `calc(100dvh - ${topOffset})` }"
       :class="isOpen ? 'translate-x-0' : 'translate-x-full'"
     >

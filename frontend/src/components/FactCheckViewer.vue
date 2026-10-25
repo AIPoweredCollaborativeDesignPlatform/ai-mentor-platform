@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ShieldCheck, CheckCircle2, AlertTriangle, ExternalLink } from 'lucide-vue-next';
+import { ref } from 'vue';
+import { ShieldCheck, CheckCircle2, AlertTriangle, ExternalLink, ChevronRight } from 'lucide-vue-next';
 
 defineProps<{
   assetData: {
@@ -9,6 +10,16 @@ defineProps<{
     references?: string[];
   };
 }>();
+
+const isReferencesOpen = ref(false);
+
+const formatRefDisplay = (ref: string) => {
+  try {
+    return decodeURIComponent(ref);
+  } catch {
+    return ref;
+  }
+};
 </script>
 
 <template>
@@ -30,7 +41,7 @@ defineProps<{
 
     <!-- Verdict -->
     <div v-if="assetData?.verdict" class="flex items-center gap-1.5 mb-2 text-xs font-semibold text-emerald-400">
-      <CheckCircle2 class="w-4 h-4" />
+      <CheckCircle2 class="w-4 h-4 shrink-0" />
       <span>{{ assetData.verdict }}</span>
     </div>
 
@@ -39,23 +50,34 @@ defineProps<{
       {{ assetData.details }}
     </div>
 
-    <!-- References -->
+    <!-- References (Collapsible by default) -->
     <div v-if="assetData?.references?.length" class="pt-2 border-t border-slate-800/80">
-      <h5 class="text-[11px] font-semibold text-slate-400 mb-1">References & Standards:</h5>
-      <ul class="space-y-1.5">
+      <button
+        @click="isReferencesOpen = !isReferencesOpen"
+        class="flex items-center gap-1.5 text-[11px] font-semibold text-slate-400 hover:text-slate-200 transition cursor-pointer select-none mb-1 group"
+        title="Toggle references and literature standards"
+      >
+        <ChevronRight
+          class="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-200 transition-transform duration-200 shrink-0"
+          :class="{ 'rotate-90': isReferencesOpen }"
+        />
+        <span>References & Standards ({{ assetData.references.length }})</span>
+      </button>
+
+      <ul v-show="isReferencesOpen" class="space-y-1.5 mt-2 pl-1">
         <li
           v-for="(ref, idx) in assetData.references"
           :key="idx"
-          class="text-[11px]"
+          class="text-[11px] min-w-0"
         >
           <a
             :href="ref.startsWith('http') ? ref : `https://www.google.com/search?q=${encodeURIComponent(ref)}`"
             target="_blank"
-            class="text-sky-400 hover:text-sky-300 hover:underline flex items-start gap-1.5 break-words"
+            class="text-sky-400 hover:text-sky-300 hover:underline flex items-start gap-1.5 break-all max-w-full"
             :title="ref.startsWith('http') ? 'Visit Link' : 'Search on Google'"
           >
-            <ExternalLink class="w-3.5 h-3.5 shrink-0 mt-0.5" />
-            <span class="flex-1">{{ ref }}</span>
+            <ExternalLink class="w-3.5 h-3.5 shrink-0 mt-0.5 text-sky-400" />
+            <span class="min-w-0 break-all">{{ formatRefDisplay(ref) }}</span>
           </a>
         </li>
       </ul>

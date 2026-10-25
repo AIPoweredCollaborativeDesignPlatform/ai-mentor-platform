@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import { FileText, Download, Copy, Check, X } from 'lucide-vue-next';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 
 const props = defineProps<{
   title: string;
@@ -11,6 +13,12 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'close'): void;
 }>();
+
+const renderedContent = computed(() => {
+  if (!props.content) return '';
+  const rawHtml = marked.parse(props.content) as string;
+  return DOMPurify.sanitize(rawHtml);
+});
 
 const copied = ref(false);
 
@@ -68,9 +76,51 @@ const downloadMarkdown = () => {
       </div>
 
       <!-- Markdown Content Body -->
-      <div class="p-6 overflow-y-auto font-mono text-sm text-slate-300 leading-relaxed whitespace-pre-wrap bg-slate-900/90">
-        {{ content }}
+      <div 
+        class="p-6 overflow-y-auto bg-slate-900/90 prose prose-sm prose-invert max-w-none text-slate-300 prose-td:border-slate-700 prose-th:bg-slate-800 prose-table:border-slate-700 markdown-body"
+        v-html="renderedContent"
+      >
       </div>
     </div>
   </div>
 </template>
+
+<style scoped>
+:deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.25rem 0;
+  border: 1px solid #334155;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  display: block;
+  overflow-x: auto;
+}
+:deep(th) {
+  background-color: #1e293b;
+  color: #38bdf8;
+  font-weight: 600;
+  text-align: left;
+  padding: 0.625rem 0.875rem;
+  border: 1px solid #334155;
+  white-space: nowrap;
+}
+:deep(td) {
+  padding: 0.5rem 0.875rem;
+  border: 1px solid #334155;
+  color: #cbd5e1;
+}
+:deep(tr:nth-child(even)) {
+  background-color: rgba(30, 41, 59, 0.4);
+}
+:deep(tr:hover) {
+  background-color: rgba(56, 189, 248, 0.05);
+}
+:deep(blockquote) {
+  border-left: 3px solid #38bdf8;
+  padding-left: 1rem;
+  color: #94a3b8;
+  font-style: italic;
+  margin: 1rem 0;
+}
+</style>

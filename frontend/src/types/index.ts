@@ -17,8 +17,6 @@ export type SensitivityLevel = 'Strict' | 'Conservative' | 'Exploratory';
 
 export interface MentorConfig {
   sensitivity: SensitivityLevel;
-  modelTier?: 'flash' | 'pro';
-  meetingLanguage?: 'en' | 'zh-TW' | 'ja' | 'ko';
   enable3D: boolean;
   enableMoodboard: boolean;
   enableFactRetrieval: boolean;
@@ -98,12 +96,6 @@ export interface RoomData {
     prompt: string;
     startedAt: number;
   } | null;
-  sharedApiKeys?: {
-    geminiApiKey?: string;
-    tripoApiKey?: string;
-    meshyApiKey?: string;
-    engine3D?: string;
-  };
   deletedAt?: number;
 }
 

@@ -114,16 +114,8 @@ export function useRoomSession(ctx: RoomContext) {
           whiteboardHostName: data.whiteboardHostName || undefined,
           whiteboardState: data.whiteboardState || undefined,
           whiteboardThumbnail: data.whiteboardThumbnail || undefined,
-          sharedApiKeys: data.sharedApiKeys || undefined,
           aiActiveTask: data.aiActiveTask ?? null
         });
-      }
-      if (data.sharedApiKeys) {
-        const w = window as any;
-        w.__SHARED_HOST_GEMINI_KEY__ = data.sharedApiKeys.geminiApiKey || '';
-        w.__SHARED_HOST_TRIPO_KEY__ = data.sharedApiKeys.tripoApiKey || '';
-        w.__SHARED_HOST_MESHY_KEY__ = data.sharedApiKeys.meshyApiKey || '';
-        w.__SHARED_HOST_3D_ENGINE__ = data.sharedApiKeys.engine3D || '';
       }
       if (data.mentorConfig) mentorStore.config = data.mentorConfig;
       upsertMyRoomIndex(roomId, {
@@ -297,12 +289,6 @@ export function useRoomSession(ctx: RoomContext) {
       content: `${selectedEmoji} Room "${displayRoomName}" created · PIN: ${pin}`,
       timestamp: Date.now()
     };
-    const sharedApiKeys = {
-      geminiApiKey: localStorage.getItem('ai_gemini_api_key') || '',
-      tripoApiKey: localStorage.getItem('ai_tripo_api_key') || '',
-      meshyApiKey: localStorage.getItem('ai_meshy_api_key') || '',
-      engine3D: (localStorage.getItem('ai_3d_engine') as any) || 'meshy'
-    };
     const newRoom: RoomData = {
       roomId,
       pin,
@@ -313,8 +299,7 @@ export function useRoomSession(ctx: RoomContext) {
       roomStatus: 'active',
       mentorConfig: { ...mentorStore.config },
       participants: { [authStore.uid]: hostUser },
-      messages: [createdMsg],
-      sharedApiKeys
+      messages: [createdMsg]
     };
 
     currentRoom.value = newRoom;
@@ -332,8 +317,7 @@ export function useRoomSession(ctx: RoomContext) {
         lastActive: Date.now(),
         roomStatus: 'active',
         mentorConfig: mentorStore.config,
-        assetsCount: 0,
-        sharedApiKeys
+        assetsCount: 0
       });
       await setDoc(roomDocRef(roomId, 'participants', authStore.uid), hostUser);
       const { id, ...msgPayload } = createdMsg;

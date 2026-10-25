@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import { auth, db } from '../firebase/config';
-import { doc, getDoc, setDoc, updateDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { updateDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import {
   signInAnonymously,
   signInWithPopup,
@@ -88,56 +88,6 @@ export const useAuthStore = defineStore('auth', () => {
           localStorage.setItem('ai_mentor_google_linked', 'true');
           localStorage.setItem('ai_mentor_email', email.value);
           localStorage.setItem('ai_mentor_name', displayName.value);
-        }
-
-        // Restore and sync cloud-synced API keys from Firestore user profile across devices
-        if (db) {
-          try {
-            const userDocRef = doc(db, 'users', user.uid);
-            const snap = await getDoc(userDocRef);
-            const localGemini = localStorage.getItem('ai_gemini_api_key') || '';
-            const localTripo = localStorage.getItem('ai_tripo_api_key') || '';
-            const localMeshy = localStorage.getItem('ai_meshy_api_key') || '';
-            const localEngine = localStorage.getItem('ai_3d_engine') || '';
-
-            if (snap.exists()) {
-              const data = snap.data();
-              if (data.geminiApiKey) {
-                localStorage.setItem('ai_gemini_api_key', data.geminiApiKey);
-                (window as any).__SHARED_GEMINI_KEY__ = data.geminiApiKey;
-              } else if (localGemini) {
-                await setDoc(userDocRef, { geminiApiKey: localGemini }, { merge: true });
-              }
-
-              if (data.tripoApiKey) {
-                localStorage.setItem('ai_tripo_api_key', data.tripoApiKey);
-              } else if (localTripo) {
-                await setDoc(userDocRef, { tripoApiKey: localTripo }, { merge: true });
-              }
-
-              if (data.meshyApiKey) {
-                localStorage.setItem('ai_meshy_api_key', data.meshyApiKey);
-              } else if (localMeshy) {
-                await setDoc(userDocRef, { meshyApiKey: localMeshy }, { merge: true });
-              }
-
-              if (data.engine3D) {
-                localStorage.setItem('ai_3d_engine', data.engine3D);
-              } else if (localEngine) {
-                await setDoc(userDocRef, { engine3D: localEngine }, { merge: true });
-              }
-            } else if (localGemini || localTripo || localMeshy || localEngine) {
-              await setDoc(userDocRef, {
-                geminiApiKey: localGemini || undefined,
-                tripoApiKey: localTripo || undefined,
-                meshyApiKey: localMeshy || undefined,
-                engine3D: localEngine || undefined,
-                updatedAt: Date.now()
-              }, { merge: true });
-            }
-          } catch (err) {
-            console.warn('[Auth] Failed to load/sync user profile API keys:', err);
-          }
         }
       } else if (localStorage.getItem('ai_mentor_google_linked') !== 'true') {
         // First-time guest visit: sign in anonymously so Firestore security rules pass immediately
@@ -291,50 +241,6 @@ export const useAuthStore = defineStore('auth', () => {
     await initGuestAuth();
   };
 
-  const syncUserApiKeys = async (keys: {
-    geminiApiKey?: string;
-    tripoApiKey?: string;
-    meshyApiKey?: string;
-    engine3D?: string;
-  }) => {
-    if (keys.geminiApiKey !== undefined) {
-      if (keys.geminiApiKey) {
-        localStorage.setItem('ai_gemini_api_key', keys.geminiApiKey.trim());
-        (window as any).__SHARED_GEMINI_KEY__ = keys.geminiApiKey.trim();
-      } else {
-        localStorage.removeItem('ai_gemini_api_key');
-        delete (window as any).__SHARED_GEMINI_KEY__;
-      }
-    }
-    if (keys.tripoApiKey !== undefined) {
-      if (keys.tripoApiKey) localStorage.setItem('ai_tripo_api_key', keys.tripoApiKey.trim());
-      else localStorage.removeItem('ai_tripo_api_key');
-    }
-    if (keys.meshyApiKey !== undefined) {
-      if (keys.meshyApiKey) localStorage.setItem('ai_meshy_api_key', keys.meshyApiKey.trim());
-      else localStorage.removeItem('ai_meshy_api_key');
-    }
-    if (keys.engine3D !== undefined) {
-      if (keys.engine3D) localStorage.setItem('ai_3d_engine', keys.engine3D);
-    }
-
-    // Sync to Firestore if user and db exist
-    if (db && uid.value) {
-      try {
-        const userDocRef = doc(db, 'users', uid.value);
-        await setDoc(userDocRef, {
-          ...(keys.geminiApiKey !== undefined && { geminiApiKey: keys.geminiApiKey }),
-          ...(keys.tripoApiKey !== undefined && { tripoApiKey: keys.tripoApiKey }),
-          ...(keys.meshyApiKey !== undefined && { meshyApiKey: keys.meshyApiKey }),
-          ...(keys.engine3D !== undefined && { engine3D: keys.engine3D }),
-          updatedAt: Date.now()
-        }, { merge: true });
-      } catch (err) {
-        console.warn('[Auth] Failed to sync keys to Firestore user profile:', err);
-      }
-    }
-  };
-
   // Init on store creation
   initGuestAuth();
 
@@ -349,7 +255,6 @@ export const useAuthStore = defineStore('auth', () => {
     upgradeWithGoogle,
     logoutGoogle,
     initGuestAuth,
-    syncUserApiKeys,
     isAuthReady,
     waitForAuthReady
   };

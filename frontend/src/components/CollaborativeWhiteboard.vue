@@ -23,6 +23,7 @@ import { db } from '../firebase/config';
 import { doc, collection, onSnapshot, setDoc, deleteDoc, type Unsubscribe } from 'firebase/firestore';
 import type { CursorData } from '../types';
 import { generateSvgForWhiteboard, redrawSketchToSvg, getStoredGeminiApiKey } from '../services/ai';
+import { currentLocale } from '../i18n';
 
 const props = withDefaults(defineProps<{
   initialJson?: string;
@@ -8853,7 +8854,7 @@ const triggerAiRedrawSketch = async () => {
     return;
   }
 
-  const meetingLang = roomStore.currentRoom?.mentorConfig?.meetingLanguage || mentorStore.config?.meetingLanguage || 'zh-TW';
+  const meetingLang = currentLocale.value;
 
   activeSidebarPanel.value = '';
   isAiRedrawing.value = true;

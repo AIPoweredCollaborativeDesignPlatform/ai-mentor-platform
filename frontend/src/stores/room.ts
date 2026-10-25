@@ -104,14 +104,6 @@ export const useRoomStore = defineStore('room', () => {
     }
   };
 
-  const updateSharedApiKeys = async (keys: { geminiApiKey?: string; tripoApiKey?: string; meshyApiKey?: string; engine3D?: string }) => {
-    if (!currentRoom.value) return;
-    const updated = { ...(currentRoom.value.sharedApiKeys || {}), ...keys };
-    currentRoom.value.sharedApiKeys = updated;
-    await updateDoc(roomRef(currentRoom.value.roomId), { sharedApiKeys: updated })
-      .catch(err => console.warn('[Firestore] updateSharedApiKeys error:', err));
-  };
-
   return {
     currentRoom,
     myStatus,
@@ -145,7 +137,6 @@ export const useRoomStore = defineStore('room', () => {
     endMeetingForAll,
     updateParticipantProfile,
     updateRoomInfo,
-    updateSharedApiKeys,
 
     sendMessage,
     sendCustomMessage: messages.sendCustomMessage,

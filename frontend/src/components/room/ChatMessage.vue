@@ -80,10 +80,8 @@ const copyContent = () => {
   roomStore.pushToast('Copied', 'Message copied to clipboard', 'success');
 };
 
-// Overloaded-model failures written into the AI message can be regenerated
-const isRetryableAiFailure = computed(() =>
-  isAi.value && ['503', 'GoogleGenerativeAI Error', 'high demand', 'overloaded'].some(s => msg.value.content?.includes(s))
-);
+// Failed explicit requests are posted as "⚠️ AI Mentor: ..." (see functions/mentorAnalyze) and can be regenerated
+const isRetryableAiFailure = computed(() => isAi.value && Boolean(msg.value.content?.startsWith('⚠️ AI Mentor')));
 const isRetrying = ref(false);
 const retryAi = async () => {
   isRetrying.value = true;
@@ -452,7 +450,7 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
         >
           <Loader2 v-if="isRetrying" class="w-3.5 h-3.5 animate-spin" />
           <RefreshCw v-else class="w-3.5 h-3.5 text-sky-300" />
-          <span>{{ isRetrying ? 'Retrying with Flash...' : 'Retry with Flash' }}</span>
+          <span>{{ isRetrying ? 'Retrying...' : 'Retry' }}</span>
         </button>
       </div>
 

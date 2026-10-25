@@ -5,8 +5,6 @@ import type { MentorConfig, SensitivityLevel } from '../types';
 export const useMentorStore = defineStore('mentor', () => {
   const config = ref<MentorConfig>({
     sensitivity: 'Conservative',
-    modelTier: 'flash',
-    meetingLanguage: 'en',
     enable3D: true,
     enableMoodboard: true,
     enableFactRetrieval: true,
@@ -18,14 +16,6 @@ export const useMentorStore = defineStore('mentor', () => {
 
   const setSensitivity = (level: SensitivityLevel) => {
     config.value.sensitivity = level;
-  };
-
-  const setModelTier = (tier: 'flash' | 'pro') => {
-    config.value.modelTier = tier;
-  };
-
-  const setMeetingLanguage = (lang: 'en' | 'zh-TW' | 'ja' | 'ko') => {
-    config.value.meetingLanguage = lang;
   };
 
   const toggleModule = (moduleKey: 'enable3D' | 'enableMoodboard' | 'enableFactRetrieval' | 'enableProcessIntervention') => {
@@ -40,8 +30,6 @@ export const useMentorStore = defineStore('mentor', () => {
     config,
     internalCheckpoints,
     setSensitivity,
-    setModelTier,
-    setMeetingLanguage,
     toggleModule,
     recordCheckpoint
   };

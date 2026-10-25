@@ -16,6 +16,19 @@ service cloud.firestore {
         get(/databases/$(database)/documents/rooms/$(roomId)/participants/$(request.auth.uid)).data.status == "approved";
     }
 
+    // Study administrator (bootstrap account; observers are added in a later phase)
+    function isAdmin() {
+      return isAuthenticated()
+        && request.auth.token.email == 'bb900114@gmail.com'
+        && request.auth.token.email_verified == true;
+    }
+
+    // System-wide AI settings (models, 3D engine). API keys are NOT stored here; they live in Cloud Functions secrets.
+    match /config/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
     match /users/{userId} {
       allow read, write: if isAuthenticated() && request.auth.uid == userId;
       match /{allSubcollections=**} {

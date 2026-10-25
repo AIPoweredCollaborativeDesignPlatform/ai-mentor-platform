@@ -105,7 +105,8 @@ export function useRoomMessages(ctx: RoomContext, setMyTyping: (typing: boolean)
     });
   };
 
-  const addAiMessage = async (content: string, assetType?: any, assetPayload?: any, actionOptions?: string[]) => {
+  /** `aiMeta` (model, prompt version, token usage) is kept on the message for the research log. */
+  const addAiMessage = async (content: string, assetType?: any, assetPayload?: any, actionOptions?: string[], aiMeta?: unknown) => {
     if (!currentRoom.value) return;
     const aiMsg: MessageItem = {
       id: tempId('ai'),
@@ -118,6 +119,7 @@ export function useRoomMessages(ctx: RoomContext, setMyTyping: (typing: boolean)
       timestamp: Date.now(),
       assetType,
       assetPayload,
+      ...(aiMeta ? { metadata: { ai: aiMeta } } : {}),
       status: 'delivered'
     };
     // Render immediately so the AI response appears without waiting for the snapshot

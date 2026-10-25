@@ -14,11 +14,14 @@ cd frontend; npm run dev       # http://localhost:5173（host: true，可用區�
 cd frontend; npm run build     # = vue-tsc && vite build，輸出 frontend/dist；型別檢查只靠這一步
 cd functions; npm install
 
-# 部署（在專案根目錄）
-firebase deploy --only hosting,firestore:rules   # 最常用
-firebase deploy --only storage
-firebase deploy --only functions                 # 需 Blaze 方案
+# 部署（在專案根目錄）— 一律用這個，不要手動 firebase deploy
+npm run deploy             # 版本 patch+1 → build → deploy hosting/rules/storage（functions 有變才部署）→ git commit + tag
+npm run deploy -- --minor  # 或 --major；--functions 強制部署 functions
+npm run deploy:dry         # 只 build 驗證，不部署、不改版本
 ```
+
+- 右下角版本號與時間戳由 `vite.config.ts` 在 build 時注入（`__APP_VERSION__` = `frontend/package.json` version、`__BUILD_TIME__` = 台北時間），不要手改 `App.vue`。
+- 存檔點：git tag `savepoint-0`（改版前的原始碼基準）；當時線上版的實際檔案備份在 `../_savepoints/savepoint-0/live-site/`。
 
 - 沒有 lint、沒有任何自動化測試。驗證方式＝`npm run build` 零錯誤＋用 2~3 個瀏覽器（含無痕）實測入會審核、AI 回覆、白板分享／關閉／踢出。
 - Firebase 專案：`ai-mentor-web`；線上：https://ai-mentor-web.web.app
@@ -48,7 +51,6 @@ firebase deploy --only functions                 # 需 Blaze 方案
 ## 專案慣例
 
 - 溝通用繁體中文；**產品 UI 文字一律英文**（i18n 字串在 `src/i18n/index.ts`）。UX 參考標準是 Canva。
-- 每次發佈更新 `frontend/src/App.vue` 第 16 行的版本號＋時間戳，格式 `vX.Y.Z (YYYY-MM-DD HH:mm:ss)`（目前停在過期的 v5.8.0）。
-- Commit 訊息格式：`feat|fix(scope): 描述 (vX.Y.Z)`。
+- Commit 訊息格式：`feat|fix(scope): 描述`；發佈 commit 由 deploy 腳本自動產生（`release: vX.Y.Z`）。
 - 研究用途（預計送 IRB）：任何讓 AI 讀到使用者 Gmail／Google 帳號資料的改動都禁止；成員剖析（Team Dynamics）只供 AI 內部參考，不可原樣輸出到聊天。
-- 本機 `.git` 不完整（缺 `refs/`，`git` 指令無法使用），且約 3 週的工作未 commit；需要版本控制前先和使用者確認如何從 remote `AIPoweredCollaborativeDesignPlatform/ai-mentor-platform` 修復。
+- 只在本機 commit，未經使用者同意不 push 到 remote `AIPoweredCollaborativeDesignPlatform/ai-mentor-platform`。

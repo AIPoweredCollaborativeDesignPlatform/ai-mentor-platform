@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import ToastContainer from './components/ToastContainer.vue';
+
+// Injected at build time by vite.config.ts (version from package.json, Asia/Taipei build time)
+const versionLabel = `v${__APP_VERSION__} (${__BUILD_TIME__})`;
 </script>
 
 <template>
@@ -13,7 +16,7 @@ import ToastContainer from './components/ToastContainer.vue';
     
     <!-- Unified hidden version number -->
     <div class="fixed bottom-1 right-2 text-[9px] text-slate-500/25 pointer-events-none select-none z-50 font-mono">
-      v5.8.0 (2026-10-06 15:40:00)
+      {{ versionLabel }}
     </div>
   </div>
 </template>

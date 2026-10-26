@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 最完整的現況說明在 `docs/HANDOVER_LOG.md`（2026-10-25 由前任 AI 撰寫：資料模型、互動流程、白板引擎、安全稽核、待辦）。`README.md` 部分過時（仍把 FastAPI 寫成 AI 引擎）。
+> 最完整的現況說明在 `docs/HANDOVER_LOG.md`（2026-10-25 由前任 AI 撰寫：資料模型、互動流程、白板引擎、安全稽核、待辦）。但寫於 P2 之前，AI／金鑰相關段落已過時，以本檔為準。`README.md` 同樣過時。
 
 ## 指令
 
@@ -24,14 +24,17 @@ npm run deploy:dry         # 只 build 驗證，不部署、不改版本
 - 存檔點：git tag `savepoint-0`（改版前的原始碼基準）；當時線上版的實際檔案備份在 `../_savepoints/savepoint-0/live-site/`。
 
 - 沒有 lint、沒有任何自動化測試。驗證方式＝`npm run build` 零錯誤＋用 2~3 個瀏覽器（含無痕）實測入會審核、AI 回覆、白板分享／關閉／踢出。
-- Firebase 專案：`ai-mentor-web`；線上：https://ai-mentor-web.web.app
+- Firebase 專案：`ai-mentor-web`；新站 https://ai-mentor-design.web.app（本 repo 部署目標）；舊站 https://ai-mentor-web.web.app（v5.8.0，不動）
 
 ## 架構重點
 
-- **無自有後端**：Vue 3 SPA 直接在瀏覽器呼叫 Gemini（`@google/generative-ai`）、Meshy、Tripo；Firestore 是唯一的即時同步匯流排。`backend/`（FastAPI）是遺留程式碼，前端沒有呼叫，不要改它來修功能。
-- **Cloud Function** 只有 `functions/index.js` 的 `proxyGlb`（Hosting rewrite `/api/proxy`），用來繞過外部 GLB 的 CORS。
+- **AI 全在 Cloud Functions**（`functions/index.js` 入口，邏輯在 `functions/src/`）：前端只透過 `services/ai.ts` 的 `httpsCallable` 呼叫，不持有任何金鑰。金鑰為 Functions secrets（`ANTHROPIC_API_KEY`、`FAL_KEY`、`MESHY_API_KEY`、`TRIPO_API_KEY`，不用的可設 `none`）。Firestore 仍是唯一的即時同步匯流排。
+  - `onRoomMessage`（messages 觸發）→ `src/engine.js` 的 `handleNewMessage`：每房一個決策者，計數存 `roomAi/{roomId}.state`；@mention 立即回覆，否則在停頓／達最多則數／停滯時檢查；非 proactive 或冷卻中的檢查以「影子判斷」只寫研究紀錄。Claude 呼叫在 `src/mentor.js`、`src/claude.js`，提示詞在 `src/prompts.js`（`PROMPT_VERSION`），呼叫紀錄 `src/log.js`。
+  - 其他 callable：`mentorRespond`（重試）、`assignRoomProfile`、`whiteboardVision`、`generateSvg`／`sketchToSvg`、`generateModel3D`／`refineModel3D`（`src/mesh3d.js`，結果存 Storage）、`proxyGlb`（Hosting rewrite `/api/proxy`，繞過 GLB CORS）。
+- **實驗條件設定檔**（`src/profiles.js`）：`aiProfiles/{id}` 由 `/#/admin`（`views/AdminView.vue`、`services/admin.ts`）編輯並版本化；指派時凍結快照到 `roomAi/{roomId}.profile`，之後修改不影響該房。`mode` = `none | reactive | proactive`；`none` 時前端完全隱藏 AI。`roomAi/*` 僅伺服器/管理者可讀，參與者只看 `rooms/{id}.ai`（`publicAiView`）。系統設定在 `src/config.js`。
+- 新網站 Hosting site 為 `ai-mentor-design`（firebase.json `hosting.site`），與舊站 `ai-mentor-web` 共用同一 Firebase 專案的 Firestore／Storage／Functions，改 rules 或 functions 會同時影響舊站。
 - **Room store 是門面**：`stores/room.ts` 只組合 `stores/room/{session,messages,whiteboard,mentor}.ts`，元件一律透過 `useRoomStore()` 使用；`MeetingRoomView.vue` 只做編排，UI 拆在 `components/room/`，白板開關/私人公開狀態機在 `composables/useWhiteboardSession.ts`。
-- **AI 由觸發者的瀏覽器執行**：`stores/room/mentor.ts` 的 `triggerMentorAgent` 決定是否呼叫（`@mentor` 強制；否則每 5 則訊息、8 秒冷卻、`isAnalyzing` 互斥；Strict 模式只回應 `@mentor`）→ `services/ai.ts` 的 `analyzeDialogueWithGemini` 回傳 JSON（`shouldIntervene / aiMessage / actionOptions / assetType / assetData`）→ 以 `senderUid: 'ai_mentor'` 寫回 messages。模型清單 `FLASH_CORE_MODELS` 依序 fallback。
+- AI 訊息以 `senderUid: 'ai_mentor'`／`ai_mentor_3d`／`system` 寫回 messages（engine 會忽略這些以免自我觸發）。`stores/room/mentor.ts` 只負責前端顯示與重試，不做觸發判斷。
 - **路由為 Hash 模式**（`/#/room/room_123456`）；Room ID＝`room_${6位數PIN}`。
 - **協作白板**（`components/CollaborativeWhiteboard.vue`，約 9.9k 行，Fabric.js **v7** API）有三條同步通道：
   - `rooms/{id}/cursors/{uid}`：高頻即時預覽（游標、liveStroke/liveShape/liveDrag/liveText/liveLock）
@@ -47,7 +50,8 @@ npm run deploy:dry         # 只 build 驗證，不部署、不改版本
 4. `STICKY_NOTE_CONST_SIZE`（180）只能當初始尺寸，不能放進 `Math.max` 當下限。
 5. Fabric v7 `enlivenObjects` 後圖片非同步載入，要等 `load` 再 `requestRenderAll()`。
 6. `whiteboardState` 存在 room doc 內，受 Firestore 1 MiB 上限限制。
-7. 修改 `firestore.rules` 時注意 HANDOVER_LOG §12 列出的 P0 問題（rooms 任何登入者可 update、`sharedApiKeys` 明文、Gemini key 會被打包進 bundle）。
+7. 修改 `firestore.rules` 時注意：rooms 目前任何登入者可 update（P5 收緊）；HANDOVER_LOG §12 的金鑰外洩問題已因 AI 移到 Functions 而解除。
+8. `onRoomMessage` 會等待停頓／停滯（timeout 540s、concurrency 80），改 engine 時要保持 `lockUntil` 鎖與冪等，避免同房重複回覆。
 
 ## 專案慣例
 

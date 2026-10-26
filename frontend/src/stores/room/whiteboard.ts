@@ -155,7 +155,7 @@ export function useRoomWhiteboard(ctx: RoomContext, messages: Messages) {
 
     try {
       const { summarizeWhiteboardVisualSnapshot } = await import('../../services/ai');
-      const summary = await summarizeWhiteboardVisualSnapshot(previewUrl);
+      const summary = await summarizeWhiteboardVisualSnapshot(previewUrl, assetId);
       if (!summary) return;
       const memoryItem = { timestamp: now, timeFormatted: new Date(now).toLocaleTimeString(), summary, assetId: assetId || '' };
       (currentRoom.value.whiteboardMemories ||= []).push(memoryItem);

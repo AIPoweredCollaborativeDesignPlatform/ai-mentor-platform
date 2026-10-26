@@ -193,11 +193,15 @@ const loadGlbModel = (rawUrl: string) => {
   isLoading.value = true;
   loadError.value = '';
 
+  // Firebase Storage copies (all new models) load directly; provider URLs (older messages) need the
+  // Hosting /api/proxy function because Meshy/Tripo do not send CORS headers.
   const proxyUrl = `/api/proxy?url=${encodeURIComponent(rawUrl)}`;
+  const isStorageUrl = rawUrl.includes('firebasestorage.googleapis.com');
   const loader = new GLTFLoader();
+  let triedProxy = !isStorageUrl;
 
-  loader.load(
-    proxyUrl,
+  const load = (url: string) => loader.load(
+    url,
     (gltf) => {
       if (!modelGroup || !scene) return;
 
@@ -244,12 +248,20 @@ const loadGlbModel = (rawUrl: string) => {
     },
     undefined,
     (err) => {
+      if (!triedProxy) {
+        // Bucket CORS not configured: fall back to the proxy before giving up
+        triedProxy = true;
+        load(proxyUrl);
+        return;
+      }
       console.warn('[ModelViewer] Three.js GLTFLoader failed:', err);
       isLoading.value = false;
       isModelInteractive.value = false;
       loadError.value = 'Direct 3D load failed. Displaying 2D render preview.';
     }
   );
+
+  load(isStorageUrl ? rawUrl : proxyUrl);
 };
 
 // Handle Mouse Wheel for Shift + Zoom (allows normal page scroll and Ctrl+Wheel browser zoom when !Shift)

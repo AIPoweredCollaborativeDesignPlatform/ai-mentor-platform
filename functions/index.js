@@ -7,6 +7,7 @@ import { Anthropic, classifyError, createMessage, extractSvg, imageBlockFromData
 import { PROMPT_VERSION, VISION_PROMPT, buildTranscript, mentorSystemPrompt, sketchToSvgPrompt, textToSvgPrompt } from './src/prompts.js';
 import { generateImages } from './src/images.js';
 import { generate3D, refineMeshy } from './src/mesh3d.js';
+import { countWebSearches, logAiCall } from './src/log.js';
 
 initializeApp();
 
@@ -36,6 +37,15 @@ const toHttpsError = (err, label) => {
   return new HttpsError('internal', FRIENDLY_ERRORS[category], { category });
 };
 
+/** Log entry shared by the smaller AI endpoints (images are recorded by size only). */
+const baseLog = (request, kind, model) => ({
+  kind,
+  roomId: request.data?.roomId || null,
+  callerUid: request.auth?.uid || null,
+  model,
+  promptVersion: PROMPT_VERSION
+});
+
 const meta = (model, response) => ({
   model,
   promptVersion: PROMPT_VERSION,
@@ -50,20 +60,36 @@ export const mentorAnalyze = onCall(
     const { messages = [], participants = {}, whiteboardMemories = [], config = {}, forced = false, language = 'zh-TW', roomId = 'room' } = request.data || {};
     const sys = await getSystemConfig();
     const model = sys.models.mentor;
+    const startedAt = Date.now();
 
+    const systemPrompt = mentorSystemPrompt({ config, language, whiteboardMemories, participants, messages });
+    const userPrompt = `Conversation transcript:\n${buildTranscript(messages, participants)}\n\n${forced ? 'The team explicitly asked the mentor (forced).' : 'Autonomous check (not explicitly asked).'}\nRespond with the JSON object only.`;
     const params = {
       model,
       max_tokens: 8000,
       output_config: { effort: sys.mentorEffort },
-      system: mentorSystemPrompt({ config, language, whiteboardMemories, participants, messages }),
-      messages: [{
-        role: 'user',
-        content: `Conversation transcript:\n${buildTranscript(messages, participants)}\n\n${forced ? 'The team explicitly asked the mentor (forced).' : 'Autonomous check (not explicitly asked).'}\nRespond with the JSON object only.`
-      }]
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }]
     };
     const webSearch = config.enableFactRetrieval
       ? [{ type: sys.webSearchTool, name: 'web_search', max_uses: sys.webSearchMaxUses }]
       : null;
+
+    // Everything the model saw and decided, including non-interventions (research plan §5)
+    const log = {
+      kind: 'mentor',
+      roomId,
+      callerUid: request.auth.uid,
+      trigger: forced ? 'forced' : 'auto',
+      triggerMessageId: messages.at(-1)?.id || null,
+      model,
+      promptVersion: PROMPT_VERSION,
+      config,
+      language,
+      input: { systemPrompt, userPrompt, messageCount: messages.length },
+      webSearchOffered: Boolean(webSearch),
+      webSearchFallback: false
+    };
 
     let response;
     try {
@@ -73,9 +99,11 @@ export const mentorAnalyze = onCall(
         // A model/tool-version mismatch must not take the mentor down: retry without web search
         if (!(webSearch && err instanceof Anthropic.BadRequestError)) throw err;
         console.warn('[mentorAnalyze] web search rejected, retrying without tools:', err.message);
+        log.webSearchFallback = true;
         response = await createMessage(ANTHROPIC_API_KEY.value(), params);
       }
-      const result = parseJsonObject(responseText(response));
+      const rawText = responseText(response);
+      const { assessment = null, ...result } = parseJsonObject(rawText);
 
       if (forced && !result.shouldIntervene) {
         result.shouldIntervene = true;
@@ -90,10 +118,20 @@ export const mentorAnalyze = onCall(
         });
         result.assetData.images = result.assetData.images.map((img, i) => ({ ...img, url: urls[i], isAiGenerated: true }));
       }
+
+      await logAiCall({
+        ...log,
+        output: { rawText, assessment, shouldIntervene: Boolean(result.shouldIntervene), assetType: result.assetType || null, result },
+        webSearches: countWebSearches(response),
+        usage: meta(model, response).usage,
+        latencyMs: Date.now() - startedAt
+      });
+      // The assessment stays server-side; participants never receive it
       return { ...result, meta: meta(model, response) };
     } catch (err) {
       const category = classifyError(err);
       console.error('[mentorAnalyze]', category, err?.message || err);
+      await logAiCall({ ...log, error: { category, message: String(err?.message || err).slice(0, 500) }, latencyMs: Date.now() - startedAt });
       // Autonomous checks fail silently; explicit requests get a visible, retryable message
       return forced
         ? { shouldIntervene: true, aiMessage: `⚠️ AI Mentor: ${FRIENDLY_ERRORS[category]}`, meta: meta(model, null) }
@@ -114,8 +152,16 @@ export const whiteboardVision = onCall(
         output_config: { effort: 'low' },
         messages: [{ role: 'user', content: [imageBlockFromDataUrl(request.data?.imageDataUrl), { type: 'text', text: VISION_PROMPT }] }]
       });
-      return { summary: responseText(response).trim(), meta: meta(sys.models.vision, response) };
+      const summary = responseText(response).trim();
+      await logAiCall({
+        ...baseLog(request, 'whiteboard_vision', sys.models.vision),
+        input: { imageBytes: String(request.data?.imageDataUrl || '').length, assetId: request.data?.assetId || null },
+        output: { summary },
+        usage: meta(sys.models.vision, response).usage
+      });
+      return { summary, meta: meta(sys.models.vision, response) };
     } catch (err) {
+      await logAiCall({ ...baseLog(request, 'whiteboard_vision', sys.models.vision), error: { message: String(err?.message || err).slice(0, 500) } });
       throw toHttpsError(err, 'whiteboardVision');
     }
   }
@@ -133,8 +179,11 @@ export const generateSvg = onCall(
         max_tokens: 8000,
         messages: [{ role: 'user', content: textToSvgPrompt(String(request.data?.prompt || '').slice(0, 2000)) }]
       });
-      return { svg: extractSvg(responseText(response)), meta: meta(sys.models.svg, response) };
+      const svg = extractSvg(responseText(response));
+      await logAiCall({ ...baseLog(request, 'text_to_svg', sys.models.svg), input: { prompt: request.data?.prompt || '' }, output: { svg }, usage: meta(sys.models.svg, response).usage });
+      return { svg, meta: meta(sys.models.svg, response) };
     } catch (err) {
+      await logAiCall({ ...baseLog(request, 'text_to_svg', sys.models.svg), input: { prompt: request.data?.prompt || '' }, error: { message: String(err?.message || err).slice(0, 500) } });
       throw toHttpsError(err, 'generateSvg');
     }
   }
@@ -153,8 +202,11 @@ export const sketchToSvg = onCall(
         max_tokens: 8000,
         messages: [{ role: 'user', content: [imageBlockFromDataUrl(imageDataUrl), { type: 'text', text: sketchToSvgPrompt(String(notes).slice(0, 2000), language) }] }]
       });
-      return { svg: extractSvg(responseText(response)), meta: meta(sys.models.svg, response) };
+      const svg = extractSvg(responseText(response));
+      await logAiCall({ ...baseLog(request, 'sketch_to_svg', sys.models.svg), input: { notes, imageBytes: String(imageDataUrl || '').length }, output: { svg }, usage: meta(sys.models.svg, response).usage });
+      return { svg, meta: meta(sys.models.svg, response) };
     } catch (err) {
+      await logAiCall({ ...baseLog(request, 'sketch_to_svg', sys.models.svg), input: { notes }, error: { message: String(err?.message || err).slice(0, 500) } });
       throw toHttpsError(err, 'sketchToSvg');
     }
   }
@@ -171,9 +223,12 @@ export const generateModel3D = onCall(
     const prompt = String(request.data?.prompt || '').trim().slice(0, 1000);
     if (!prompt) throw new HttpsError('invalid-argument', 'Missing 3D prompt');
     try {
-      return await generate3D({ engine: sys.engine3D, prompt, keys: meshKeys() });
+      const result = await generate3D({ engine: sys.engine3D, prompt, keys: meshKeys() });
+      await logAiCall({ ...baseLog(request, 'model_3d', sys.engine3D), input: { prompt }, output: result });
+      return result;
     } catch (err) {
       console.error('[generateModel3D]', err?.message || err);
+      await logAiCall({ ...baseLog(request, 'model_3d', sys.engine3D), input: { prompt }, error: { message: String(err?.message || err).slice(0, 500) } });
       throw new HttpsError('internal', err?.message || '3D generation failed');
     }
   }
@@ -186,7 +241,9 @@ export const refineModel3D = onCall(
     const { taskId, texturePrompt } = request.data || {};
     if (!taskId) throw new HttpsError('invalid-argument', 'Missing Meshy task id');
     try {
-      return await refineMeshy({ previewTaskId: taskId, texturePrompt, keys: meshKeys() });
+      const result = await refineMeshy({ previewTaskId: taskId, texturePrompt, keys: meshKeys() });
+      await logAiCall({ ...baseLog(request, 'model_3d_refine', 'meshy'), input: { taskId, texturePrompt: texturePrompt || '' }, output: result });
+      return result;
     } catch (err) {
       console.error('[refineModel3D]', err?.message || err);
       throw new HttpsError('internal', err?.message || '3D refinement failed');

@@ -1,5 +1,5 @@
 // Bump whenever any prompt text changes; it is stored with every AI output for the research log.
-export const PROMPT_VERSION = 'v1-2026-10-26';
+export const PROMPT_VERSION = 'v2-2026-10-26';
 
 const LANGUAGE_NAMES = { en: 'English', 'zh-TW': 'Traditional Chinese (繁體中文)' };
 export const languageName = code => LANGUAGE_NAMES[code] || LANGUAGE_NAMES['zh-TW'];
@@ -87,8 +87,18 @@ Decide whether to intervene:
     Each image "prompt" must be a concrete, vivid ENGLISH visual description for an image generator.
 Keep "aiMessage" neutral, objective and asset-oriented; never evaluate people.
 
+Before deciding, assess the collaboration. The "assessment" is ALWAYS required (also when you do not intervene),
+is written in English, is used only for research logging and is never shown to participants.
+
 Return ONLY one JSON object (no prose before or after):
 {
+  "assessment": {
+    "phase": "exploring" | "comparing" | "deciding" | "refining" | "off_topic" | "other",
+    "collaborationState": "productive" | "divergent_views" | "stalled" | "off_topic" | "imbalanced_participation" | "converging" | "representation_need",
+    "rationale": "1-2 sentences grounded in the transcript",
+    "interventionType": "none" | "clarification" | "summary" | "invite_quiet_member" | "refocus" | "decision_support" | "representation_suggestion" | "asset_request" | "fact_check",
+    "participants": [ { "name": string, "engagement": "active" | "moderate" | "quiet" | "silent", "stance": "short description", "tags": ["short labels"] } ]
+  },
   "shouldIntervene": boolean,
   "aiMessage": "concise guidance in ${lang}",
   "actionOptions": ["Option A", "Option B"],
@@ -100,7 +110,7 @@ Return ONLY one JSON object (no prose before or after):
     // fact_check: { "claim", "verdict", "details", "references": ["https://..."] }
   }
 }
-If no intervention is warranted, return {"shouldIntervene": false}.`;
+If no intervention is warranted, return {"assessment": {...}, "shouldIntervene": false}.`;
 }
 
 export const VISION_PROMPT = `You are analyzing a snapshot of a collaborative design whiteboard.

@@ -1,6 +1,7 @@
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../firebase/config';
 import { currentLocale } from '../i18n';
+import { useRoomStore } from '../stores/room';
 import type { MentorConfig, MessageItem, Participant } from '../types';
 
 // All model calls run in Cloud Functions (functions/index.js); models are chosen in config/system.
@@ -48,14 +49,16 @@ function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   });
 }
 
-async function call<Req, Res>(name: string, data: Req, signal?: AbortSignal): Promise<Res> {
-  const fn = httpsCallable<Req, Res>(functions, name, { timeout: 540_000 });
-  const result = await abortable(fn(data), signal);
+// Every call carries the room id so the server-side research log (aiLogs) can be grouped per session
+async function call<Req extends object, Res>(name: string, data: Req, signal?: AbortSignal): Promise<Res> {
+  const fn = httpsCallable<Req & { roomId?: string }, Res>(functions, name, { timeout: 540_000 });
+  const result = await abortable(fn({ roomId: useRoomStore().currentRoom?.roomId, ...data }), signal);
   return result.data;
 }
 
 // Only what the prompt needs; attachments (data URLs) are never sent
 const toContextMessage = (m: MessageItem) => ({
+  id: m.id,
   senderUid: m.senderUid,
   senderName: m.senderName,
   content: (m.content || '').slice(0, 1500),
@@ -88,10 +91,10 @@ export async function analyzeDialogue(
   }, abortSignal);
 }
 
-export async function summarizeWhiteboardVisualSnapshot(imageDataUrl: string): Promise<string> {
+export async function summarizeWhiteboardVisualSnapshot(imageDataUrl: string, assetId?: string): Promise<string> {
   if (!imageDataUrl) return '';
   try {
-    const res = await call<{ imageDataUrl: string }, { summary: string }>('whiteboardVision', { imageDataUrl });
+    const res = await call<{ imageDataUrl: string; assetId?: string }, { summary: string }>('whiteboardVision', { imageDataUrl, assetId });
     return res.summary || '';
   } catch (err) {
     console.warn('[Whiteboard Vision] failed:', err);

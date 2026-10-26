@@ -97,6 +97,23 @@ export interface RoomData {
     startedAt: number;
   } | null;
   deletedAt?: number;
+  appVersion?: string;
+  language?: 'en' | 'zh-TW';
+  aiAbortAt?: number;
+  /** Participant-safe view of the room's AI condition (set server-side; see functions/src/profiles.js) */
+  ai?: RoomAiView;
+}
+
+export interface RoomAiView {
+  enabled: boolean;
+  displayName: Record<string, string>;
+  modules: {
+    enable3D: boolean;
+    enableMoodboard: boolean;
+    enableFactRetrieval: boolean;
+    enableSummary: boolean;
+    enableWhiteboardAi: boolean;
+  };
 }
 
 export interface CursorData {

@@ -2,7 +2,7 @@ import { httpsCallable } from 'firebase/functions';
 import { functions } from '../firebase/config';
 import { currentLocale } from '../i18n';
 import { useRoomStore } from '../stores/room';
-import type { MentorConfig, MessageItem, Participant } from '../types';
+import type { MentorConfig } from '../types';
 
 // All model calls run in Cloud Functions (functions/index.js); models are chosen in config/system.
 
@@ -10,15 +10,6 @@ export interface AiCallMeta {
   model: string;
   promptVersion: string;
   usage: { input: number; output: number } | null;
-}
-
-export interface AiActionResponse {
-  shouldIntervene: boolean;
-  aiMessage?: string;
-  actionOptions?: string[];
-  assetType?: 'parametric_3d' | 'mesh_3d' | 'moodboard' | 'summary' | 'contract' | 'fact_check' | null;
-  assetData?: any;
-  meta?: AiCallMeta;
 }
 
 export interface WhiteboardMemoryItem {
@@ -37,8 +28,6 @@ export interface SvgGenerationError {
   rawMessage: string;
 }
 
-const MAX_CONTEXT_MESSAGES = 60;
-
 /** Resolves with the call result, or rejects as soon as `signal` aborts (the server call is simply ignored). */
 function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return promise;
@@ -56,39 +45,9 @@ async function call<Req extends object, Res>(name: string, data: Req, signal?: A
   return result.data;
 }
 
-// Only what the prompt needs; attachments (data URLs) are never sent
-const toContextMessage = (m: MessageItem) => ({
-  id: m.id,
-  senderUid: m.senderUid,
-  senderName: m.senderName,
-  content: (m.content || '').slice(0, 1500),
-  timestamp: m.timestamp,
-  reactions: m.reactions || {},
-  actionOptions: m.actionOptions || [],
-  pollVotes: m.pollVotes || {}
-});
-
-export async function analyzeDialogue(
-  messages: MessageItem[],
-  config: MentorConfig,
-  forced: boolean,
-  abortSignal?: AbortSignal,
-  whiteboardMemories?: WhiteboardMemoryItem[],
-  participants?: Record<string, Participant>,
-  roomId?: string
-): Promise<AiActionResponse> {
-  const slimParticipants = Object.fromEntries(
-    Object.entries(participants || {}).map(([uid, p]) => [uid, { uid, displayName: p.displayName, isHost: !!p.isHost, status: p.status }])
-  );
-  return call('mentorAnalyze', {
-    messages: messages.filter(m => m.senderUid !== 'system').slice(-MAX_CONTEXT_MESSAGES).map(toContextMessage),
-    participants: slimParticipants,
-    whiteboardMemories: (whiteboardMemories || []).slice(-6),
-    config,
-    forced,
-    language: currentLocale.value,
-    roomId
-  }, abortSignal);
+/** Forced mentor reply handled server-side; with `retryMessageId` the failed reply is replaced in place. */
+export async function requestMentorResponse(roomId: string, retryMessageId?: string): Promise<void> {
+  await call('mentorRespond', { roomId, retryMessageId });
 }
 
 export async function summarizeWhiteboardVisualSnapshot(imageDataUrl: string, assetId?: string): Promise<string> {

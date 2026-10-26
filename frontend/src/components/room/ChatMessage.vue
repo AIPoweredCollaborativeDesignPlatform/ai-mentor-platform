@@ -132,7 +132,7 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
       <div class="flex items-center gap-1.5 mb-0.5 text-[11px] text-slate-400" :class="isMine ? 'flex-row-reverse' : ''">
         <span class="font-medium text-slate-300 truncate">{{ msg.senderName }}</span>
         <span class="text-[9px] text-slate-500/70 font-mono tracking-wider">{{ formatTime(msg.timestamp) }}</span>
-        <span v-if="isAi" class="text-[10px] bg-sky-500/20 text-sky-300 border border-sky-500/30 px-1.5 py-0.2 rounded-md font-mono">AI Mentor</span>
+        <span v-if="isAi" class="text-[10px] bg-sky-500/20 text-sky-300 border border-sky-500/30 px-1.5 py-0.2 rounded-md font-mono">AI</span>
       </div>
 
       <!-- Frameless image/video without caption -->

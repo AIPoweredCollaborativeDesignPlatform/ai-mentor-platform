@@ -29,6 +29,26 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // Experiment condition profiles (AI name, persona, mode, timing, modules) and their version history
+    match /aiProfiles/{profileId} {
+      allow read, write: if isAdmin();
+      match /versions/{version} {
+        allow read, write: if isAdmin();
+      }
+    }
+
+    // Per-room frozen profile, trigger state and long-term AI memory: written only by Cloud Functions
+    match /roomAi/{roomId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // Research log of every AI decision: written only by Cloud Functions
+    match /aiLogs/{logId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
     match /users/{userId} {
       allow read, write: if isAuthenticated() && request.auth.uid == userId;
       match /{allSubcollections=**} {

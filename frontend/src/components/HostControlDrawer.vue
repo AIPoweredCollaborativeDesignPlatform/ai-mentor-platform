@@ -2,10 +2,8 @@
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import { useRoomStore } from '../stores/room';
-import { useMentorStore } from '../stores/mentor';
 import { db } from '../firebase/config';
 import { doc, updateDoc, addDoc, collection } from 'firebase/firestore';
-import type { SensitivityLevel } from '../types';
 import {
   Sliders,
   Users,
@@ -52,7 +50,6 @@ const emit = defineEmits<{
 const router = useRouter();
 const authStore = useAuthStore();
 const roomStore = useRoomStore();
-const mentorStore = useMentorStore();
 
 const showLeaveModal = ref(false);
 const showEndAllModal = ref(false);
@@ -141,15 +138,6 @@ const handleGoogleSignIn = async () => {
 };
 
 
-const handleSelectSensitivity = async (level: SensitivityLevel) => {
-  mentorStore.setSensitivity(level);
-  await roomStore.syncMentorConfig();
-};
-
-const handleToggleModule = async (moduleKey: 'enable3D' | 'enableMoodboard' | 'enableFactRetrieval' | 'enableProcessIntervention') => {
-  mentorStore.toggleModule(moduleKey);
-  await roomStore.syncMentorConfig();
-};
 
 const triggerLeaveFlow = () => {
   if (roomStore.isHost && !authStore.isGoogleLinked) {
@@ -229,11 +217,6 @@ onUnmounted(() => {
 });
 
 
-const sensitivities: { id: SensitivityLevel; name: string; desc: string }[] = [
-  { id: 'Strict', name: 'Strict', desc: 'Only responds when @Mentor is mentioned' },
-  { id: 'Conservative', name: 'Conservative (Default)', desc: 'Intervenes on divergence, stagnation, or visual needs' },
-  { id: 'Exploratory', name: 'Exploratory', desc: 'Proactively suggests variations and references' }
-];
 </script>
 
 <template>
@@ -591,125 +574,10 @@ const sensitivities: { id: SensitivityLevel; name: string; desc: string }[] = [
         </section>
 
         <hr class="border-slate-800" />
-        <!-- Research condition & AI modules: study administrator only (moves to the observer panel later) -->
-        <template v-if="isStudyAdmin">
-        <!-- 4. AI Mentor Sensitivity -->
-        <section>
-          <h4 class="font-semibold text-sm text-slate-100 mb-1 flex items-center gap-2">
-            <Sliders class="w-4 h-4 text-sky-400" />
-            AI Mentor Sensitivity
-          </h4>
-          <p class="text-xs text-slate-400 mb-3">
-            Control when the AI intervenes in the conversation
-          </p>
-
-          <div class="space-y-2">
-            <div
-              v-for="s in sensitivities"
-              :key="s.id"
-              @click="handleSelectSensitivity(s.id)"
-              class="p-3 rounded-xl border cursor-pointer transition flex flex-col gap-1"
-              :class="mentorStore.config.sensitivity === s.id
-                ? 'bg-sky-950/40 border-sky-500 text-sky-100 shadow-sm'
-                : 'bg-slate-950/50 border-slate-800 text-slate-300 hover:border-slate-700'"
-            >
-              <div class="flex items-center justify-between">
-                <span class="text-sm font-semibold">{{ s.name }}</span>
-                <span
-                  class="w-3 h-3 rounded-full border"
-                  :class="mentorStore.config.sensitivity === s.id ? 'bg-sky-400 border-sky-300' : 'border-slate-600'"
-                ></span>
-              </div>
-              <p class="text-xs opacity-75">{{ s.desc }}</p>
-            </div>
-          </div>
-        </section>
-
-        <!-- 5. Module Toggles -->
-        <section>
-          <h4 class="font-semibold text-sm text-slate-100 mb-3">
-            AI Asset Modules
-          </h4>
-
-          <div class="space-y-2.5">
-            <div
-              class="flex items-center justify-between p-3 rounded-xl bg-slate-950/50 border border-slate-800 cursor-pointer hover:border-slate-700"
-              @click="handleToggleModule('enable3D')"
-            >
-              <div class="flex items-center gap-2.5">
-                <Box class="w-4 h-4 text-sky-400" />
-                <span class="text-sm text-slate-200">3D Prototype (Code-to-3D / GLB)</span>
-              </div>
-              <div
-                class="w-10 h-5 rounded-full p-0.5 transition-colors duration-200 ease-in-out"
-                :class="mentorStore.config.enable3D ? 'bg-sky-500' : 'bg-slate-700'"
-              >
-                <div
-                  class="w-4 h-4 rounded-full bg-white transition-transform duration-200 ease-in-out transform"
-                  :class="mentorStore.config.enable3D ? 'translate-x-5' : 'translate-x-0'"
-                ></div>
-              </div>
-            </div>
-
-            <div
-              class="flex items-center justify-between p-3 rounded-xl bg-slate-950/50 border border-slate-800 cursor-pointer hover:border-slate-700"
-              @click="handleToggleModule('enableMoodboard')"
-            >
-              <div class="flex items-center gap-2.5">
-                <Palette class="w-4 h-4 text-amber-400" />
-                <span class="text-sm text-slate-200">Visual Mood Board</span>
-              </div>
-              <div
-                class="w-10 h-5 rounded-full p-0.5 transition-colors duration-200 ease-in-out"
-                :class="mentorStore.config.enableMoodboard ? 'bg-amber-500' : 'bg-slate-700'"
-              >
-                <div
-                  class="w-4 h-4 rounded-full bg-white transition-transform duration-200 ease-in-out transform"
-                  :class="mentorStore.config.enableMoodboard ? 'translate-x-5' : 'translate-x-0'"
-                ></div>
-              </div>
-            </div>
-
-            <div
-              class="flex items-center justify-between p-3 rounded-xl bg-slate-950/50 border border-slate-800 cursor-pointer hover:border-slate-700"
-              @click="handleToggleModule('enableFactRetrieval')"
-            >
-              <div class="flex items-center gap-2.5">
-                <Search class="w-4 h-4 text-emerald-400" />
-                <span class="text-sm text-slate-200">Fact Retrieval & Verification</span>
-              </div>
-              <div
-                class="w-10 h-5 rounded-full p-0.5 transition-colors duration-200 ease-in-out"
-                :class="mentorStore.config.enableFactRetrieval ? 'bg-emerald-500' : 'bg-slate-700'"
-              >
-                <div
-                  class="w-4 h-4 rounded-full bg-white transition-transform duration-200 ease-in-out transform"
-                  :class="mentorStore.config.enableFactRetrieval ? 'translate-x-5' : 'translate-x-0'"
-                ></div>
-              </div>
-            </div>
-
-            <div
-              class="flex items-center justify-between p-3 rounded-xl bg-slate-950/50 border border-slate-800 cursor-pointer hover:border-slate-700"
-              @click="handleToggleModule('enableProcessIntervention')"
-            >
-              <div class="flex items-center gap-2.5">
-                <FileCheck2 class="w-4 h-4 text-purple-400" />
-                <span class="text-sm text-slate-200">Executive Meeting Summary</span>
-              </div>
-              <div
-                class="w-10 h-5 rounded-full p-0.5 transition-colors duration-200 ease-in-out"
-                :class="mentorStore.config.enableProcessIntervention ? 'bg-purple-500' : 'bg-slate-700'"
-              >
-                <div
-                  class="w-4 h-4 rounded-full bg-white transition-transform duration-200 ease-in-out transform"
-                  :class="mentorStore.config.enableProcessIntervention ? 'translate-x-5' : 'translate-x-0'"
-                ></div>
-              </div>
-            </div>
-          </div>
-        </section>
-        </template>
+        <!-- Research conditions are managed in the admin page (/#/admin) -->
+        <router-link v-if="isStudyAdmin" to="/admin" class="block p-3 rounded-xl border border-sky-500/40 bg-sky-950/40 text-xs text-sky-200 hover:bg-sky-900/50 transition">
+          研究設定後台：AI 條件設定檔、指派房間、費用估算 →
+        </router-link>
 
         <hr class="border-slate-800" />
 

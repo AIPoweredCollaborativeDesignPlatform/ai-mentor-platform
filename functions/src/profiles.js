@@ -1,0 +1,65 @@
+import { getFirestore } from 'firebase-admin/firestore';
+import { getSystemConfig } from './config.js';
+
+/**
+ * Experiment condition profile. Stored in aiProfiles/{id} (edited from /#/admin, versioned);
+ * a room keeps a frozen snapshot in roomAi/{roomId}.profile so later edits never affect it.
+ * The timing values below are placeholders until literature-backed values are entered.
+ */
+export const DEFAULT_PROFILE = {
+  name: 'Proactive (built-in default)',
+  description: 'Fallback used when no profile has been assigned.',
+  version: 0,
+  mode: 'proactive', // 'none' | 'reactive' | 'proactive'
+  shadowAssessment: true,
+  displayName: { 'zh-TW': 'AI 導師', en: 'AI Mentor' },
+  persona: 'A calm, neutral design mentor who supports the team\'s own decisions, keeps track of what was agreed, and speaks briefly.',
+  triggers: {
+    pauseSeconds: 8, // quiet time after the last message before an automatic check
+    minNewMessages: 3, // new messages needed for a pause-triggered check
+    maxMessagesBetweenChecks: 12, // forces a check during long uninterrupted discussion
+    stallSeconds: 90, // silence after activity that counts as a stall
+    cooldownSeconds: 60 // minimum gap between automatic interventions
+  },
+  memory: {
+    updateEveryMessages: 15,
+    updateOnWhiteboardShare: true
+  },
+  modules: {
+    enable3D: true,
+    enableMoodboard: true,
+    enableFactRetrieval: true,
+    enableSummary: true,
+    enableWhiteboardAi: true
+  },
+  rationale: {}
+};
+
+const merge = (base, override) => {
+  const out = { ...base };
+  for (const [k, v] of Object.entries(override || {})) {
+    out[k] = v && typeof v === 'object' && !Array.isArray(v) ? merge(base[k] || {}, v) : v;
+  }
+  return out;
+};
+
+/** Profile document merged over defaults so older profiles gain new fields safely. */
+export async function loadProfile(profileId) {
+  if (!profileId) return { id: null, ...DEFAULT_PROFILE };
+  const snap = await getFirestore().doc(`aiProfiles/${profileId}`).get();
+  return snap.exists ? { id: profileId, ...merge(DEFAULT_PROFILE, snap.data()) } : { id: null, ...DEFAULT_PROFILE };
+}
+
+export async function loadDefaultProfile() {
+  const sys = await getSystemConfig();
+  return loadProfile(sys.defaultProfileId);
+}
+
+/** The only AI facts participants' browsers receive (rooms/{id}.ai): no mode, no persona, no condition id. */
+export const publicAiView = profile => ({
+  enabled: profile.mode !== 'none',
+  displayName: profile.displayName,
+  modules: profile.mode === 'none'
+    ? { enable3D: false, enableMoodboard: false, enableFactRetrieval: false, enableSummary: false, enableWhiteboardAi: false }
+    : profile.modules
+});

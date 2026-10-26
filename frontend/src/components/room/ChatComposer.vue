@@ -6,6 +6,7 @@ import { useRoomStore } from '../../stores/room';
 import type { MessageItem } from '../../types';
 import { t } from '../../i18n';
 import { compressImage, getVideoDuration, readAsDataUrl } from '../../utils/files';
+import { useRoomAi } from '../../composables/useRoomAi';
 
 const props = defineProps<{
   isMeetingClosed: boolean;
@@ -23,13 +24,20 @@ const MAX_VIDEO_BYTES = 15 * 1024 * 1024;
 const MAX_VIDEO_SECONDS = 32; // 30s limit with a little tolerance
 const MAX_DOC_BYTES = 10 * 1024 * 1024;
 
-const QUICK_TAGS = [
-  { tag: '@Mentor', label: '@Mentor', icon: Sparkles, iconClass: '', accent: true },
-  { tag: '@Mentor generate a 3D prototype', label: '3D Prototype', icon: Box, iconClass: 'text-sky-400' },
-  { tag: '@Mentor create a visual mood board', label: 'Mood Board', icon: Palette, iconClass: 'text-amber-400' },
-  { tag: '@Mentor fact-check this design specification', label: 'Fact Check', icon: Check, iconClass: 'text-emerald-400' },
-  { tag: '@Mentor summarize the discussion so far', label: 'Summary', icon: FileText, iconClass: 'text-purple-400' }
-];
+const { aiEnabled, aiName, aiModules } = useRoomAi();
+
+// Shortcuts for the AI; hidden entirely in no-AI rooms, and per disabled module
+const quickTags = computed(() => {
+  if (!aiEnabled.value) return [];
+  const m = aiModules.value;
+  return [
+    { tag: '@Mentor', label: `@${aiName.value}`, icon: Sparkles, iconClass: '', accent: true, show: true },
+    { tag: '@Mentor generate a 3D prototype', label: '3D Prototype', icon: Box, iconClass: 'text-sky-400', show: m.enable3D },
+    { tag: '@Mentor create a visual mood board', label: 'Mood Board', icon: Palette, iconClass: 'text-amber-400', show: m.enableMoodboard },
+    { tag: '@Mentor fact-check this design specification', label: 'Fact Check', icon: Check, iconClass: 'text-emerald-400', show: m.enableFactRetrieval },
+    { tag: '@Mentor summarize the discussion so far', label: 'Summary', icon: FileText, iconClass: 'text-purple-400', show: m.enableSummary }
+  ].filter(q => q.show);
+});
 
 interface StagedAttachment {
   name: string;
@@ -82,7 +90,7 @@ const checkMentionTrigger = () => {
 
 const mentionCandidates = computed(() => {
   const list = [
-    { id: 'mentor', name: 'AI Mentor', avatar: '✨', handle: '@mentor', isAi: true, subtitle: 'Ask AI Design Mentor' },
+    ...(aiEnabled.value ? [{ id: 'mentor', name: aiName.value, avatar: '✨', handle: '@mentor', isAi: true, subtitle: 'AI' }] : []),
     ...Object.entries(roomStore.currentRoom?.participants || {})
       .filter(([, p]) => p.status === 'approved')
       .map(([uid, p]) => ({
@@ -281,7 +289,7 @@ defineExpose({ setReply, sendFile });
     <div class="max-w-4xl mx-auto space-y-1.5">
       <!-- Room-wide AI task banner -->
       <div
-        v-if="roomStore.currentRoom?.aiActiveTask"
+        v-if="aiEnabled && roomStore.currentRoom?.aiActiveTask"
         class="flex items-center justify-between p-2.5 rounded-xl bg-sky-950/90 border border-sky-500/40 shadow-lg text-xs text-sky-200 animate-pulse"
       >
         <div class="flex items-center gap-2.5 min-w-0">
@@ -289,7 +297,7 @@ defineExpose({ setReply, sendFile });
             <Loader2 class="w-4 h-4 animate-spin text-sky-400" />
           </div>
           <div class="min-w-0">
-            <p class="font-semibold text-sky-200 truncate">AI Mentor is responding to {{ roomStore.currentRoom.aiActiveTask.callerName }}...</p>
+            <p class="font-semibold text-sky-200 truncate">{{ aiName }} is responding{{ roomStore.currentRoom.aiActiveTask.callerName ? ` to ${roomStore.currentRoom.aiActiveTask.callerName}` : '' }}...</p>
             <p class="text-slate-400 text-[11px] truncate">{{ roomStore.currentRoom.aiActiveTask.type }}: "{{ roomStore.currentRoom.aiActiveTask.prompt }}"</p>
           </div>
         </div>
@@ -316,8 +324,8 @@ defineExpose({ setReply, sendFile });
 
       <div class="flex items-center gap-1.5 overflow-x-auto pb-0.5 text-[11px] text-slate-400">
         <button
-          v-for="q in QUICK_TAGS"
-          :key="q.tag"
+          v-for="q in quickTags"
+          :key="q.label"
           @click="insertQuickTag(q.tag)"
           :disabled="isMeetingClosed"
           class="px-2 py-0.5 rounded-lg border disabled:opacity-40 transition flex items-center gap-1 shrink-0"
@@ -405,7 +413,7 @@ defineExpose({ setReply, sendFile });
             :disabled="isBlocked"
             :placeholder="isMeetingClosed
               ? 'This meeting has been closed. Chat is in read-only mode.'
-              : isMuted ? 'You have been muted by the host.' : 'Type a message (e.g. @Mentor or @Name)...'"
+              : isMuted ? 'You have been muted by the host.' : aiEnabled ? 'Type a message (e.g. @Mentor or @Name)...' : 'Type a message (e.g. @Name)...'"
             class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-base sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500 transition resize-none min-h-[44px] max-h-32 overflow-y-auto disabled:opacity-50"
             rows="1"
           ></textarea>

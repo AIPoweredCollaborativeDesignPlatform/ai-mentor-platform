@@ -4,6 +4,7 @@ import { AlertCircle, ArrowLeft, Bell, BellOff, Box, Check, Copy, Edit3, Lock, S
 import { useAuthStore } from '../../stores/auth';
 import { useRoomStore } from '../../stores/room';
 import { useNotificationSound } from '../../composables/useNotificationSound';
+import { useRoomAi } from '../../composables/useRoomAi';
 
 const props = defineProps<{
   pin: string;
@@ -20,6 +21,7 @@ const emit = defineEmits<{
 const authStore = useAuthStore();
 const roomStore = useRoomStore();
 const { isSoundMuted, toggleSoundMute } = useNotificationSound();
+const { aiEnabled, aiName } = useRoomAi();
 
 const copiedUrl = ref(false);
 const copyInviteLink = () => {
@@ -101,10 +103,11 @@ const pillButton = 'inline-flex items-center gap-1 text-[11px] px-2 py-1.5 round
 
       <!-- AI status capsule -->
       <button
+        v-if="aiEnabled"
         @click="emit('toggle-settings')"
         class="hidden md:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition cursor-pointer"
         :class="AI_STATUS_CLASS[roomStore.aiStatus]"
-        :title="'AI Mentor: ' + roomStore.aiStatusDetail + ' (Click to configure)'"
+        :title="`${aiName}: ${roomStore.aiStatusDetail}`"
       >
         <Sparkles v-if="roomStore.aiStatus === 'idle'" class="w-3 h-3 text-sky-400" />
         <span v-else-if="roomStore.aiStatus === 'analyzing'" class="relative flex h-2 w-2">
@@ -113,7 +116,7 @@ const pillButton = 'inline-flex items-center gap-1 text-[11px] px-2 py-1.5 round
         </span>
         <span v-else-if="roomStore.aiStatus === 'cooldown'" class="text-[10px]">⏳</span>
         <AlertCircle v-else class="w-3 h-3 text-rose-400" />
-        <span class="max-w-[130px] truncate text-[11px]">{{ roomStore.aiStatusDetail }}</span>
+        <span class="max-w-[130px] truncate text-[11px]">{{ aiName }} · {{ roomStore.aiStatusDetail }}</span>
       </button>
 
       <button

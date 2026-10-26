@@ -52,8 +52,8 @@ export const useRoomStore = defineStore('room', () => {
 
   const sendMessage = async (text: string, replyTo?: { id: string; senderName: string; text: string }) => {
     if (!currentRoom.value || !text.trim()) return;
+    // Whether the AI responds is decided server-side when the message is stored
     await messages.sendTextMessage(text, replyTo);
-    await mentor.triggerMentorAgent(text);
   };
 
   const endMeetingForAll = async () => {

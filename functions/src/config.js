@@ -15,7 +15,19 @@ export const DEFAULT_SYSTEM_CONFIG = {
   imageModel: 'fal-ai/flux/schnell',
   engine3D: 'meshy',
   // Only for Anthropic keys not scoped to a workspace (Console > Settings > Workspaces > ID)
-  anthropicWorkspaceId: null
+  anthropicWorkspaceId: null,
+  // Profile snapshotted into new rooms (aiProfiles/{id}); null = built-in DEFAULT_PROFILE
+  defaultProfileId: null,
+  memoryModel: 'claude-haiku-5-5',
+  // USD, editable from /#/admin for the cost estimator (prices change; verify against vendor pages)
+  prices: {
+    'claude-haiku-5-5': { inputPerMTok: 0.10, outputPerMTok: 0.50 },
+    'claude-sonnet-5-5': { inputPerMTok: 2.00, outputPerMTok: 10.00 },
+    'claude-opus-5-5': { inputPerMTok: 4.00, outputPerMTok: 20.00 },
+    webSearchPerUse: 0.01,
+    imagePerUnit: 0.003,
+    model3DPerUnit: 0
+  }
 };
 
 let cached = null;

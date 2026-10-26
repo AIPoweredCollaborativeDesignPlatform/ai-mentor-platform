@@ -1,5 +1,5 @@
 // Bump whenever any prompt text changes; it is stored with every AI output for the research log.
-export const PROMPT_VERSION = 'v2-2026-10-26';
+export const PROMPT_VERSION = 'v3-2026-10-26';
 
 const LANGUAGE_NAMES = { en: 'English', 'zh-TW': 'Traditional Chinese (繁體中文)' };
 export const languageName = code => LANGUAGE_NAMES[code] || LANGUAGE_NAMES['zh-TW'];
@@ -54,20 +54,40 @@ export function buildTranscript(messages, participants) {
   }).join('\n');
 }
 
-export function mentorSystemPrompt({ config, language, whiteboardMemories, participants, messages }) {
+/** Long-term room memory rendered for the prompt (see MEMORY_PROMPT for its shape). */
+function renderMemory(memory) {
+  if (!memory?.summary && !memory?.decisions?.length) return '';
+  const people = Object.values(memory.participants || {})
+    .map(p => `- ${p.name}: ${p.engagement || '?'}; stance: ${p.stance || 'n/a'}; tags: ${(p.tags || []).join(', ') || 'none'}${p.notes ? `; ${p.notes}` : ''}`)
+    .join('\n');
+  const said = (memory.aiHistory || []).slice(-5).map(h => `- (${h.type || 'message'}) ${h.text}`).join('\n');
+  return `=== YOUR LONG-TERM MEMORY OF THIS SESSION (internal; never quote it verbatim) ===
+Summary so far: ${memory.summary || 'n/a'}
+Decisions: ${(memory.decisions || []).join('; ') || 'none yet'}
+Open questions: ${(memory.openQuestions || []).join('; ') || 'none'}
+Participants:
+${people || '- none recorded'}
+What you said recently (stay consistent with it):
+${said || '- nothing yet'}`;
+}
+
+export function mentorSystemPrompt({ config, language, whiteboardMemories, participants, messages, profile, memory }) {
   const lang = languageName(language);
   const memories = (whiteboardMemories || []).slice(-6)
     .map(m => `[Whiteboard snapshot at ${m.timeFormatted}]: ${m.summary}`).join('\n');
 
-  return `You are an expert AI Design Mentor facilitating a remote collaborative design session between human designers.
+  const name = profile?.displayName?.[language] || profile?.displayName?.en || 'AI Mentor';
+  return `You are "${name}", an expert design mentor facilitating a remote collaborative design session between human designers.
+Persona: ${profile?.persona || 'calm, neutral and brief'}
+You are the same mentor for the whole session: keep continuity with your memory below.
 Always write user-facing text in ${lang}.
-Current sensitivity: ${config.sensitivity}
-Modules enabled: 3D=${config.enable3D}, Moodboard=${config.enableMoodboard}, FactRetrieval=${config.enableFactRetrieval}, ProcessIntervention=${config.enableProcessIntervention}. Never produce an asset type whose module is disabled.
+Modules enabled: 3D=${config.enable3D}, Moodboard=${config.enableMoodboard}, FactRetrieval=${config.enableFactRetrieval}, Summary=${config.enableSummary !== false}. Never produce an asset type whose module is disabled.
+${renderMemory(memory)}
 ${memories ? `\nRecent whiteboard evolution:\n${memories}\n` : ''}
 ${teamDynamics(participants, messages)}
 
 Decide whether to intervene:
-1. If @Mentor is mentioned or the request is forced, you MUST intervene.
+1. If you are mentioned (@Mentor or your name) or the request is forced, you MUST intervene.
 2. Questions about the whiteboard, sketches or diagrams: use the whiteboard evolution above.
 3. Topic drift: if the team drifts into unrelated chit-chat during the session, tactfully steer back to the design goal.
 4. Stalls: if the discussion circles without converging for several messages, suggest voting options, a summary, or next steps.
@@ -136,3 +156,15 @@ The team's language is ${languageName(language)}; use it to understand any notes
 ${SVG_RULES}
 ${notes ? `\nDesigner notes (guidance only, do NOT render this text):\n"""\n${notes}\n"""` : ''}`;
 }
+
+// Incremental long-term memory: previous memory + messages since the last update -> new memory
+export const MEMORY_PROMPT = `You maintain the long-term memory of an AI design mentor for one collaborative design session.
+Update the memory with the new messages. Keep it compact (summary under 200 words), factual and grounded in the transcript.
+Write in English. Keep previous decisions unless the team explicitly reversed them.
+Return ONLY one JSON object:
+{
+  "summary": "running summary of goals, ideas and progress",
+  "decisions": ["agreed decisions"],
+  "openQuestions": ["unresolved questions or disagreements"],
+  "participants": { "<uid>": { "name": string, "engagement": "active" | "moderate" | "quiet" | "silent", "stance": "short description", "tags": ["short labels"], "notes": "anything worth remembering" } }
+}`;

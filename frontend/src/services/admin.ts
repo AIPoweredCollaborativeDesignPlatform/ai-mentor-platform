@@ -9,7 +9,10 @@ import type { AiProfile } from '../utils/aiProfiles';
 
 export async function listProfiles(): Promise<AiProfile[]> {
   const snap = await getDocs(collection(db, 'aiProfiles'));
-  return snap.docs.map(d => ({ ...(d.data() as AiProfile), id: d.id })).sort((a, b) => a.name.localeCompare(b.name));
+  return snap.docs
+    .map(d => ({ ...(d.data() as AiProfile & { archived?: boolean }), id: d.id }))
+    .filter(p => !p.archived)
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** Saves as a new version and archives that version under aiProfiles/{id}/versions. */

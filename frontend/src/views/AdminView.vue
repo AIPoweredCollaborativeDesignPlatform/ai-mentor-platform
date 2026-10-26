@@ -90,8 +90,27 @@ const onSaveProfile = async (p: AiProfile) => {
   }
 };
 
+// Guarded so repeated clicks cannot create duplicate sets
+const seeding = ref(false);
 const seedProfiles = async () => {
-  for (const p of SEED_PROFILES) await saveProfile(p, authStore.email);
+  if (seeding.value || profiles.value.length) return;
+  seeding.value = true;
+  try {
+    for (const p of SEED_PROFILES) await saveProfile(p, authStore.email);
+    profiles.value = await listProfiles();
+  } finally {
+    seeding.value = false;
+  }
+};
+
+// Archived profiles are hidden from lists; rooms keep their frozen snapshot, so nothing breaks
+const archiveProfile = async (p: AiProfile) => {
+  if (system.value.defaultProfileId === p.id) {
+    roomStore.pushToast('無法封存', '這是新房間的預設設定檔，請先改設其他預設。', 'warning');
+    return;
+  }
+  if (!window.confirm(`封存「${p.name}」v${p.version}？已指派此設定檔的房間不受影響。`)) return;
+  await saveProfile({ ...p, archived: true } as AiProfile, authStore.email);
   profiles.value = await listProfiles();
 };
 
@@ -239,7 +258,7 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
         <template v-else>
           <div class="flex flex-wrap items-center gap-2">
             <button @click="editing = newProfile({ name: '新設定檔' })" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-xs font-semibold">＋ 新增設定檔</button>
-            <button v-if="!profiles.length" @click="seedProfiles" class="px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs">建立預設三組（無 AI／Reactive／Proactive）</button>
+            <button v-if="!profiles.length" @click="seedProfiles" :disabled="seeding" class="px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs">建立預設三組（無 AI／Reactive／Proactive）</button>
             <span class="text-[11px] text-slate-500">新房間預設：{{ profileName(system.defaultProfileId) }}</span>
           </div>
           <div v-for="p in profiles" :key="p.id" :class="card" class="flex flex-wrap items-start gap-3">
@@ -259,6 +278,7 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
               <button @click="editing = p" class="px-2.5 py-1 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs">編輯</button>
               <button @click="duplicate(p)" class="px-2.5 py-1 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs">複製</button>
               <button v-if="system.defaultProfileId !== p.id" @click="setDefaultProfile(p.id!)" class="px-2.5 py-1 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs">設為預設</button>
+              <button @click="archiveProfile(p)" class="px-2.5 py-1 rounded-lg border border-slate-700 hover:bg-rose-900/40 text-xs text-rose-300">封存</button>
             </div>
           </div>
         </template>

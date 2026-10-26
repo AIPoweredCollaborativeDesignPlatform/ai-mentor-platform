@@ -277,6 +277,8 @@ export async function handleNewMessage(roomId, messageId, msg, secrets) {
   await sleep(stallMs - pauseMs);
   s = await latestState();
   if (s.lastMessageId !== messageId || s.lastStallMessageId === messageId) return;
+  // The AI already answered this message (e.g. a 3D job that finished during the wait) — not a stall
+  if ((s.lastInterventionAt || 0) > s.lastMessageAt) return;
   await roomAiRef(roomId).set({ state: { lastStallMessageId: messageId } }, { merge: true });
   await runCheck(roomId, secrets, { reason: 'stall' });
 }

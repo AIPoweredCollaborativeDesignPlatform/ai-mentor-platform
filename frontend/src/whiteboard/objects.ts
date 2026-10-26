@@ -1,9 +1,9 @@
 import * as fabric from 'fabric';
 
 // Every board object carries a stable id; it is the Firestore doc id of rooms/{r}/boards/{b}/objects/{id}
-fabric.FabricObject.customProperties = ['id', 'z'];
+fabric.FabricObject.customProperties = ['id', 'z', 'locked'];
 
-export type BoardObject = fabric.FabricObject & { id: string; z: number };
+export type BoardObject = fabric.FabricObject & { id: string; z: number; locked?: boolean };
 
 export const newId = () => `o_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 
@@ -19,7 +19,7 @@ export class StickyNote extends fabric.Textbox {
   static type = 'sticky';
   declare minHeight: number;
 
-  static customProperties = ['id', 'z', 'minHeight'];
+  static customProperties = ['minHeight'];
 
   constructor(text: string, options: Partial<fabric.TextboxProps> & { minHeight?: number } = {}) {
     super(text, { padding: STICKY_PAD, fontSize: 18, fontFamily: 'Inter, system-ui, sans-serif', fill: '#1e293b', splitByGrapheme: true, objectCaching: false, ...options });

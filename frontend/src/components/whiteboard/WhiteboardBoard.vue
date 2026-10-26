@@ -4,7 +4,8 @@ import * as fabric from 'fabric';
 import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
 import {
   Circle, Download, Eraser, Globe, Hand, Image as ImageIcon, Lock, Minus, MousePointer2, PenLine, Plus, Redo2,
-  Send, Sparkles, Square, StickyNote as StickyIcon, Trash2, Type, Undo2, Wand2, X, ArrowUpToLine, ArrowDownToLine
+  Send, Sparkles, Square, StickyNote as StickyIcon, Trash2, Type, Undo2, Wand2, X, ArrowUpToLine, ArrowDownToLine,
+  MoveUpRight, Group as GroupIcon, Ungroup, LockOpen
 } from 'lucide-vue-next';
 import { storage } from '../../firebase/config';
 import { useAuthStore } from '../../stores/auth';
@@ -20,6 +21,9 @@ import { createBoardSync, type BoardSync, type ObjectDoc, type PresenceDoc, type
 import { createHistory, type ObjectState } from '../../whiteboard/history';
 import { downscaleImage, renderObjects, renderSnapshot, renderThumbnail } from '../../whiteboard/exporting';
 import { convertLegacyBoard } from '../../whiteboard/legacy';
+import { Connector, attachTargetAt, createConnector, dragEnd, layoutConnector, setConnectorLookup } from '../../whiteboard/connectors';
+import { recognizeStroke, type QuickShape } from '../../whiteboard/quickshape';
+import { attachPinchZoom } from '../../whiteboard/touch';
 
 const props = defineProps<{ roomId: string; boardId: string }>();
 const emit = defineEmits<{ (e: 'close'): void; (e: 'share', file: File): void }>();
@@ -36,13 +40,14 @@ const creatorName = computed(() => board.value?.metadata?.creatorName || board.v
 const showWhiteboardAi = computed(() => aiModules.value.enableWhiteboardAi);
 
 // ---------- tools ----------
-type Tool = 'select' | 'hand' | 'pen' | 'eraser' | 'sticky' | 'text' | 'rect' | 'ellipse';
+type Tool = 'select' | 'hand' | 'pen' | 'eraser' | 'sticky' | 'text' | 'rect' | 'ellipse' | 'arrow';
 const tool = ref<Tool>('select');
 const COLORS = ['#0f172a', '#ef4444', '#f97316', '#eab308', '#22c55e', '#0ea5e9', '#6366f1', '#a855f7', '#ec4899', '#ffffff'];
 const color = ref(COLORS[0]);
 const penWidth = ref(4);
 const shapeFilled = ref(false);
 const stickyColor = ref(STICKY_COLORS[0]);
+const isolated = shallowRef<(fabric.Group & BoardObject) | null>(null); // group being edited from inside
 const zoomPct = ref(100);
 const isLoading = ref(true);
 const loadError = ref('');
@@ -77,6 +82,8 @@ const colorFor = (uid: string) => CURSOR_COLORS[[...uid].reduce((h, c) => (h * 3
 /** Absolute state of an object, also when it is inside the active multi-selection. */
 function stateOf(obj: BoardObject): { z: number; fabric: Record<string, any> } {
   const json = serialize(obj);
+  // Group isolation is a local editing mode, never stored
+  if (obj instanceof fabric.Group) Object.assign(json, { interactive: false, subTargetCheck: false });
   if (obj.group) {
     const d = fabric.util.qrDecompose(obj.calcTransformMatrix());
     Object.assign(json, { left: d.translateX, top: d.translateY, angle: d.angle, scaleX: d.scaleX, scaleY: d.scaleY, skewX: d.skewX, skewY: 0 });
@@ -92,10 +99,27 @@ function centerOrigin(obj: fabric.FabricObject) {
   obj.setPositionByOrigin(c, 'center', 'center');
 }
 
+/** Locked objects can be selected (to unlock them) but not moved, resized, rotated or edited. */
+function applyLock(obj: fabric.FabricObject) {
+  const l = Boolean((obj as BoardObject).locked);
+  obj.set({ lockMovementX: l, lockMovementY: l, lockRotation: l, lockScalingX: l, lockScalingY: l, hasControls: !l, hoverCursor: l ? 'default' : null } as any);
+  if (obj instanceof fabric.IText) obj.editable = !l;
+}
+
+/** The stored board object an object belongs to (itself, or the outermost group around it). */
+function topOf(obj: fabric.FabricObject): fabric.FabricObject {
+  let t = obj;
+  while ((t as any).parent) t = (t as any).parent;
+  return t;
+}
+const topsOf = (list: fabric.FabricObject[]) =>
+  [...new Set(list.map(topOf))].filter((o): o is BoardObject => isBoardObject(o) && objects.has(o.id));
+
 function prepare(obj: BoardObject) {
   centerOrigin(obj);
   obj.set({ lockScalingFlip: true, borderColor: '#6366f1', cornerColor: '#ffffff', cornerStrokeColor: '#6366f1', transparentCorners: false, cornerSize: 10 });
   if (obj instanceof fabric.Path) obj.set({ perPixelTargetFind: true });
+  applyLock(obj);
   if (obj instanceof fabric.FabricImage) {
     const el = obj.getElement() as HTMLImageElement;
     if (el && !el.complete) el.addEventListener('load', () => canvas?.requestRenderAll(), { once: true });
@@ -122,13 +146,29 @@ function removeLocal(id: string) {
   objects.delete(id);
 }
 
+// ---------- connectors ----------
+const findObject = (id: string) => objects.get(id);
+setConnectorLookup(findObject);
+
+/** Top-level connectors with an end attached to one of `ids` (connectors inside a selection move with it). */
+const connectorsAttachedTo = (ids: Set<string>) =>
+  (canvas?.getObjects() || []).filter(
+    (o): o is Connector & BoardObject => o instanceof Connector && !o.group && ((!!o.startId && ids.has(o.startId)) || (!!o.endId && ids.has(o.endId)))
+  );
+
+/** Re-places connectors attached to `ids`; returns those that moved. */
+function relayoutConnectors(ids: Set<string>) {
+  return connectorsAttachedTo(ids).filter(c => layoutConnector(c, findObject));
+}
+
 // ---------- remote changes ----------
 const PATCH_SKIP = new Set(['type', 'version', 'path', 'src', 'objects', 'filters', 'resizeFilter', 'clipPath', 'id']);
 const pendingRemote = new Map<string, ObjectDoc | null>();
 
 const isBusyLocally = (obj: BoardObject) =>
-  Boolean(canvas && ((canvas as any)._currentTransform && canvas.getActiveObjects().includes(obj))) ||
-  (obj instanceof fabric.IText && obj.isEditing);
+  Boolean(canvas && ((canvas as any)._currentTransform && canvas.getActiveObjects().some(o => topOf(o) === obj))) ||
+  (obj instanceof fabric.IText && obj.isEditing) ||
+  obj === isolated.value;
 
 function canPatch(obj: BoardObject, data: Record<string, any>) {
   if (obj.type !== data.type) return false;
@@ -151,19 +191,25 @@ async function applyDoc(id: string, data: ObjectDoc | null) {
     const patch = Object.fromEntries(Object.entries(json).filter(([k]) => !PATCH_SKIP.has(k)));
     existing.set(patch);
     if (existing instanceof fabric.Textbox) existing.initDimensions();
+    if (existing instanceof Connector) existing.syncSize();
+    applyLock(existing);
     existing.setCoords();
     if ((existing.z || 0) !== data.z) {
       canvas.remove(existing);
       insertByZ(existing);
     }
     maxZ = Math.max(maxZ, data.z);
-    return;
+  } else {
+    const obj = await enliven(json);
+    if (!obj || !canvas) return;
+    prepare(obj);
+    if (objects.has(id)) removeLocal(id);
+    insertByZ(obj);
   }
-  const obj = await enliven(json);
-  if (!obj || !canvas) return;
-  prepare(obj);
-  if (objects.has(id)) removeLocal(id);
-  insertByZ(obj);
+  // Every client derives attached connector geometry itself, so a moved object never needs extra writes
+  const placed = objects.get(id);
+  if (placed instanceof Connector) layoutConnector(placed, findObject);
+  relayoutConnectors(new Set([id]));
 }
 
 async function applyRemote(changes: RemoteChange[]) {
@@ -189,6 +235,9 @@ async function ensureBoard() {
 
 async function persist(objs: BoardObject[], deletes: string[] = []) {
   if (!sync) return;
+  // Our write is newer than any remote version held back while we were busy with the object
+  objs.forEach(o => pendingRemote.delete(o.id));
+  deletes.forEach(id => pendingRemote.delete(id));
   await ensureBoard();
   await sync.commit(objs.map(o => ({ id: o.id, ...stateOf(o) })), deletes);
   scheduleThumbnail();
@@ -236,6 +285,25 @@ async function addObjects(list: BoardObject[], { select = true } = {}) {
 
 async function deleteObjects(list: BoardObject[]) {
   if (!canvas || !list.length) return;
+  if (list.some(o => (topOf(o) as BoardObject).locked)) {
+    showToast('Unlock it first to delete');
+    list = list.filter(o => !(topOf(o) as BoardObject).locked);
+    if (!list.length) return;
+  }
+  // Inside an isolated group: remove the children from their group, which stays one stored object
+  const children = list.filter(o => !objects.has(o.id) && (o as any).parent);
+  if (children.length) {
+    const groups = topsOf(children);
+    const before = snapshotStates(groups.map(g => g.id));
+    canvas.discardActiveObject();
+    children.forEach(c => ((c as any).parent as fabric.Group).remove(c));
+    groups.forEach(g => g.setCoords());
+    record(before, groups.map(g => g.id));
+    canvas.requestRenderAll();
+    await persist(groups);
+    list = list.filter(o => objects.has(o.id));
+    if (!list.length) return;
+  }
   const ids = list.map(o => o.id);
   const before = snapshotStates(ids);
   canvas.discardActiveObject();
@@ -306,6 +374,7 @@ function setupCanvas() {
   canvas.on('selection:created', updateSelection);
   canvas.on('selection:updated', updateSelection);
   canvas.on('selection:cleared', updateSelection);
+  canvas.on('mouse:dblclick', onDoubleClick);
   canvas.on('mouse:down', onMouseDown);
   canvas.on('mouse:move', onMouseMove);
   canvas.on('mouse:up', onMouseUp);
@@ -349,6 +418,12 @@ function applyTool() {
 watch([tool, color, penWidth], applyTool);
 
 function updateSelection() {
+  const active = canvas?.getActiveObject();
+  // A multi-selection containing a locked object does not move as a whole
+  if (active instanceof fabric.ActiveSelection) {
+    (active as any).locked = active.getObjects().some(o => (o as BoardObject).locked);
+    applyLock(active);
+  }
   selection.value = (canvas?.getActiveObjects() || []).filter(isBoardObject);
 }
 
@@ -361,13 +436,24 @@ let transformBefore: Map<string, ObjectState> | null = null;
 let liveWriteAt = 0;
 // A new note/text starts editing only after the click's mouseup, which would otherwise end the editing
 let pendingEdit: { obj: BoardObject; selectAll: boolean } | null = null;
+let drawingConnector: (Connector & BoardObject) | null = null;
+// A second finger turned the touch into a pinch: whatever the first finger started is dropped
+let gestureCancelled = false;
+// QuickShape: holding the pen still at the end of a stroke turns it into a clean shape
+const QUICK_HOLD_MS = 500;
+let quickTimer: ReturnType<typeof setTimeout> | undefined;
+let quickAnchor: { x: number; y: number } | null = null;
+let quick: { shape: QuickShape; preview: fabric.FabricObject } | null = null;
 
 const scenePoint = (e: fabric.TPointerEvent) => canvas!.getScenePoint(e);
 const clientXY = (e: fabric.TPointerEvent) => ('touches' in e && e.touches[0] ? e.touches[0] : (e as MouseEvent));
+const inkColor = () => (color.value === '#ffffff' ? '#0f172a' : color.value);
 
 function onMouseDown(opt: fabric.TPointerEventInfo) {
   if (!canvas) return;
   const e = opt.e as MouseEvent;
+  // Clicking anywhere outside the isolated group leaves it
+  if (isolated.value && (!opt.target || topOf(opt.target) !== isolated.value)) exitGroup();
   if (tool.value === 'hand' || spaceDown || e.button === 1) {
     const p = clientXY(opt.e);
     panning = { x: p.clientX, y: p.clientY };
@@ -381,6 +467,13 @@ function onMouseDown(opt: fabric.TPointerEventInfo) {
     obj.set({ selectable: false, evented: false });
     canvas.add(obj);
     drawingShape = { obj, start: p };
+  } else if (tool.value === 'arrow') {
+    const from = attachTargetAt(canvas, p) as BoardObject | undefined;
+    const conn = createConnector(p, inkColor(), 3, nextZ(), from?.id ?? null);
+    prepare(conn);
+    conn.set({ selectable: false, evented: false });
+    canvas.add(conn);
+    drawingConnector = conn;
   } else if (tool.value === 'sticky') {
     const note = createSticky(p, stickyColor.value, nextZ());
     tool.value = 'select';
@@ -409,21 +502,92 @@ function onMouseMove(opt: fabric.TPointerEventInfo) {
   if (drawingShape) {
     resizeShape(drawingShape.obj, drawingShape.start, p, (opt.e as MouseEvent).shiftKey);
     canvas.requestRenderAll();
+  } else if (drawingConnector) {
+    dragEnd(drawingConnector, 1, p, findObject);
+    canvas.requestRenderAll();
   } else if (erasing) {
     eraseAt(opt);
   }
   // Cursor and the stroke being drawn are broadcast to everyone on the board
   const brush = canvas.freeDrawingBrush as any;
-  const drawing = canvas.isDrawingMode && brush?._points?.length > 1;
+  const drawing = canvas.isDrawingMode && brush?._points?.length > 1 && !gestureCancelled;
+  if (drawing) watchPenHold(canvas.getViewportPoint(opt.e));
   sync?.updatePresence({
     x: p.x,
     y: p.y,
-    live: drawing ? { points: flattenPoints(brush._points), color: brush.color, width: brush.width } : null
+    live: drawing && !quick ? { points: flattenPoints(brush._points), color: brush.color, width: brush.width } : null
   });
+}
+
+// ---------- QuickShape ----------
+function watchPenHold(vp: fabric.Point) {
+  if (quick) return drawQuickPreview(); // the brush just repainted its stroke; keep showing the shape instead
+  if (quickAnchor && Math.hypot(vp.x - quickAnchor.x, vp.y - quickAnchor.y) < 4) return;
+  quickAnchor = { x: vp.x, y: vp.y };
+  clearTimeout(quickTimer);
+  quickTimer = setTimeout(recognizeHeldStroke, QUICK_HOLD_MS);
+}
+
+function recognizeHeldStroke() {
+  const brush = canvas?.freeDrawingBrush as any;
+  if (!canvas || !canvas.isDrawingMode || !(brush?._points?.length > 1) || gestureCancelled) return;
+  const shape = recognizeStroke(brush._points);
+  if (!shape) return;
+  quick = { shape, preview: buildQuickShape(shape, brush.color, brush.width, 0, false) };
+  drawQuickPreview();
+  sync?.updatePresence({ live: null }, true);
+}
+
+function drawQuickPreview() {
+  if (!canvas || !quick) return;
+  const ctx = canvas.contextTop;
+  canvas.clearContext(ctx);
+  ctx.save();
+  const v = canvas.viewportTransform;
+  ctx.transform(v[0], v[1], v[2], v[3], v[4], v[5]);
+  quick.preview.render(ctx);
+  ctx.restore();
+}
+
+function resetQuickShape() {
+  clearTimeout(quickTimer);
+  quickTimer = undefined;
+  quickAnchor = null;
+  quick = null;
+}
+
+/** Turns a recognised stroke into a board object (lines and arrows become connectors that can attach). */
+function buildQuickShape(shape: QuickShape, stroke: string, width: number, z: number, attach: boolean): BoardObject {
+  if (shape.kind === 'line' || shape.kind === 'arrow') {
+    const from = attach && canvas ? (attachTargetAt(canvas, shape.a) as BoardObject | undefined) : undefined;
+    const conn = createConnector(shape.a, stroke, width, z, from?.id ?? null);
+    conn.arrowEnd = shape.kind === 'arrow';
+    conn.setEnds(shape.a, shape.b);
+    if (attach && canvas) {
+      canvas.add(conn); // dragEnd looks for attach targets through conn.canvas
+      dragEnd(conn, 1, shape.b, findObject);
+      canvas.remove(conn);
+    }
+    return conn;
+  }
+  if (shape.kind === 'polygon') {
+    return assignBoardIdentity(new fabric.Polygon(shape.points, { stroke, strokeWidth: width, fill: 'transparent', strokeUniform: true, strokeLineJoin: 'round' }), z);
+  }
+  const obj = createShape(shape.kind, new fabric.Point(shape.left, shape.top), stroke, 'transparent', z);
+  obj.set({ strokeWidth: width });
+  resizeShape(obj, new fabric.Point(shape.left, shape.top), new fabric.Point(shape.left + shape.width, shape.top + shape.height), false);
+  return obj;
 }
 
 function onMouseUp() {
   if (!canvas) return;
+  clearTimeout(quickTimer);
+  if (gestureCancelled) {
+    gestureCancelled = false;
+    resetQuickShape();
+    canvas.clearContext(canvas.contextTop);
+    canvas.requestRenderAll();
+  }
   if (pendingEdit) {
     const { obj, selectAll } = pendingEdit;
     pendingEdit = null;
@@ -443,6 +607,20 @@ function onMouseUp() {
     tool.value = 'select';
     addObjects([obj]);
   }
+  if (drawingConnector) {
+    const conn = drawingConnector;
+    drawingConnector = null;
+    canvas.remove(conn);
+    // A plain click makes a default-length arrow
+    if (Math.hypot(conn.dx, conn.dy) < 8 && !conn.endId) {
+      const a = conn.getEnd(0);
+      conn.setEnds(a, new fabric.Point(a.x + 140, a.y));
+      layoutConnector(conn, findObject);
+    }
+    conn.set({ selectable: true, evented: true });
+    tool.value = 'select';
+    addObjects([conn]);
+  }
   if (erasing) {
     const { ids, before } = erasing;
     erasing = null;
@@ -461,7 +639,7 @@ function eraseAt(opt: fabric.TPointerEventInfo) {
   const vp = canvas.getViewportPoint(opt.e);
   const objs = [...canvas.getObjects()].reverse() as BoardObject[];
   for (const obj of objs) {
-    if (!isBoardObject(obj) || erasing.ids.has(obj.id)) continue;
+    if (!isBoardObject(obj) || erasing.ids.has(obj.id) || obj.locked) continue;
     if (!obj.containsPoint(p)) continue;
     if (obj instanceof fabric.Path && canvas.isTargetTransparent(obj, vp.x, vp.y)) continue;
     erasing.before.set(obj.id, stateOf(obj));
@@ -482,9 +660,25 @@ function flattenPoints(points: fabric.Point[]) {
 function onPathCreated({ path }: { path: fabric.Path }) {
   if (!canvas) return;
   canvas.remove(path);
-  const obj = assignBoardIdentity(path, nextZ());
-  addObjects([obj], { select: false });
+  const shape = quick?.shape;
+  resetQuickShape();
   sync?.updatePresence({ live: null }, true);
+  if (gestureCancelled) return;
+  const stroke = path.stroke as string;
+  const obj = shape ? buildQuickShape(shape, stroke, path.strokeWidth, nextZ(), true) : assignBoardIdentity(path, nextZ());
+  addObjects([obj], { select: false });
+}
+
+/** A second finger landed: drop the stroke, shape or arrow the first finger was making. */
+function cancelGesture() {
+  if (!canvas) return;
+  gestureCancelled = true;
+  resetQuickShape();
+  for (const d of [drawingShape?.obj, drawingConnector]) if (d) canvas.remove(d);
+  drawingShape = null;
+  drawingConnector = null;
+  canvas.clearContext(canvas.contextTop);
+  canvas.requestRenderAll();
 }
 
 function onWheel(opt: fabric.TPointerEventInfo<WheelEvent>) {
@@ -532,30 +726,141 @@ const viewportCenter = () => {
 };
 
 // ---------- transforms & text editing ----------
+/** Stored objects affected by transforming `t`, plus the connectors attached to them. */
+function transformScope(t: fabric.FabricObject) {
+  const list = topsOf(t instanceof fabric.ActiveSelection ? t.getObjects() : [t]);
+  const ids = new Set(list.map(o => o.id));
+  return { list, connectors: connectorsAttachedTo(ids).filter(c => !ids.has(c.id)) };
+}
+
 function onBeforeTransform(opt: { transform: fabric.Transform }) {
-  const t = opt.transform.target;
-  const list = (t instanceof fabric.ActiveSelection ? t.getObjects() : [t]).filter(isBoardObject);
-  transformBefore = snapshotStates(list.map(o => o.id));
+  const { list, connectors } = transformScope(opt.transform.target);
+  transformBefore = snapshotStates([...list, ...connectors].map(o => o.id));
   sync?.updatePresence({ editing: list.map(o => o.id) });
 }
 
 function onLiveTransform(opt: { target: fabric.FabricObject }) {
-  const t = opt.target;
-  if (!isBoardObject(t) || !sync || Date.now() - liveWriteAt < 120) return;
+  const { list } = transformScope(opt.target);
+  const moved = relayoutConnectors(new Set(list.map(o => o.id)));
+  if (!sync || Date.now() - liveWriteAt < 120) return;
   liveWriteAt = Date.now();
-  sync.writeObject(t.id, t.z, stateOf(t).fabric);
+  // Objects inside a multi-selection are only written when the drag ends
+  if (!(opt.target instanceof fabric.ActiveSelection)) list.forEach(o => sync!.writeObject(o.id, o.z, stateOf(o).fabric));
+  moved.forEach(c => sync!.writeObject(c.id, c.z, stateOf(c).fabric));
 }
 
 function onModified(opt: { target: fabric.FabricObject }) {
   const t = opt.target;
-  const list = (t instanceof fabric.ActiveSelection ? t.getObjects() : [t]).filter(isBoardObject);
   if (!(t instanceof fabric.ActiveSelection)) normalizeTextScale(t);
-  const before = transformBefore || snapshotStates(list.map(o => o.id));
+  if (isolated.value) isolated.value.triggerLayout();
+  const { list, connectors } = transformScope(t);
+  relayoutConnectors(new Set(list.map(o => o.id)));
+  const changed = [...list, ...connectors];
+  const before = transformBefore || snapshotStates(changed.map(o => o.id));
   transformBefore = null;
-  record(before, list.map(o => o.id));
-  persist(list);
+  record(before, changed.map(o => o.id));
+  persist(changed);
   sync?.updatePresence({ editing: [] });
   canvas?.requestRenderAll();
+}
+
+// ---------- groups ----------
+async function groupSelection() {
+  const list = topsOf(selection.value).filter(o => !o.locked);
+  if (!canvas || list.length < 2) return;
+  const ids = list.map(o => o.id);
+  canvas.discardActiveObject();
+  const sorted = [...list].sort((a, b) => (a.z || 0) - (b.z || 0));
+  // Connectors outside the group that pointed at its members now point at the group
+  const outside = connectorsAttachedTo(new Set(ids)).filter(c => !ids.includes(c.id));
+  const before = snapshotStates([...ids, ...outside.map(c => c.id)]);
+  sorted.forEach(o => {
+    canvas!.remove(o);
+    objects.delete(o.id);
+  });
+  const group = assignBoardIdentity(new fabric.Group(sorted), Math.max(...sorted.map(o => o.z || 0))) as fabric.Group & BoardObject;
+  before.set(group.id, null);
+  insertByZ(prepare(group));
+  outside.forEach(c => {
+    if (c.startId && ids.includes(c.startId)) c.startId = group.id;
+    if (c.endId && ids.includes(c.endId)) c.endId = group.id;
+    layoutConnector(c, findObject);
+  });
+  record(before, [...ids, group.id, ...outside.map(c => c.id)]);
+  canvas.setActiveObject(group);
+  canvas.requestRenderAll();
+  await persist([group, ...outside], ids);
+}
+
+async function ungroupSelection() {
+  const groups = topsOf(selection.value).filter((o): o is fabric.Group & BoardObject => o instanceof fabric.Group && !o.locked);
+  if (!canvas || !groups.length) return;
+  if (isolated.value) exitGroup();
+  canvas.discardActiveObject();
+  const freed: BoardObject[] = [];
+  const before = snapshotStates(groups.map(g => g.id));
+  for (const g of groups) {
+    removeLocal(g.id);
+    for (const child of g.removeAll() as BoardObject[]) {
+      if (!child.id) assignBoardIdentity(child, 0);
+      child.z = nextZ();
+      before.set(child.id, null);
+      insertByZ(prepare(child));
+      freed.push(child);
+    }
+  }
+  record(before, [...groups.map(g => g.id), ...freed.map(o => o.id)]);
+  if (freed.length > 1) canvas.setActiveObject(new fabric.ActiveSelection(freed, { canvas }));
+  canvas.requestRenderAll();
+  await persist(freed, groups.map(g => g.id));
+}
+
+/** Double-clicking a group edits its children in place until Esc or a click outside it. */
+function onDoubleClick(opt: fabric.TPointerEventInfo) {
+  const target = opt.target && topOf(opt.target);
+  if (tool.value !== 'select' || !(target instanceof fabric.Group) || !isBoardObject(target) || target.locked || isolated.value === target) return;
+  enterGroup(target as fabric.Group & BoardObject);
+}
+
+function enterGroup(group: fabric.Group & BoardObject) {
+  if (!canvas) return;
+  canvas.discardActiveObject();
+  isolated.value = group;
+  group.set({ interactive: true, subTargetCheck: true });
+  // Children's hit areas are only refreshed on demand; the group may have moved since they were computed
+  group.getObjects().forEach(o => o.setCoords());
+  canvas.getObjects().forEach(o => o !== group && o.set({ evented: false }));
+  canvas.requestRenderAll();
+}
+
+function exitGroup() {
+  const group = isolated.value;
+  if (!canvas || !group) return;
+  isolated.value = null;
+  canvas.discardActiveObject();
+  group.set({ interactive: false, subTargetCheck: false });
+  group.triggerLayout();
+  group.setCoords();
+  canvas.getObjects().forEach(o => o.set({ evented: true }));
+  canvas.requestRenderAll();
+  flushPendingRemote();
+}
+
+// ---------- lock ----------
+const selectionLocked = computed(() => topsOf(selection.value).some(o => o.locked));
+async function toggleLock() {
+  const list = topsOf(selection.value);
+  if (!canvas || !list.length) return;
+  const lock = !selectionLocked.value;
+  const before = snapshotStates(list.map(o => o.id));
+  list.forEach(o => {
+    o.locked = lock;
+    applyLock(o);
+  });
+  updateSelection();
+  record(before, list.map(o => o.id));
+  canvas.requestRenderAll();
+  await persist(list);
 }
 
 let editingBefore: Map<string, ObjectState> | null = null;
@@ -567,9 +872,12 @@ function startEditing(obj: BoardObject, selectAll = false) {
   canvas.requestRenderAll();
 }
 
+// Text inside an isolated group is stored as part of the group
+const storedOf = (target: BoardObject) => (topOf(target) as BoardObject);
+
 function onEditingEntered({ target }: { target: BoardObject }) {
-  editingBefore = snapshotStates([target.id]);
-  sync?.updatePresence({ editing: [target.id] });
+  editingBefore = snapshotStates([storedOf(target).id]);
+  sync?.updatePresence({ editing: [storedOf(target).id] });
 }
 
 function onEditingExited({ target }: { target: BoardObject }) {
@@ -581,8 +889,10 @@ function onEditingExited({ target }: { target: BoardObject }) {
     deleteObjects([target]);
     return;
   }
-  if (before) record(before, [target.id]);
-  persist([target]);
+  const stored = storedOf(target);
+  if (stored instanceof fabric.Group) stored.triggerLayout();
+  if (before) record(before, [stored.id]);
+  persist([stored]);
   flushPendingRemote();
 }
 
@@ -592,19 +902,26 @@ const selectionKinds = computed(() => {
   return {
     sticky: s.length > 0 && s.every(o => o instanceof StickyNote),
     any: s.length > 0,
-    sketchable: s.some(o => !(o instanceof fabric.Textbox))
+    sketchable: s.some(o => !(o instanceof fabric.Textbox)),
+    connector: s.length > 0 && s.every(o => o instanceof Connector),
+    fillable: s.some(o => isFillable(o)),
+    groupable: !isolated.value && topsOf(s).length > 1,
+    group: !isolated.value && topsOf(s).some(o => o instanceof fabric.Group)
   };
 });
+const isFillable = (o: fabric.FabricObject) => o instanceof fabric.Rect || o instanceof fabric.Ellipse || o instanceof fabric.Polygon;
 
+/** Changes the selected objects as one undoable step (children of an isolated group are stored via the group). */
 async function mutateSelection(fn: (o: BoardObject) => void) {
-  const list = selection.value;
+  const list = selection.value.filter(o => !(topOf(o) as BoardObject).locked);
   if (!list.length || !canvas) return;
-  const ids = list.map(o => o.id);
+  const stored = topsOf(list);
+  const ids = stored.map(o => o.id);
   const before = snapshotStates(ids);
   list.forEach(fn);
   canvas.requestRenderAll();
   record(before, ids);
-  await persist(list);
+  await persist(stored);
 }
 
 const applyColor = (c: string) => {
@@ -612,9 +929,13 @@ const applyColor = (c: string) => {
   mutateSelection(o => {
     if (o instanceof StickyNote) return;
     if (o instanceof fabric.Textbox) o.set('fill', c);
-    else if (o instanceof fabric.Path) o.set('stroke', c);
-    else if (o instanceof fabric.Rect || o instanceof fabric.Ellipse) o.set({ stroke: c, ...(o.fill && o.fill !== 'transparent' ? { fill: c } : {}) });
+    else if (o instanceof fabric.Path || o instanceof Connector) o.set('stroke', c);
+    else if (isFillable(o)) o.set({ stroke: c, ...(o.fill && o.fill !== 'transparent' ? { fill: c } : {}) });
   });
+};
+const toggleArrowHead = (which: 'arrowStart' | 'arrowEnd') => {
+  const on = !selection.value.every(o => (o as any)[which]);
+  mutateSelection(o => o instanceof Connector && o.set(which, on));
 };
 const applyStickyColor = (c: string) => {
   stickyColor.value = c;
@@ -623,7 +944,7 @@ const applyStickyColor = (c: string) => {
 const toggleFill = () => {
   shapeFilled.value = !shapeFilled.value;
   mutateSelection(o => {
-    if (o instanceof fabric.Rect || o instanceof fabric.Ellipse) o.set('fill', shapeFilled.value ? o.stroke : 'transparent');
+    if (isFillable(o)) o.set('fill', shapeFilled.value ? o.stroke : 'transparent');
   });
 };
 const bringToFront = () => mutateSelection(o => (o.z = nextZ())).then(restack);
@@ -777,12 +1098,19 @@ const isTyping = (e: Event) => {
   if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return true;
   return canvas?.getActiveObjects().some(o => o instanceof fabric.IText && o.isEditing) ?? false;
 };
-const SHORTCUTS: Record<string, Tool> = { v: 'select', h: 'hand', p: 'pen', e: 'eraser', n: 'sticky', t: 'text', r: 'rect', o: 'ellipse' };
+const SHORTCUTS: Record<string, Tool> = { v: 'select', h: 'hand', p: 'pen', e: 'eraser', n: 'sticky', t: 'text', r: 'rect', o: 'ellipse', a: 'arrow' };
 
 function onKeyDown(e: KeyboardEvent) {
   if (isTyping(e)) return;
   const mod = e.ctrlKey || e.metaKey;
-  if (mod && e.key.toLowerCase() === 'z') {
+  if (mod && e.key.toLowerCase() === 'g') {
+    e.preventDefault();
+    if (e.shiftKey) ungroupSelection();
+    else groupSelection();
+  } else if (mod && e.shiftKey && e.key.toLowerCase() === 'l') {
+    e.preventDefault();
+    toggleLock();
+  } else if (mod && e.key.toLowerCase() === 'z') {
     e.preventDefault();
     (e.shiftKey ? history.redo() : history.undo()).then(refreshHistoryFlags);
   } else if (mod && e.key.toLowerCase() === 'y') {
@@ -800,6 +1128,7 @@ function onKeyDown(e: KeyboardEvent) {
     }
     e.preventDefault();
   } else if (e.key === 'Escape') {
+    if (isolated.value) return exitGroup();
     tool.value = 'select';
     canvas?.discardActiveObject();
     canvas?.requestRenderAll();
@@ -841,6 +1170,39 @@ function drawOverlay() {
     for (let i = 2; i < live.points.length; i += 2) ctx.lineTo(live.points[i], live.points[i + 1]);
     ctx.stroke();
   }
+  // Lock badges and the outline of the group being edited, at constant screen size
+  const zoom = canvas.getZoom();
+  for (const obj of objects.values()) {
+    if (!obj.locked) continue;
+    const r = obj.getBoundingRect();
+    drawLockBadge(ctx, r.left + r.width, r.top, 1 / zoom);
+  }
+  if (isolated.value) {
+    const r = isolated.value.getBoundingRect();
+    ctx.strokeStyle = '#6366f1';
+    ctx.lineWidth = 1.5 / zoom;
+    ctx.setLineDash([6 / zoom, 4 / zoom]);
+    ctx.strokeRect(r.left - 6 / zoom, r.top - 6 / zoom, r.width + 12 / zoom, r.height + 12 / zoom);
+    ctx.setLineDash([]);
+  }
+}
+
+function drawLockBadge(ctx: CanvasRenderingContext2D, x: number, y: number, s: number) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(s, s);
+  ctx.fillStyle = '#334155';
+  ctx.beginPath();
+  ctx.arc(0, 0, 10, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(-4.5, -1.5, 9, 6.5);
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.arc(0, -2, 3, Math.PI, 0);
+  ctx.stroke();
+  ctx.restore();
 }
 watch(others, drawOverlay);
 
@@ -883,9 +1245,15 @@ async function load() {
   heartbeat = setInterval(() => sync?.updatePresence({}), 5000);
 }
 
+let detachPinch: (() => void) | undefined;
+
 onMounted(async () => {
   await nextTick();
   setupCanvas();
+  detachPinch = attachPinchZoom(containerRef.value!, () => canvas, {
+    onGestureStart: cancelGesture,
+    onZoom: zoom => (zoomPct.value = Math.round(zoom * 100))
+  });
   await load();
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('keyup', onKeyUp);
@@ -897,7 +1265,10 @@ onBeforeUnmount(async () => {
   window.removeEventListener('keyup', onKeyUp);
   window.removeEventListener('paste', onPaste);
   clearInterval(heartbeat);
+  clearTimeout(quickTimer);
+  detachPinch?.();
   resizeObserver?.disconnect();
+  if (isolated.value) exitGroup();
   const isEmptyDraft = !objects.size && isMine.value && isPrivate.value && !board.value?.metadata?.wasPublished && !loadError.value;
   if (isEmptyDraft) await roomStore.deleteEmptyDraft(props.boardId);
   else await writeThumbnail();
@@ -921,7 +1292,8 @@ const tools: { id: Tool; icon: any; label: string; key: string }[] = [
   { id: 'sticky', icon: StickyIcon, label: 'Sticky note', key: 'N' },
   { id: 'text', icon: Type, label: 'Text', key: 'T' },
   { id: 'rect', icon: Square, label: 'Rectangle', key: 'R' },
-  { id: 'ellipse', icon: Circle, label: 'Ellipse', key: 'O' }
+  { id: 'ellipse', icon: Circle, label: 'Ellipse', key: 'O' },
+  { id: 'arrow', icon: MoveUpRight, label: 'Arrow (drag between objects to connect them)', key: 'A' }
 ];
 </script>
 
@@ -961,7 +1333,7 @@ const tools: { id: Tool; icon: any; label: string; key: string }[] = [
       <!-- Canvas -->
       <div
         ref="containerRef"
-        class="absolute inset-0 wb-grid"
+        class="absolute inset-0 wb-grid touch-none"
         @dragover.prevent
         @drop="onDrop"
       >
@@ -1009,7 +1381,7 @@ const tools: { id: Tool; icon: any; label: string; key: string }[] = [
 
       <!-- Tool options -->
       <div
-        v-if="['pen', 'rect', 'ellipse', 'text', 'sticky'].includes(tool) || selectionKinds.any"
+        v-if="['pen', 'rect', 'ellipse', 'text', 'sticky', 'arrow'].includes(tool) || selectionKinds.any"
         class="absolute left-16 right-3 top-3 z-20 flex justify-center pointer-events-none"
       >
       <div class="pointer-events-auto flex flex-wrap items-center gap-2 px-2.5 py-1.5 rounded-xl bg-slate-950/90 border border-slate-800 shadow-xl backdrop-blur">
@@ -1037,12 +1409,25 @@ const tools: { id: Tool; icon: any; label: string; key: string }[] = [
           <div class="w-px h-5 bg-slate-800"></div>
           <input v-model.number="penWidth" type="range" min="1" max="24" class="w-20 accent-indigo-500" title="Stroke width" />
         </template>
-        <template v-if="tool === 'rect' || tool === 'ellipse' || selection.some(o => o.type === 'rect' || o.type === 'ellipse')">
+        <template v-if="tool === 'rect' || tool === 'ellipse' || selectionKinds.fillable">
           <div class="w-px h-5 bg-slate-800"></div>
           <button class="wb-chip" :class="{ 'wb-chip-active': shapeFilled }" @click="toggleFill">Fill</button>
         </template>
+        <template v-if="selectionKinds.connector">
+          <div class="w-px h-5 bg-slate-800"></div>
+          <button class="wb-chip" :class="{ 'wb-chip-active': selection.every(o => (o as any).arrowStart) }" title="Arrowhead at the start" @click="toggleArrowHead('arrowStart')">◀ Start</button>
+          <button class="wb-chip" :class="{ 'wb-chip-active': selection.every(o => (o as any).arrowEnd) }" title="Arrowhead at the end" @click="toggleArrowHead('arrowEnd')">End ▶</button>
+        </template>
         <template v-if="selectionKinds.any">
           <div class="w-px h-5 bg-slate-800"></div>
+          <button v-if="selectionKinds.groupable" class="wb-tool !w-7 !h-7" title="Group (Ctrl+G)" @click="groupSelection"><GroupIcon class="w-3.5 h-3.5" /></button>
+          <button v-if="selectionKinds.group" class="wb-tool !w-7 !h-7" title="Ungroup (Ctrl+Shift+G) · double-click a group to edit inside it" @click="ungroupSelection"><Ungroup class="w-3.5 h-3.5" /></button>
+          <button
+            class="wb-tool !w-7 !h-7"
+            :class="{ 'text-amber-300': selectionLocked }"
+            :title="selectionLocked ? 'Unlock (Ctrl+Shift+L)' : 'Lock (Ctrl+Shift+L)'"
+            @click="toggleLock"
+          ><component :is="selectionLocked ? Lock : LockOpen" class="w-3.5 h-3.5" /></button>
           <button class="wb-tool !w-7 !h-7" title="Bring to front" @click="bringToFront"><ArrowUpToLine class="w-3.5 h-3.5" /></button>
           <button class="wb-tool !w-7 !h-7" title="Send to back" @click="sendToBack"><ArrowDownToLine class="w-3.5 h-3.5" /></button>
           <button
@@ -1055,6 +1440,14 @@ const tools: { id: Tool; icon: any; label: string; key: string }[] = [
           <button class="wb-tool !w-7 !h-7 text-rose-400" title="Delete (Del)" @click="deleteSelection"><Trash2 class="w-3.5 h-3.5" /></button>
         </template>
       </div>
+      </div>
+
+      <div
+        v-if="isolated"
+        class="absolute left-1/2 -translate-x-1/2 bottom-14 z-20 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-600/90 text-white text-[11px] shadow-xl"
+      >
+        Editing group — press Esc or click outside to finish
+        <button class="underline" @click="exitGroup">Done</button>
       </div>
 
       <!-- Someone else is editing the selection -->

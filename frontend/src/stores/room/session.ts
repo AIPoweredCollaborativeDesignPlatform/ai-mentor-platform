@@ -317,7 +317,9 @@ export function useRoomSession(ctx: RoomContext) {
         lastActive: Date.now(),
         roomStatus: 'active',
         mentorConfig: mentorStore.config,
-        assetsCount: 0
+        assetsCount: 0,
+        // Distinguishes rooms created by this redesign from the legacy site sharing the same database
+        appVersion: __APP_VERSION__
       });
       await setDoc(roomDocRef(roomId, 'participants', authStore.uid), hostUser);
       const { id, ...msgPayload } = createdMsg;

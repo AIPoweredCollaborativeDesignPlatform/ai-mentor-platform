@@ -85,7 +85,7 @@ try {
   run(`git commit -q -m "release: v${version}" --allow-empty`);
   run(`git tag -a v${version} -m "Deployed v${version}"`);
 
-  console.log(`\n\x1b[32m✔ v${version} is live at https://${PROJECT}.web.app\x1b[0m`);
+  console.log(`\n\x1b[32m✔ v${version} is live at https://ai-mentor-design.web.app\x1b[0m`);
 } catch (err) {
   if (deployed) {
     // Site is already live with the new version; keep the bump so source matches production

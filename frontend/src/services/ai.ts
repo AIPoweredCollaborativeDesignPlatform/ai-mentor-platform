@@ -101,9 +101,3 @@ export async function redrawSketchToSvg(imageDataUrl: string, notes = '', langua
     throw toSvgError(err, 'sketchToSvg');
   }
 }
-
-/**
- * @deprecated Keys now live server-side. Kept only so the legacy whiteboard's "key configured?" guard passes;
- * remove together with that component in P3.
- */
-export const getStoredGeminiApiKey = () => 'server';

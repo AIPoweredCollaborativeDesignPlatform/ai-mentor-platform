@@ -47,7 +47,7 @@ export const useRoomStore = defineStore('room', () => {
   const ctx: RoomContext = { currentRoom, myStatus, isHost, authStore, mentorStore, pushToast };
   const session = useRoomSession(ctx);
   const messages = useRoomMessages(ctx, session.setMyTyping);
-  const whiteboard = useRoomWhiteboard(ctx, messages);
+  const whiteboard = useRoomWhiteboard(ctx);
   const mentor = useRoomMentor(ctx, messages, session.typingUsers);
 
   const sendMessage = async (text: string, replyTo?: { id: string; senderName: string; text: string }) => {
@@ -148,10 +148,11 @@ export const useRoomStore = defineStore('room', () => {
     votePollOption: messages.votePollOption,
     addCustomPollOption: messages.addCustomPollOption,
 
-    startWhiteboardSession: whiteboard.startWhiteboardSession,
-    syncWhiteboardState: whiteboard.syncWhiteboardState,
-    endWhiteboardSession: whiteboard.endWhiteboardSession,
-    makeWhiteboardPrivate: whiteboard.makeWhiteboardPrivate,
+    createBoard: whiteboard.createBoard,
+    deleteEmptyDraft: whiteboard.deleteEmptyDraft,
+    setBoardPrivacy: whiteboard.setBoardPrivacy,
+    updateBoardThumbnail: whiteboard.updateBoardThumbnail,
+    markBoardMigrated: whiteboard.markBoardMigrated,
     recordWhiteboardSnapshotMemory: whiteboard.recordWhiteboardSnapshotMemory,
 
     isAnalyzing: mentor.isAnalyzing,

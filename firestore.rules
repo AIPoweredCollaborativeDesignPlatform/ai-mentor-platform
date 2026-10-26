@@ -82,6 +82,19 @@ service cloud.firestore {
         allow read, write: if isAuthenticated();
       }
 
+      // Whiteboard v2: objects and presence of the board whose chat card is messages/{boardId}.
+      // Public boards are open to every member; private boards only to their creator.
+      function canUseBoard(boardId) {
+        let card = get(/databases/$(database)/documents/rooms/$(roomId)/messages/$(boardId)).data;
+        return (isApprovedParticipant(roomId) || isRoomHost(roomId)) &&
+          (card.metadata.isPrivate == false || card.metadata.creatorUid == request.auth.uid);
+      }
+
+      match /boards/{boardId}/{document=**} {
+        allow read: if canUseBoard(boardId) || isAdmin();
+        allow write: if canUseBoard(boardId);
+      }
+
       match /messages/{messageId} {
         allow read: if isApprovedParticipant(roomId) || isRoomHost(roomId);
         // Allow approved participants/host to create messages.

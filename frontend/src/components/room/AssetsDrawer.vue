@@ -85,7 +85,7 @@ const generateThumbnail = async (m: MessageItem) => {
 
 const ensureThumbnails = (items: MessageItem[]) => {
   items.forEach(m => {
-    if (m.type === 'whiteboard_state' && m.metadata?.whiteboardJson && (!generatedThumbnails.value[m.id] || !thumbnailFor(m))) {
+    if (m.type === 'whiteboard_state' && m.metadata?.boardV !== 2 && m.metadata?.whiteboardJson && (!generatedThumbnails.value[m.id] || !thumbnailFor(m))) {
       generateThumbnail(m);
     }
   });

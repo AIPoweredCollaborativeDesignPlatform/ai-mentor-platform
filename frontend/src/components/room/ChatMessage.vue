@@ -101,8 +101,11 @@ const isPdf = computed(() => {
   return !!f && (f.name.toLowerCase().endsWith('.pdf') || f.mimeType === 'application/pdf');
 });
 
+// v2 boards are live whenever they are public; v1 boards relied on the room-wide session flag
 const isLiveBoard = computed(() =>
-  Boolean(roomStore.currentRoom?.whiteboardActive && (msg.value.metadata?.isSharedPost || !msg.value.metadata?.isPrivate))
+  msg.value.metadata?.boardV === 2 || !msg.value.metadata?.whiteboardJson
+    ? !msg.value.metadata?.isPrivate
+    : Boolean(roomStore.currentRoom?.whiteboardActive && !msg.value.metadata?.isPrivate)
 );
 
 const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate-800 text-xs text-slate-400 italic flex items-center gap-2 select-none';
@@ -358,7 +361,7 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
           <div
             v-else
             class="mt-2 rounded-xl overflow-hidden shadow-lg relative border transition max-w-[210px] sm:max-w-[250px] select-none cursor-pointer group"
-            :class="(msg.metadata?.isPrivate || !roomStore.currentRoom?.whiteboardActive)
+            :class="!isLiveBoard
               ? 'border-slate-800 bg-slate-950/70 opacity-75 grayscale-[35%] hover:border-slate-700'
               : 'border-emerald-500/50 hover:border-emerald-400 shadow-emerald-950/30 bg-slate-900'"
             @click="emit('open-whiteboard', msg)"
@@ -383,13 +386,13 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
                 <span>Live</span>
               </div>
               <div v-else class="absolute top-1.5 right-1.5 z-10 px-1.5 py-0.5 rounded-full bg-slate-800/90 text-slate-400 text-[9px] font-medium border border-slate-700/60 shadow flex items-center gap-1">
-                <span>Ended</span>
+                <span>{{ msg.metadata?.isPrivate ? 'Private' : 'Ended' }}</span>
               </div>
 
               <div class="absolute inset-0 flex items-center justify-center bg-indigo-950/60 opacity-0 group-hover:opacity-100 transition z-10">
                 <span class="bg-indigo-600 hover:bg-indigo-500 text-white px-2.5 py-1 rounded-lg text-xs font-bold shadow-lg flex items-center gap-1.5 transition">
                   <Palette class="w-3.5 h-3.5" />
-                  {{ msg.metadata?.isPrivate ? 'Open Private Board' : (roomStore.currentRoom?.whiteboardActive ? 'Join Live Board' : 'Open Whiteboard') }}
+                  {{ msg.metadata?.isPrivate ? 'Open Private Board' : (isLiveBoard ? 'Join Live Board' : 'Open Whiteboard') }}
                 </span>
               </div>
             </div>

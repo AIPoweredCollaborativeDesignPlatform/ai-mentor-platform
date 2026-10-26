@@ -1,153 +1,70 @@
-import { arrayUnion, deleteDoc, updateDoc } from 'firebase/firestore';
-import type { MessageItem } from '../../types';
+import { arrayUnion, deleteDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { roomDocRef, roomRef, type RoomContext } from './context';
 
-const SYNC_DEBOUNCE_MS = 50;
 const MEMORY_COOLDOWN_MS = 30000;
 
-type Messages = {
-  sendCustomMessage: (payload: Partial<MessageItem>) => Promise<string | undefined>;
-  updateCustomMessage: (id: string, updates: Partial<MessageItem>) => Promise<void>;
-};
-
-const CLEARED_SESSION = {
-  whiteboardActive: false,
-  whiteboardHostUid: null,
-  whiteboardHostName: null,
-  whiteboardState: null,
-  whiteboardThumbnail: null
-};
-
 /**
- * Shared whiteboard session (rooms/{id}.whiteboardState is the authoritative live state)
- * and whiteboard assets (messages with type 'whiteboard_state').
+ * Whiteboards (v2): the chat card rooms/{id}/messages/{boardId} (type 'whiteboard_state') is the board's
+ * identity and privacy flag; its objects live in rooms/{id}/boards/{boardId}/objects (see src/whiteboard/).
+ * There is no room-wide "live session": every public board is collaborative, private boards only open for
+ * their creator, and a creator closing a board never affects anyone else.
  */
-export function useRoomWhiteboard(ctx: RoomContext, messages: Messages) {
+export function useRoomWhiteboard(ctx: RoomContext) {
   const { currentRoom, authStore } = ctx;
-  let syncTimer: ReturnType<typeof setTimeout> | undefined;
   let lastMemoryAt = 0;
 
-  const myBoards = () =>
-    currentRoom.value!.messages.filter(
-      m => m.type === 'whiteboard_state' && (m.metadata?.creatorUid === authStore.uid || m.senderUid === authStore.uid)
-    );
+  const msgRef = (boardId: string) => roomDocRef(currentRoom.value!.roomId, 'messages', boardId);
+  const localMsg = (boardId: string) => currentRoom.value?.messages.find(m => m.id === boardId);
 
-  // Older versions created extra "pointer" messages (metadata.assetId) for the same board; remove them
-  const deleteDuplicatePointers = async (boards: MessageItem[]) => {
-    for (const m of boards) {
-      if (m.metadata?.assetId && boards.some(other => other.id === m.metadata.assetId)) {
-        await deleteDoc(roomDocRef(currentRoom.value!.roomId, 'messages', m.id)).catch(() => {});
-      }
-    }
+  /** Creates the card of a new board as a private draft (hidden from chat until shared). */
+  const createBoard = async (boardId: string) => {
+    if (!currentRoom.value || localMsg(boardId)) return;
+    const name = authStore.displayName || 'Participant';
+    await setDoc(msgRef(boardId), {
+      senderUid: authStore.uid,
+      senderName: name,
+      senderAvatar: authStore.avatar || '🎨',
+      type: 'whiteboard_state',
+      content: 'Personal Draft',
+      timestamp: Date.now(),
+      fileData: { type: 'image', url: '', name: 'whiteboard.jpg', size: 0 },
+      metadata: { boardV: 2, isPrivate: true, wasPublished: false, isSharedPost: false, creatorUid: authStore.uid, creatorName: name, creatorAvatar: authStore.avatar || '🎨', updatedAt: Date.now() }
+    });
   };
 
-  const thumbnailFile = (url: string) => ({ type: 'image' as const, url, name: 'whiteboard.jpg', size: 0 });
-
-  const startWhiteboardSession = async (
-    initialJson?: string,
-    thumbnail?: string,
-    existingAssetId?: string | null
-  ): Promise<string | null | undefined> => {
-    if (!currentRoom.value) return null;
-    const hostName = authStore.displayName || 'Participant';
-    try {
-      await updateDoc(roomRef(currentRoom.value.roomId), {
-        whiteboardActive: true,
-        whiteboardHostUid: authStore.uid,
-        whiteboardHostName: hostName,
-        whiteboardState: initialJson || null,
-        ...(thumbnail ? { whiteboardThumbnail: thumbnail } : {})
-      });
-      await deleteDuplicatePointers(myBoards());
-
-      const sharedMeta = {
-        isPrivate: false,
-        wasPublished: true,
-        isSharedPost: true,
-        creatorUid: authStore.uid,
-        creatorName: hostName
-      };
-
-      // Sharing an existing private draft moves it to public in place (never duplicates it)
-      const existingMsg = existingAssetId ? currentRoom.value.messages.find(m => m.id === existingAssetId) : undefined;
-      if (existingMsg) {
-        await messages.updateCustomMessage(existingMsg.id, {
-          content: `${hostName} shared a collaborative whiteboard`,
-          timestamp: Date.now(),
-          fileData: thumbnailFile(thumbnail || ''),
-          metadata: {
-            ...(existingMsg.metadata || {}),
-            ...sharedMeta,
-            whiteboardJson: initialJson || existingMsg.metadata?.whiteboardJson || '',
-            updatedAt: Date.now()
-          }
-        });
-        return existingMsg.id;
-      }
-
-      return await messages.sendCustomMessage({
-        senderUid: authStore.uid,
-        senderName: hostName,
-        senderAvatar: authStore.avatar || '🎨',
-        content: `${hostName} shared a collaborative whiteboard`,
-        type: 'whiteboard_state',
-        fileData: thumbnailFile(thumbnail || ''),
-        metadata: { ...sharedMeta, whiteboardJson: initialJson || '' }
-      });
-    } catch (e) {
-      console.error('Failed to start whiteboard:', e);
-      alert('Failed to publish whiteboard: ' + ((e as any).message || String(e)));
-      return null;
-    }
-  };
-
-  // Debounced to stay under Firestore write limits
-  const syncWhiteboardState = async (json: string, thumbnail?: string) => {
-    if (!currentRoom.value?.whiteboardActive) return;
-    clearTimeout(syncTimer);
-    syncTimer = setTimeout(async () => {
-      if (!currentRoom.value?.whiteboardActive) return;
-      try {
-        await updateDoc(roomRef(currentRoom.value.roomId), {
-          whiteboardState: json,
-          ...(thumbnail ? { whiteboardThumbnail: thumbnail } : {})
-        });
-      } catch (e) {
-        console.warn('Failed to sync whiteboard:', e);
-      }
-    }, SYNC_DEBOUNCE_MS);
-  };
-
-  const endWhiteboardSession = async () => {
+  /** Removes a draft that was opened but never drawn on, so empty boards do not pile up in the drawer. */
+  const deleteEmptyDraft = async (boardId: string) => {
     if (!currentRoom.value) return;
-    await updateDoc(roomRef(currentRoom.value.roomId), CLEARED_SESSION).catch(e => console.warn('Failed to end whiteboard:', e));
+    await deleteDoc(msgRef(boardId)).catch(e => console.warn('Failed to delete empty draft:', e));
   };
 
-  // Ends the shared session and marks the board private; its chat card stays visible but greyed out
-  const makeWhiteboardPrivate = async (targetAssetId?: string | null) => {
+  /** Shares a board to the chat (card moves to the latest position) or makes it private (card greys out). */
+  const setBoardPrivacy = async (boardId: string, isPrivate: boolean, thumbnail?: string) => {
     if (!currentRoom.value) return;
-    try {
-      await updateDoc(roomRef(currentRoom.value.roomId), CLEARED_SESSION);
-      const boards = myBoards();
-      await deleteDuplicatePointers(boards);
+    const name = localMsg(boardId)?.metadata?.creatorName || authStore.displayName || 'Participant';
+    await updateDoc(msgRef(boardId), {
+      'metadata.isPrivate': isPrivate,
+      'metadata.isSharedPost': !isPrivate,
+      'metadata.wasPublished': true,
+      'metadata.updatedAt': Date.now(),
+      ...(isPrivate ? {} : { content: `${name} shared a collaborative whiteboard`, timestamp: Date.now() }),
+      ...(thumbnail ? { 'fileData.url': thumbnail } : {})
+    });
+  };
 
-      const targets = boards.filter(
-        m => !m.metadata?.assetId && (m.id === targetAssetId || (!targetAssetId && !m.metadata?.isPrivate))
-      );
-      for (const asset of targets) {
-        await messages.updateCustomMessage(asset.id, {
-          // Keep the preview so the creator still sees the thumbnail among private drafts
-          fileData: thumbnailFile(asset.fileData?.url || ''),
-          metadata: { ...(asset.metadata || {}), isPrivate: true, isSharedPost: false, wasPublished: true }
-        });
-      }
-    } catch (e) {
-      console.warn('Failed to make whiteboard private:', e);
-    }
+  const updateBoardThumbnail = async (boardId: string, thumbnail: string) => {
+    if (!currentRoom.value || !thumbnail) return;
+    await updateDoc(msgRef(boardId), { 'fileData.url': thumbnail, 'metadata.updatedAt': Date.now() }).catch(e => console.warn('Failed to update board thumbnail:', e));
+  };
+
+  /** Marks a v1 board as converted; its old JSON stays in metadata.whiteboardJson as a backup. */
+  const markBoardMigrated = async (boardId: string) => {
+    if (!currentRoom.value) return;
+    await updateDoc(msgRef(boardId), { 'metadata.boardV': 2 }).catch(e => console.warn('Failed to mark board migrated:', e));
   };
 
   // AI-generated visual summary of the board, fed back into the mentor prompt (rate-limited)
-  const recordWhiteboardSnapshotMemory = async (previewUrl: string, json: string, assetId?: string) => {
+  const recordWhiteboardSnapshotMemory = async (previewUrl: string, assetId?: string) => {
     if (!currentRoom.value || !previewUrl) return;
     const now = Date.now();
     if (now - lastMemoryAt < MEMORY_COOLDOWN_MS) return;
@@ -165,11 +82,5 @@ export function useRoomWhiteboard(ctx: RoomContext, messages: Messages) {
     }
   };
 
-  return {
-    startWhiteboardSession,
-    syncWhiteboardState,
-    endWhiteboardSession,
-    makeWhiteboardPrivate,
-    recordWhiteboardSnapshotMemory
-  };
+  return { createBoard, deleteEmptyDraft, setBoardPrivacy, updateBoardThumbnail, markBoardMigrated, recordWhiteboardSnapshotMemory };
 }

@@ -19,7 +19,7 @@ import HostControlDrawer from '../components/HostControlDrawer.vue';
 import DocumentModal from '../components/DocumentModal.vue';
 import PdfViewerModal from '../components/PdfViewerModal.vue';
 import AlertModal from '../components/AlertModal.vue';
-import CollaborativeWhiteboard from '../components/CollaborativeWhiteboard.vue';
+import WhiteboardBoard from '../components/whiteboard/WhiteboardBoard.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -182,12 +182,8 @@ const handleVisibilityChange = () => {
 const handleEscape = (e: KeyboardEvent) => {
   if (e.key === 'Escape') isAssetsOpen.value = false;
 };
-// Publisher closing the tab: save and end the live session so others are not left on a dead board
 const handleWhiteboardBeforeUnload = () => {
-  if (wb.isMyLiveSessionOpen()) {
-    whiteboardRef.value?.triggerAutoSaveAsAsset?.();
-    roomStore.endWhiteboardSession();
-  }
+  whiteboardRef.value?.flush?.();
 };
 
 onMounted(async () => {
@@ -237,10 +233,7 @@ onUnmounted(() => {
   window.removeEventListener('pagehide', handleUnload);
   window.removeEventListener('keydown', handleEscape);
   document.removeEventListener('visibilitychange', handleVisibilityChange);
-  if (roomStore.currentRoom?.whiteboardActive && roomStore.currentRoom?.whiteboardHostUid === authStore.uid) {
-    whiteboardRef.value?.triggerAutoSaveAsAsset?.();
-    roomStore.endWhiteboardSession();
-  }
+  whiteboardRef.value?.flush?.();
   clearTimeout(scrollbarTimer);
   clearTimeout(accessCheckTimer);
   roomStore.updateParticipantWhiteboard(null);
@@ -330,17 +323,14 @@ onUnmounted(() => {
         :class="{ 'transition-none': isResizingWhiteboard }"
         :style="whiteboardWidth ? { width: `${whiteboardWidth}px` } : { width: '68%' }"
       >
-        <CollaborativeWhiteboard
+        <WhiteboardBoard
+          v-if="wb.activeBoardId.value"
           ref="whiteboardRef"
           :key="wb.whiteboardSessionKey.value"
-          :initialJson="wb.currentWhiteboardJson.value"
-          :activeAssetId="wb.activeWhiteboardAssetId.value"
-          :isSharedSession="wb.isWhiteboardSharedSession.value"
-          :isPublic="wb.activeWhiteboardIsPublic.value"
-          :assetCreatorUid="wb.activeWhiteboardCreatorUid.value"
+          :roomId="roomId"
+          :boardId="wb.activeBoardId.value"
           @close="wb.closeWhiteboard"
           @share="shareWhiteboardExport"
-          @save-state="wb.saveWhiteboardState"
         />
       </div>
     </div>

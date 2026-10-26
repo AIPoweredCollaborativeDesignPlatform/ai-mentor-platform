@@ -1,7 +1,20 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { getSystemConfig } from './config.js';
 
 let client = null;
-export const getClient = apiKey => (client ||= new Anthropic({ apiKey }));
+let clientWorkspace = null;
+
+/**
+ * Keys created outside a workspace must name one via the anthropic-workspace-id header;
+ * set config/system.anthropicWorkspaceId in that case (workspace-scoped keys need nothing).
+ */
+export const getClient = (apiKey, workspaceId = null) => {
+  if (!client || clientWorkspace !== workspaceId) {
+    client = new Anthropic({ apiKey, ...(workspaceId ? { defaultHeaders: { 'anthropic-workspace-id': workspaceId } } : {}) });
+    clientWorkspace = workspaceId;
+  }
+  return client;
+};
 
 const MAX_PAUSE_CONTINUATIONS = 3;
 
@@ -10,10 +23,11 @@ const MAX_PAUSE_CONTINUATIONS = 3;
  * in which case the partial assistant turn is sent back so Claude can finish.
  */
 export async function createMessage(apiKey, params) {
+  const { anthropicWorkspaceId = null } = await getSystemConfig();
   const messages = [...params.messages];
   let response;
   for (let i = 0; i <= MAX_PAUSE_CONTINUATIONS; i++) {
-    response = await getClient(apiKey).messages.create({ ...params, messages });
+    response = await getClient(apiKey, anthropicWorkspaceId).messages.create({ ...params, messages });
     if (response.stop_reason !== 'pause_turn') break;
     messages.push({ role: 'assistant', content: response.content });
   }

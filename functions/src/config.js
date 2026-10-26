@@ -13,7 +13,9 @@ export const DEFAULT_SYSTEM_CONFIG = {
   webSearchTool: 'web_search_20250305',
   webSearchMaxUses: 3,
   imageModel: 'fal-ai/flux/schnell',
-  engine3D: 'meshy'
+  engine3D: 'meshy',
+  // Only for Anthropic keys not scoped to a workspace (Console > Settings > Workspaces > ID)
+  anthropicWorkspaceId: null
 };
 
 let cached = null;

@@ -11,6 +11,8 @@ import { useRoomAi } from '../../composables/useRoomAi';
 const props = defineProps<{
   isMeetingClosed: boolean;
   isWhiteboardOpen: boolean;
+  /** Placeholder while the composer is locked (waiting for the session, ended, observer) */
+  lockedText?: string;
 }>();
 const emit = defineEmits<{
   (e: 'open-whiteboard'): void;
@@ -412,7 +414,7 @@ defineExpose({ setReply, sendFile });
             @keydown="onKeyDown"
             :disabled="isBlocked"
             :placeholder="isMeetingClosed
-              ? 'This meeting has been closed. Chat is in read-only mode.'
+              ? lockedText || 'This meeting has been closed. Chat is in read-only mode.'
               : isMuted ? 'You have been muted by the host.' : aiEnabled ? 'Type a message (e.g. @Mentor or @Name)...' : 'Type a message (e.g. @Name)...'"
             class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-base sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500 transition resize-none min-h-[44px] max-h-32 overflow-y-auto disabled:opacity-50"
             rows="1"

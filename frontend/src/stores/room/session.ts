@@ -1,6 +1,5 @@
 import { ref } from 'vue';
 import {
-  arrayUnion,
   deleteDoc,
   doc,
   getDoc,
@@ -15,6 +14,7 @@ import { db } from '../../firebase/config';
 import { currentLocale } from '../../i18n';
 import type { MessageItem, Participant, ParticipantStatus, RoomData, TypingUser } from '../../types';
 import { roomCollection, roomDocRef, roomRef, type RoomContext } from './context';
+import { joinStudyRoom } from '../../services/session';
 
 const HEARTBEAT_MS = 10000;
 const PRESENCE_SWEEP_MS = 5000;
@@ -117,6 +117,7 @@ export function useRoomSession(ctx: RoomContext) {
           whiteboardThumbnail: data.whiteboardThumbnail || undefined,
           aiActiveTask: data.aiActiveTask ?? null,
           ai: data.ai,
+          session: data.session,
           language: data.language
         });
       }
@@ -159,7 +160,8 @@ export function useRoomSession(ctx: RoomContext) {
         snapshot.docChanges().forEach(change => {
           if (change.type === 'removed') return;
           const p = change.doc.data() as Participant;
-          if (p.uid === authStore.uid || p.status === 'pending') return;
+          // The researcher (host) is invisible to everyone in the room
+          if (p.uid === authStore.uid || p.status === 'pending' || p.uid === currentRoom.value?.hostUid) return;
           const old = oldParts[p.uid];
           if (old) {
             if (!old.isOnline && p.isOnline) pushToast('Participant Joined', `${p.displayName} is back online`, 'info');
@@ -360,76 +362,25 @@ export function useRoomSession(ctx: RoomContext) {
     return newRoom;
   };
 
-  const writeApplication = async (roomId: string, applicant: Participant) => {
-    startFirestoreListener(roomId);
-    await setDoc(roomDocRef(roomId, 'participants', authStore.uid), applicant);
-    updateDoc(roomRef(roomId), { participantUids: arrayUnion(authStore.uid), lastActive: Date.now() }).catch(() => {});
-  };
-
-  const makeApplicant = (status: ParticipantStatus, isHostFlag: boolean): Participant => ({
-    uid: authStore.uid,
-    displayName: authStore.displayName,
-    avatar: authStore.avatar,
-    status,
-    isHost: isHostFlag,
-    isOnline: true,
-    joinedAt: Date.now()
-  });
-
-  // Enter the waiting room (or straight in, if already approved / host)
-  const applyToJoin = async (pin: string) => {
-    const roomInfo = await checkRoomExists(pin);
-    if (!roomInfo.exists) throw new Error('Room not found');
-
+  /**
+   * Join through the server (functions/src/session.js): it checks consent and the online limit and
+   * approves directly. Returning members always get back in. The researcher (host) joins the same way.
+   */
+  const joinRoom = async (pin: string, displayName: string, avatar: string, consent: boolean, retry = false) => {
+    await authStore.waitForAuthReady().catch(() => {});
     const roomId = `room_${pin}`;
-    let isUserHost = false;
-    let currentStatus: ParticipantStatus = 'pending';
-    try {
-      const snap = await getDoc(roomDocRef(roomId, 'participants', authStore.uid));
-      if (snap.exists()) {
-        const data = snap.data() as Participant;
-        isUserHost = data.isHost || false;
-        currentStatus = isUserHost ? 'approved' : data.status || 'pending';
-      }
-    } catch {}
-
-    myStatus.value = currentStatus;
-    try {
-      await writeApplication(roomId, makeApplicant(currentStatus, isUserHost));
+    const result = await joinStudyRoom(roomId, displayName, avatar, consent, retry);
+    if (result.status === 'approved') {
+      myStatus.value = 'approved';
       upsertMyRoomIndex(roomId, {
         roomId,
         pin,
-        roomName: roomInfo.roomName || `Meeting ${pin}`,
-        role: isUserHost ? 'host' : 'participant',
+        role: result.role === 'researcher' ? 'host' : 'participant',
         joinedAt: Date.now(),
         lastActive: Date.now()
       });
-    } catch (err) {
-      console.warn('[Firestore] applyToJoin error:', err);
     }
-  };
-
-  // Re-apply after being kicked or rejected
-  const reapplyToJoin = async (pin: string) => {
-    myStatus.value = 'pending';
-    const roomInfo = await checkRoomExists(pin);
-    if (!roomInfo.exists || !authStore.uid) return;
-    try {
-      await writeApplication(`room_${pin}`, makeApplicant('pending', false));
-    } catch (err) {
-      console.warn('[Firestore] reapplyToJoin error:', err);
-    }
-  };
-
-  const cancelJoinRequest = async (pin: string) => {
-    myStatus.value = 'cancelled';
-    if (!authStore.uid) return;
-    const ref = roomDocRef(`room_${pin}`, 'participants', authStore.uid);
-    try {
-      await deleteDoc(ref);
-    } catch {
-      await updateDoc(ref, { status: 'cancelled', isOnline: false }).catch(() => {});
-    }
+    return result;
   };
 
   // ---------- Host actions ----------
@@ -518,9 +469,7 @@ export function useRoomSession(ctx: RoomContext) {
     startFirestoreListener,
     setMyTyping,
     createRoom,
-    applyToJoin,
-    reapplyToJoin,
-    cancelJoinRequest,
+    joinRoom,
     approveParticipant,
     rejectParticipant,
     muteParticipant,

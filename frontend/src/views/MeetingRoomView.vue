@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
-import { X } from 'lucide-vue-next';
+import { Clock, Eye, Loader2, Power, Users, X } from 'lucide-vue-next';
 import { useAuthStore } from '../stores/auth';
 import { useRoomStore } from '../stores/room';
 import type { MessageItem } from '../types';
 import { formatDate, isDuplicateBoardPointer, isMentioning } from '../utils/chat';
 import { useNotificationSound } from '../composables/useNotificationSound';
 import { useWhiteboardResize, useWhiteboardSession, type WhiteboardHandle } from '../composables/useWhiteboardSession';
+import { useAiReadTracking } from '../composables/useAiReadTracking';
+import { startResearchLog, stopResearchLog } from '../services/researchLog';
 
 import RoomHeader from '../components/room/RoomHeader.vue';
 import ChatMessage from '../components/room/ChatMessage.vue';
@@ -30,9 +32,43 @@ const { playNotificationSound } = useNotificationSound();
 const roomId = route.params.roomId as string;
 const pin = roomId.replace('room_', '');
 
+// ---------- Experiment session (functions/src/session.js) ----------
+const session = computed(() => roomStore.currentRoom?.session);
+// The host of a study room is the researcher: an invisible, read-only observer who can only End
+const isResearcher = computed(() => roomStore.isHost && Boolean(session.value));
+const participantCount = computed(() => roomStore.onlineParticipants.length);
+
+/** Why chat and whiteboards are locked for me right now, or null when I can take part. */
+const lockReason = computed(() => {
+  const s = session.value;
+  if (!s) return roomStore.currentRoom?.roomStatus === 'ended' ? 'This meeting has been closed. Chat is in read-only mode.' : null;
+  if (s.phase === 'ended') return 'This session has ended.';
+  if (isResearcher.value) return 'Observer view: read-only.';
+  if (s.phase === 'waiting') return `Waiting for others to join (${participantCount.value}/${s.expected})...`;
+  return null;
+});
+
+const now = ref(Date.now());
+const clock = setInterval(() => (now.value = Date.now()), 1000);
+const timeLeft = computed(() => {
+  const endsAt = session.value?.endsAt;
+  if (session.value?.phase !== 'running' || !endsAt) return null;
+  const sec = Math.max(0, Math.round((endsAt - now.value) / 1000));
+  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+});
+
+const showEndConfirm = ref(false);
+const isEnding = ref(false);
+const confirmEnd = async () => {
+  isEnding.value = true;
+  await roomStore.endMeetingForAll();
+  isEnding.value = false;
+  showEndConfirm.value = false;
+};
+
 // ---------- Whiteboard ----------
 const whiteboardRef = ref<WhiteboardHandle | null>(null);
-const wb = useWhiteboardSession(whiteboardRef);
+const wb = useWhiteboardSession(whiteboardRef, () => lockReason.value);
 const { isWhiteboardOpen } = wb;
 const { whiteboardWidth, isResizingWhiteboard, startWhiteboardResize } = useWhiteboardResize(whiteboardRef, isWhiteboardOpen);
 
@@ -40,8 +76,11 @@ const composerRef = ref<InstanceType<typeof ChatComposer> | null>(null);
 const shareWhiteboardExport = (file: File) => composerRef.value?.sendFile(file);
 
 // ---------- Drawers & modals (only one drawer open at a time) ----------
-const isMeetingClosed = computed(() => roomStore.currentRoom?.roomStatus === 'ended');
-const drawerTopOffset = computed(() => (isMeetingClosed.value ? '89px' : '56px'));
+// Legacy rooms (no session) keep their own "closed by host" banner in the header
+const isMeetingClosed = computed(() => Boolean(lockReason.value));
+const isLegacyClosed = computed(() => !session.value && roomStore.currentRoom?.roomStatus === 'ended');
+const showSessionBar = computed(() => Boolean(session.value) && (isResearcher.value || session.value!.phase !== 'running'));
+const drawerTopOffset = computed(() => (isLegacyClosed.value || showSessionBar.value ? '89px' : '56px'));
 const isSettingsOpen = ref(false);
 const isAssetsOpen = ref(false);
 const isProfileOpen = ref(false);
@@ -92,6 +131,8 @@ const showDateDivider = (msg: MessageItem, index: number) => {
 };
 
 const chatContainerRef = ref<HTMLElement | null>(null);
+const isAiMessage = (m: MessageItem) => m.senderUid === 'ai_mentor' || m.senderUid === 'ai_mentor_3d';
+useAiReadTracking(chatContainerRef, () => visibleChatMessages.value.length);
 const showScrollFab = ref(false);
 const isScrolling = ref(false);
 let scrollbarTimer: ReturnType<typeof setTimeout> | undefined;
@@ -149,6 +190,12 @@ watch(() => roomStore.currentRoom?.messages.length, (count = 0) => {
 }, { immediate: true });
 
 // ---------- Membership status ----------
+// In the room I am always my nickname from the participant record (never the Google account name)
+watch(() => [roomStore.currentRoom?.participants?.[authStore.uid], authStore.displayName, authStore.avatar] as const, ([me]) => {
+  if (!me || roomStore.isHost || !me.consent) return;
+  if (me.displayName && (me.displayName !== authStore.displayName || me.avatar !== authStore.avatar)) authStore.updateProfile(me.displayName, me.avatar);
+});
+
 watch(() => roomStore.currentRoom?.participants?.[authStore.uid]?.isMuted, (muted, wasMuted) => {
   if (muted === true && wasMuted === false) roomStore.pushToast('Microphone Muted', 'You have been muted by the host.', 'warning');
 });
@@ -205,6 +252,7 @@ onMounted(async () => {
   watch(() => [roomStore.myStatus, roomStore.currentRoom?.hostUid] as const, ([status]) => {
     if (!roomStore.currentRoom) return;
     if (roomStore.isHost || status === 'approved') {
+      if (isVerifyingAccess.value) startResearchLog(roomId, authStore.uid, isResearcher.value ? 'researcher' : 'participant');
       isVerifyingAccess.value = false;
       clearTimeout(accessCheckTimer);
       scrollToBottom();
@@ -236,6 +284,8 @@ onUnmounted(() => {
   whiteboardRef.value?.flush?.();
   clearTimeout(scrollbarTimer);
   clearTimeout(accessCheckTimer);
+  clearInterval(clock);
+  stopResearchLog();
   roomStore.updateParticipantWhiteboard(null);
   roomStore.stopListening();
 });
@@ -250,13 +300,41 @@ onUnmounted(() => {
   <div v-else class="h-[100dvh] flex flex-col bg-slate-950 text-slate-100 overflow-hidden">
     <RoomHeader
       :pin="pin"
-      :isMeetingClosed="isMeetingClosed"
+      :isMeetingClosed="isLegacyClosed"
       :isSettingsOpen="isSettingsOpen"
       :isAssetsOpen="isAssetsOpen"
       @toggle-settings="toggleSettings"
       @toggle-assets="toggleAssets"
       @open-profile="openProfile"
     />
+
+    <!-- Session status: the researcher always sees it; participants only before and after the session -->
+    <div
+      v-if="showSessionBar"
+      class="h-[33px] border-b px-3 sm:px-4 text-xs flex items-center gap-3 shrink-0 z-40 relative"
+      :class="session!.phase === 'ended' ? 'bg-amber-950/70 border-amber-500/30 text-amber-200' : 'bg-slate-900 border-slate-800 text-slate-300'"
+    >
+      <template v-if="isResearcher">
+        <span class="inline-flex items-center gap-1 text-violet-300 font-medium"><Eye class="w-3.5 h-3.5" /> Observer</span>
+        <span class="inline-flex items-center gap-1"><Users class="w-3.5 h-3.5" /> {{ participantCount }} online<template v-if="session!.maxOnline"> / max {{ session!.maxOnline }}</template></span>
+        <span v-if="session!.phase === 'waiting'" class="text-slate-400 truncate">Starts at {{ session!.expected }} participants</span>
+        <span v-else-if="session!.phase === 'running'" class="inline-flex items-center gap-1" :class="timeLeft === '0:00' ? 'text-amber-300' : ''">
+          <Clock class="w-3.5 h-3.5" /> {{ timeLeft ? (timeLeft === '0:00' ? 'Time is up' : `${timeLeft} left`) : 'No time limit' }}
+        </span>
+        <span v-else>Session ended</span>
+        <button
+          v-if="session!.phase !== 'ended'"
+          @click="showEndConfirm = true"
+          class="ml-auto inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-700 hover:bg-rose-600 text-white text-[11px] font-semibold transition"
+        >
+          <Power class="w-3.5 h-3.5" /> End
+        </button>
+      </template>
+      <span v-else class="mx-auto inline-flex items-center gap-1.5 truncate">
+        <Loader2 v-if="session!.phase === 'waiting'" class="w-3.5 h-3.5 animate-spin shrink-0" />
+        {{ session!.phase === 'ended' ? 'This session has ended. Thank you for taking part.' : lockReason }}
+      </span>
+    </div>
 
     <div class="flex-1 flex overflow-hidden w-full relative" :class="{ 'select-none': isResizingWhiteboard }">
       <!-- Blocks the canvas from capturing the mouse while resizing -->
@@ -268,7 +346,7 @@ onUnmounted(() => {
       >
         <main ref="chatContainerRef" @scroll="handleScroll" class="flex-1 overflow-y-auto w-full relative custom-scrollbar" :class="{ 'is-scrolling': isScrolling }">
           <div class="max-w-5xl mx-auto w-full p-3 sm:p-5 space-y-3">
-            <div v-for="(msg, idx) in visibleChatMessages" :key="msg.id" :id="'msg_' + msg.id" class="transition-colors duration-500 rounded-xl">
+            <div v-for="(msg, idx) in visibleChatMessages" :key="msg.id" :id="'msg_' + msg.id" :data-ai-msg="isAiMessage(msg) ? msg.id : undefined" class="transition-colors duration-500 rounded-xl">
               <div v-if="showDateDivider(msg, idx)" class="flex items-center justify-center my-3.5 gap-3 select-none">
                 <div class="h-px bg-slate-700/40 flex-1 max-w-[120px] sm:max-w-[160px]"></div>
                 <span class="text-[11px] font-mono font-medium text-slate-500 tracking-wider">{{ formatDate(msg.timestamp) }}</span>
@@ -302,6 +380,7 @@ onUnmounted(() => {
         <ChatComposer
           ref="composerRef"
           :isMeetingClosed="isMeetingClosed"
+          :lockedText="lockReason || undefined"
           :isWhiteboardOpen="isWhiteboardOpen"
           @open-whiteboard="wb.openNewWhiteboard"
           @sent="scrollToBottom"
@@ -356,6 +435,21 @@ onUnmounted(() => {
 
     <AlertModal :isOpen="alertModal.isOpen" :title="alertModal.title" :message="alertModal.message" :type="alertModal.type" @confirm="alertModal.onConfirm" />
     <ProfileModal :isOpen="isProfileOpen" @close="isProfileOpen = false" />
+
+    <div v-if="showEndConfirm" class="fixed inset-0 z-[90] flex items-center justify-center p-4 bg-black/75">
+      <div class="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-6 shadow-2xl text-center">
+        <h3 class="text-base font-bold text-rose-400 mb-2">End this session?</h3>
+        <p class="text-xs text-slate-400 mb-5 leading-relaxed">
+          Chat and whiteboards become read-only for everyone and nobody new can join. This cannot be undone.
+        </p>
+        <div class="flex gap-2">
+          <button @click="showEndConfirm = false" class="flex-1 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition">Cancel</button>
+          <button @click="confirmEnd" :disabled="isEnding" class="flex-1 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold transition shadow disabled:opacity-50">
+            {{ isEnding ? 'Ending...' : 'End session' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 

@@ -35,7 +35,14 @@ export async function assignProfileToRoom(roomId, profile, assignedBy) {
     assignedAt: Date.now(),
     assignedBy: assignedBy || 'system'
   }, { merge: true });
-  await roomRef(roomId).set({ ai: publicAiView(profile) }, { merge: true });
+  // Before the session opens, the experiment-flow settings follow the newly assigned profile
+  const room = (await roomRef(roomId).get()).data() || {};
+  const phase = room.session?.phase;
+  const flow = profile.session || {};
+  const session = !phase || phase === 'waiting'
+    ? { session: { phase: 'waiting', expected: flow.expectedParticipants || 1, maxOnline: flow.maxParticipants || 0, taskMinutes: flow.taskMinutes || 0, createdAt: room.session?.createdAt || Date.now() } }
+    : {};
+  await roomRef(roomId).set({ ai: publicAiView(profile), ...session }, { merge: true });
   await logAiCall({ kind: 'profile_assigned', roomId, profileId: profile.id || null, profileVersion: profile.version ?? 0, mode: profile.mode, assignedBy: assignedBy || 'system' });
 }
 
@@ -48,7 +55,7 @@ export async function ensureRoomAi(roomId) {
 
 export { loadProfile };
 
-async function fetchContext(roomId) {
+export async function fetchContext(roomId) {
   const [roomSnap, msgSnap, partSnap] = await Promise.all([
     roomRef(roomId).get(),
     roomRef(roomId).collection('messages').orderBy('timestamp', 'desc').limit(CONTEXT_MESSAGES).get(),
@@ -58,11 +65,14 @@ async function fetchContext(roomId) {
     const m = d.data();
     return { id: d.id, senderUid: m.senderUid, senderName: m.senderName, content: String(m.content || '').slice(0, 1500), timestamp: m.timestamp, reactions: m.reactions || {}, actionOptions: m.actionOptions || [], pollVotes: m.pollVotes || {} };
   }).filter(m => m.senderUid !== 'system');
-  const participants = Object.fromEntries(partSnap.docs.map(d => {
+  const room = roomSnap.data() || {};
+  // In experiment rooms the researcher (host) is an invisible observer: the AI must not address them
+  const hidden = room.session ? room.hostUid : null;
+  const participants = Object.fromEntries(partSnap.docs.filter(d => d.id !== hidden).map(d => {
     const p = d.data();
     return [d.id, { uid: d.id, displayName: p.displayName, isHost: !!p.isHost, status: p.status }];
   }));
-  return { room: roomSnap.data() || {}, messages, participants };
+  return { room, messages, participants };
 }
 
 const isMentioned = (content, profile) => {
@@ -86,7 +96,7 @@ function startPresence(roomId, kind, task) {
   };
 }
 
-async function acquireLock(roomId) {
+export async function acquireLock(roomId) {
   return db().runTransaction(async tx => {
     const snap = await tx.get(roomAiRef(roomId));
     const state = { ...EMPTY_STATE, ...(snap.data()?.state || {}) };
@@ -95,9 +105,9 @@ async function acquireLock(roomId) {
     return true;
   });
 }
-const releaseLock = roomId => roomAiRef(roomId).set({ state: { lockUntil: 0 } }, { merge: true });
+export const releaseLock = roomId => roomAiRef(roomId).set({ state: { lockUntil: 0 } }, { merge: true });
 
-async function postAiMessage(roomId, room, profile, { content, assetType = null, assetPayload = null, actionOptions = [], meta }, replaceMessageId) {
+export async function postAiMessage(roomId, room, profile, { content, assetType = null, assetPayload = null, actionOptions = [], meta }, replaceMessageId) {
   const language = room.language || 'zh-TW';
   const fields = {
     senderUid: 'ai_mentor',
@@ -236,6 +246,8 @@ export async function handleNewMessage(roomId, messageId, msg, secrets) {
   if (AI_UIDS.has(msg.senderUid)) return;
   const room = (await roomRef(roomId).get()).data();
   if (!room?.appVersion) return; // legacy site rooms keep their own client-side AI
+  // Experiment rooms: the AI only acts while the session runs (rooms from before P4a have no session)
+  if (room.session && room.session.phase !== 'running') return;
 
   const roomAi = await ensureRoomAi(roomId);
   const profile = roomAi.profile;

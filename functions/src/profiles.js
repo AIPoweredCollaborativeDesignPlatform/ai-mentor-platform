@@ -32,6 +32,15 @@ export const DEFAULT_PROFILE = {
     enableSummary: true,
     enableWhiteboardAi: true
   },
+  // Experiment flow (src/session.js): the session opens itself once expectedParticipants are online
+  session: {
+    expectedParticipants: 3,
+    maxParticipants: 3, // simultaneous online participants (the researcher is not counted)
+    openingText: '', // posted verbatim by the AI at the start
+    taskDescription: '', // the design task; the AI opens the topic from it and keeps it in mind
+    taskMinutes: 30, // 0 = no time limit (no reminders, no time-up message)
+    reminderMinutes: [5] // minutes before the end at which the AI writes a reminder
+  },
   rationale: {}
 };
 

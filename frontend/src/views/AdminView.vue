@@ -9,8 +9,10 @@ import {
   type AiProfile, type CostInputs, type Prices
 } from '../utils/aiProfiles';
 import {
-  assignRoomProfile, getSystemConfig, listProfiles, listStudyRooms, loadUsage, saveProfile, saveSystemConfig, type StudyRoom, type UsageRow
+  assignRoomProfile, getSystemConfig, listProfiles, listStudyRooms, loadUsage, purgeLegacyRooms, saveProfile, saveSystemConfig,
+  type LegacyRoom, type StudyRoom, type UsageRow
 } from '../services/admin';
+import { DEFAULT_CONSENT_TEXT } from '../constants/consent';
 
 // Mirrors functions/src/config.js DEFAULT_SYSTEM_CONFIG for display before config/system exists
 const SYSTEM_DEFAULTS = {
@@ -19,6 +21,7 @@ const SYSTEM_DEFAULTS = {
   mentorEffort: 'low',
   engine3D: 'meshy',
   defaultProfileId: null as string | null,
+  consentText: DEFAULT_CONSENT_TEXT,
   prices: {
     'claude-haiku-5-5': { inputPerMTok: 0.1, outputPerMTok: 0.5 },
     'claude-sonnet-5-5': { inputPerMTok: 2, outputPerMTok: 10 },
@@ -210,13 +213,45 @@ const savingSystem = ref(false);
 const saveSystem = async () => {
   savingSystem.value = true;
   try {
-    const { models, memoryModel, mentorEffort, engine3D, prices } = system.value;
-    await saveSystemConfig({ models, memoryModel, mentorEffort, engine3D, prices });
+    const { models, memoryModel, mentorEffort, engine3D, prices, consentText } = system.value;
+    await saveSystemConfig({ models, memoryModel, mentorEffort, engine3D, prices, consentText });
     roomStore.pushToast('已儲存', '系統設定已更新（約 1 分鐘內生效）', 'success');
   } finally {
     savingSystem.value = false;
   }
 };
+
+// ---------- Legacy site rooms ----------
+const legacyRooms = ref<LegacyRoom[] | null>(null);
+const legacyBusy = ref(false);
+const listLegacy = async () => {
+  legacyBusy.value = true;
+  try {
+    legacyRooms.value = (await purgeLegacyRooms(true)).rooms || [];
+  } catch (e: any) {
+    roomStore.pushToast('讀取失敗', e?.message || String(e), 'error');
+  } finally {
+    legacyBusy.value = false;
+  }
+};
+const deleteLegacy = async () => {
+  const n = legacyRooms.value?.length || 0;
+  if (!n || !window.confirm(`永久刪除舊站的 ${n} 個房間（含訊息、白板、成員等所有子資料）？
+
+此動作無法復原。`)) return;
+  legacyBusy.value = true;
+  try {
+    const res = await purgeLegacyRooms(false);
+    roomStore.pushToast('已刪除', `舊站房間 ${res.deleted} 個、使用者房間索引 ${res.indexEntries} 筆`, 'success');
+    legacyRooms.value = null;
+  } catch (e: any) {
+    roomStore.pushToast('刪除失敗', e?.message || String(e), 'error');
+  } finally {
+    legacyBusy.value = false;
+  }
+};
+
+const PHASE_LABELS: Record<string, string> = { waiting: '等待開場', running: '進行中', ended: '已結束' };
 
 const card = 'p-4 rounded-2xl border border-slate-800 bg-slate-900/70';
 const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-sky-500';
@@ -294,7 +329,10 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
         <div v-for="r in rooms" :key="r.roomId" :class="card" class="flex flex-wrap items-center gap-3">
           <div class="min-w-0 flex-1">
             <div class="font-semibold text-sm">{{ r.roomName || 'Meeting' }} <span class="font-mono text-xs text-sky-400">{{ r.pin }}</span>
-              <span v-if="r.roomStatus === 'ended'" class="ml-1 text-[10px] text-amber-300">已結束</span>
+              <span v-if="r.session" class="ml-1 text-[10px]" :class="r.session.phase === 'running' ? 'text-emerald-300' : r.session.phase === 'ended' ? 'text-amber-300' : 'text-slate-400'">
+                {{ PHASE_LABELS[r.session.phase] || r.session.phase }}<template v-if="r.session.phase === 'waiting'">（{{ r.session.expected }} 人開場）</template><template v-if="r.session.endedBy">・{{ r.session.endedBy === 'all_offline' ? '全員離線' : '研究者結束' }}</template>
+              </span>
+              <span v-else-if="r.roomStatus === 'ended'" class="ml-1 text-[10px] text-amber-300">已結束</span>
             </div>
             <div class="text-[11px] text-slate-500">建立 {{ fmtTime(r.createdAt) }} · 最後活動 {{ fmtTime(r.lastActive) }}</div>
             <div class="text-[11px] text-slate-300 mt-0.5">
@@ -308,6 +346,23 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
             </select>
             <button @click="assign(r)" :disabled="!pendingChoice[r.roomId]" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-xs font-semibold disabled:opacity-40">指派</button>
           </div>
+        </div>
+
+        <div :class="card" class="space-y-2 border-rose-900/50">
+          <div class="flex items-center gap-2">
+            <h3 class="text-sm font-semibold text-rose-200">舊站房間</h3>
+            <span class="text-[11px] text-slate-500">ai-mentor-web.web.app 建立的房間（沒有 appVersion）</span>
+            <button @click="listLegacy" :disabled="legacyBusy" class="ml-auto px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs disabled:opacity-40">列出</button>
+          </div>
+          <template v-if="legacyRooms">
+            <p class="text-xs text-slate-300">共 {{ legacyRooms.length }} 個</p>
+            <div class="max-h-48 overflow-y-auto text-[11px] text-slate-400 space-y-0.5">
+              <div v-for="l in legacyRooms" :key="l.roomId">{{ l.roomId }} · {{ l.roomName || '—' }} · 最後活動 {{ fmtTime(l.lastActive || undefined) }}</div>
+            </div>
+            <button v-if="legacyRooms.length" @click="deleteLegacy" :disabled="legacyBusy" class="px-3 py-1.5 rounded-lg bg-rose-700 hover:bg-rose-600 text-xs font-semibold disabled:opacity-40">
+              {{ legacyBusy ? '刪除中…' : `永久刪除這 ${legacyRooms.length} 個房間` }}
+            </button>
+          </template>
         </div>
       </section>
 
@@ -384,6 +439,11 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
             <label>3D／個 <input type="number" step="0.01" v-model.number="system.prices.model3DPerUnit" class="w-20 bg-slate-950 border border-slate-700 rounded px-2 py-1" /></label>
           </div>
         </div>
+        <label class="block space-y-1 text-xs">
+          <span class="text-sm font-semibold">研究同意書（參加者進房前必須勾選同意；建議用英文）</span>
+          <textarea v-model="system.consentText" rows="6" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100"></textarea>
+          <span class="text-[11px] text-slate-500">每位參加者的同意紀錄會保存同意當下的文字版本，修改不影響已同意者的紀錄。</span>
+        </label>
         <p class="text-[11px] text-amber-300/80">正式實驗期間請勿更換模型；每則 AI 紀錄都會記下實際使用的模型。</p>
         <button @click="saveSystem" :disabled="savingSystem" class="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-xs font-semibold disabled:opacity-40">{{ savingSystem ? '儲存中…' : '儲存系統設定' }}</button>
       </section>

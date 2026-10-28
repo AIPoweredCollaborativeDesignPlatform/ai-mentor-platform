@@ -1,0 +1,98 @@
+import { FieldValue, getFirestore } from 'firebase-admin/firestore';
+
+/**
+ * Research event log: rooms/{roomId}/events/{autoId}, one document per event, admin-read only.
+ * Server events (chat, whiteboard objects, session flow) are written here; browser events
+ * (window focus, whiteboard open/close, tools, AI messages read) come from the client in batches
+ * with the same shape and source: 'client'. P4b exports this collection to Drive.
+ */
+
+const AI_UIDS = new Set(['ai_mentor', 'ai_mentor_3d']);
+const MAX_STRING = 20_000;
+
+// Host uid and whether the room belongs to this site, cached per instance (hosts rarely change)
+const roomCache = new Map();
+const CACHE_MS = 5 * 60_000;
+
+export async function roomInfo(roomId) {
+  const hit = roomCache.get(roomId);
+  if (hit && Date.now() - hit.at < CACHE_MS) return hit;
+  const room = (await getFirestore().doc(`rooms/${roomId}`).get()).data() || {};
+  const info = { at: Date.now(), hostUid: room.hostUid || null, tracked: Boolean(room.appVersion) };
+  roomCache.set(roomId, info);
+  return info;
+}
+
+export const roleOf = (hostUid, uid) =>
+  !uid ? 'unknown'
+    : AI_UIDS.has(uid) ? 'ai'
+    : uid === 'system' ? 'system'
+    : uid === hostUid ? 'researcher'
+    : 'participant';
+
+/** Replaces very long strings (data URLs, big SVGs) so an event stays far below the 1 MiB doc limit. */
+export function compact(value, depth = 0) {
+  if (typeof value === 'string') return value.length > MAX_STRING ? `[omitted ${value.length} chars]` : value;
+  if (!value || typeof value !== 'object' || depth > 12) return value;
+  if (Array.isArray(value)) return value.map(v => compact(v, depth + 1));
+  return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined).map(([k, v]) => [k, compact(v, depth + 1)]));
+}
+
+export async function writeEvent(roomId, { kind, uid = null, role, data = {}, at = Date.now() }) {
+  try {
+    const info = role ? null : await roomInfo(roomId);
+    await getFirestore().collection(`rooms/${roomId}/events`).add({
+      at,
+      serverAt: FieldValue.serverTimestamp(),
+      source: 'server',
+      kind,
+      uid,
+      role: role || roleOf(info.hostUid, uid),
+      data: compact(data)
+    });
+  } catch (err) {
+    console.error('[events] write failed:', kind, err?.message || err);
+  }
+}
+
+const changeType = (before, after) => (!before ? 'created' : !after ? 'deleted' : 'updated');
+
+const changedKeys = (before, after) =>
+  [...new Set([...Object.keys(before || {}), ...Object.keys(after || {})])]
+    .filter(k => JSON.stringify(before?.[k]) !== JSON.stringify(after?.[k]));
+
+/** Every create/update/delete of a chat message (including reactions, poll votes and board cards). */
+export async function logMessageChange(roomId, messageId, before, after) {
+  const info = await roomInfo(roomId);
+  if (!info.tracked) return;
+  const type = changeType(before, after);
+  const doc = after || before;
+  const uid = type === 'updated' ? null : doc.senderUid; // updates (reactions, votes) do not say who made them
+  await writeEvent(roomId, {
+    kind: `message_${type}`,
+    uid,
+    role: uid ? roleOf(info.hostUid, uid) : 'unknown',
+    at: type === 'created' ? doc.timestamp || Date.now() : Date.now(),
+    data: {
+      messageId,
+      messageType: doc.type || 'text',
+      ...(type === 'updated' ? { changedKeys: changedKeys(before, after) } : {}),
+      ...(type === 'deleted' ? {} : { message: after })
+    }
+  });
+}
+
+/** Every whiteboard object change; the stored fabric JSON allows replaying the board. */
+export async function logBoardObjectChange(roomId, boardId, objectId, before, after) {
+  const info = await roomInfo(roomId);
+  if (!info.tracked) return;
+  const type = changeType(before, after);
+  const uid = after?.updatedBy || null; // deletes carry no author
+  await writeEvent(roomId, {
+    kind: `board_object_${type}`,
+    uid,
+    role: uid ? roleOf(info.hostUid, uid) : 'unknown',
+    at: after?.updatedAt || Date.now(),
+    data: { boardId, objectId, z: after?.z ?? null, fabric: after?.fabric ?? null }
+  });
+}

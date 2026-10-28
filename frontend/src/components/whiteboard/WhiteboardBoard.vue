@@ -24,6 +24,7 @@ import { convertLegacyBoard } from '../../whiteboard/legacy';
 import { Connector, attachTargetAt, createConnector, dragEnd, layoutConnector, setConnectorLookup } from '../../whiteboard/connectors';
 import { recognizeStroke, type QuickShape } from '../../whiteboard/quickshape';
 import { attachPinchZoom } from '../../whiteboard/touch';
+import { logEvent } from '../../services/researchLog';
 
 const props = defineProps<{ roomId: string; boardId: string }>();
 const emit = defineEmits<{ (e: 'close'): void; (e: 'share', file: File): void }>();
@@ -42,6 +43,7 @@ const showWhiteboardAi = computed(() => aiModules.value.enableWhiteboardAi);
 // ---------- tools ----------
 type Tool = 'select' | 'hand' | 'pen' | 'eraser' | 'sticky' | 'text' | 'rect' | 'ellipse' | 'arrow';
 const tool = ref<Tool>('select');
+watch(tool, (next, prev) => logEvent('whiteboard_tool', { boardId: props.boardId, tool: next, previous: prev }));
 const COLORS = ['#0f172a', '#ef4444', '#f97316', '#eab308', '#22c55e', '#0ea5e9', '#6366f1', '#a855f7', '#ec4899', '#ffffff'];
 const color = ref(COLORS[0]);
 const penWidth = ref(4);

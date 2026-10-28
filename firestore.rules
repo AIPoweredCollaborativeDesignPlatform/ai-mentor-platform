@@ -57,19 +57,26 @@ service cloud.firestore {
     }
 
     match /rooms/{roomId} {
-      allow create: if isAuthenticated();
+      allow create: if isAuthenticated() && !('session' in request.resource.data);
       allow read: if isAuthenticated();
-      allow update: if isAuthenticated();
+      // The experiment flow (session) is written only by Cloud Functions (functions/src/session.js)
+      allow update: if isAuthenticated() &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['session']);
       allow delete: if isRoomHost(roomId);
 
       match /participants/{participantId} {
-        allow create: if isAuthenticated() && 
-          request.auth.uid == participantId;
+        // Participants are approved by the joinStudyRoom function; a browser may only create the
+        // host's own record or a pending request (legacy site flow)
+        allow create: if isAuthenticated() && request.auth.uid == participantId &&
+          (isRoomHost(roomId) || request.resource.data.status == 'pending');
 
         allow read: if isAuthenticated() && 
           (isRoomHost(roomId) || request.auth.uid == participantId || isApprovedParticipant(roomId));
 
-        allow update: if isRoomHost(roomId) || (isAuthenticated() && request.auth.uid == participantId);
+        // Own record: presence, name, avatar; never self-approval or the consent record
+        allow update: if isRoomHost(roomId) || (isAuthenticated() && request.auth.uid == participantId &&
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['consent']) &&
+          (request.resource.data.status == resource.data.status || request.resource.data.status in ['pending', 'cancelled', 'left']));
         allow delete: if isRoomHost(roomId) || (isAuthenticated() && request.auth.uid == participantId);
       }
 
@@ -95,14 +102,22 @@ service cloud.firestore {
         allow write: if canUseBoard(boardId);
       }
 
+      // Research event log: browsers append their own events; only the study administrator reads
+      match /events/{eventId} {
+        allow create: if (isApprovedParticipant(roomId) || isRoomHost(roomId)) &&
+          request.resource.data.uid == request.auth.uid && request.resource.data.source == 'client';
+        allow read: if isAdmin();
+      }
+
       match /messages/{messageId} {
         allow read: if isApprovedParticipant(roomId) || isRoomHost(roomId);
-        // Allow approved participants/host to create messages.
-        // senderUid can be the user's own UID, or 'system'/'ai_mentor' for system-generated messages.
-        allow create: if (isApprovedParticipant(roomId) || isRoomHost(roomId)) &&
+        // Participants post as themselves (or 'system'/'ai_mentor' notices); the researcher (host)
+        // is a read-only observer and may only post system notices.
+        allow create: if (isRoomHost(roomId) && request.resource.data.senderUid == 'system') ||
+          (isApprovedParticipant(roomId) && !isRoomHost(roomId) &&
           (request.resource.data.senderUid == request.auth.uid ||
            request.resource.data.senderUid == 'system' ||
-           request.resource.data.senderUid == 'ai_mentor');
+           request.resource.data.senderUid == 'ai_mentor'));
         allow update: if isRoomHost(roomId) || 
           (isAuthenticated() && resource.data.senderUid == request.auth.uid) ||
           (isApprovedParticipant(roomId) && (

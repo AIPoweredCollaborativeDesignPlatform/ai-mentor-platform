@@ -11,6 +11,7 @@ export interface Participant {
   lastSeen?: number;
   joinedAt?: number;
   activeWhiteboardId?: string | null;
+  consent?: { agreedAt: number; textHash: string };
 }
 
 export type SensitivityLevel = 'Strict' | 'Conservative' | 'Exploratory';
@@ -102,6 +103,24 @@ export interface RoomData {
   aiAbortAt?: number;
   /** Participant-safe view of the room's AI condition (set server-side; see functions/src/profiles.js) */
   ai?: RoomAiView;
+  /** Experiment flow, written only by Cloud Functions (functions/src/session.js) */
+  session?: RoomSession;
+}
+
+export interface RoomSession {
+  phase: 'waiting' | 'running' | 'ended';
+  /** Online participants needed to open the session (the researcher is not counted) */
+  expected: number;
+  /** Simultaneous online participants allowed; 0 = no limit */
+  maxOnline: number;
+  /** 0 = no time limit */
+  taskMinutes: number;
+  createdAt?: number;
+  startedAt?: number;
+  endsAt?: number | null;
+  timeUpAt?: number;
+  endedAt?: number;
+  endedBy?: string;
 }
 
 export interface RoomAiView {

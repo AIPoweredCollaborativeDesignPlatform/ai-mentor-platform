@@ -5,6 +5,7 @@ import type { ParticipantStatus, RoomData, ToastMessage } from '../types';
 import { useAuthStore } from './auth';
 import { useMentorStore } from './mentor';
 import { roomDocRef, roomRef, type PushToast, type RoomContext } from './room/context';
+import { endStudySession } from '../services/session';
 import { useRoomSession } from './room/session';
 import { useRoomMessages } from './room/messages';
 import { useRoomWhiteboard } from './room/whiteboard';
@@ -30,7 +31,8 @@ export const useRoomStore = defineStore('room', () => {
 
   const isHost = computed(() => currentRoom.value?.hostUid === authStore.uid);
   const participantsList = computed(() => (currentRoom.value ? Object.values(currentRoom.value.participants) : []));
-  const approvedParticipants = computed(() => participantsList.value.filter(p => p.status === 'approved'));
+  // The researcher (host) is an invisible observer: never listed or counted
+  const approvedParticipants = computed(() => participantsList.value.filter(p => p.status === 'approved' && p.uid !== currentRoom.value?.hostUid));
   const pendingParticipants = computed(() => participantsList.value.filter(p => p.status === 'pending'));
   const onlineParticipants = computed(() => approvedParticipants.value.filter(p => p.isOnline !== false));
 
@@ -56,15 +58,14 @@ export const useRoomStore = defineStore('room', () => {
     await messages.sendTextMessage(text, replyTo);
   };
 
+  // The server ends the session (status, notice, event log); the room stays open read-only
   const endMeetingForAll = async () => {
     if (!currentRoom.value || !isHost.value) return;
     try {
-      await updateDoc(roomRef(currentRoom.value.roomId), { roomStatus: 'ended' });
-      await messages.postSystemMessage('Meeting has been ended by the host', '🛑');
-    } catch (err) {
-      console.error(err);
+      await endStudySession(currentRoom.value.roomId);
+    } catch (err: any) {
+      pushToast('Could not end the session', err?.message || 'Please try again.', 'error');
     }
-    session.stopListening();
   };
 
   const updateParticipantProfile = async (newName: string, newAvatar: string) => {
@@ -122,9 +123,7 @@ export const useRoomStore = defineStore('room', () => {
     startFirestoreListener: session.startFirestoreListener,
     stopListening: session.stopListening,
     createRoom: session.createRoom,
-    applyToJoin: session.applyToJoin,
-    reapplyToJoin: session.reapplyToJoin,
-    cancelJoinRequest: session.cancelJoinRequest,
+    joinRoom: session.joinRoom,
     transferHostOwnership: session.transferHostOwnership,
     setMyTyping: session.setMyTyping,
     approveParticipant: session.approveParticipant,

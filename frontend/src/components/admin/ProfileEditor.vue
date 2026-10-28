@@ -1,13 +1,13 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue';
-import { MODE_LABELS, TIMING_FIELDS, getPath, setPath, type AiMode, type AiProfile } from '../../utils/aiProfiles';
+import { computed, ref, watch } from 'vue';
+import { MODE_LABELS, TIMING_FIELDS, getPath, setPath, withDefaults, type AiMode, type AiProfile } from '../../utils/aiProfiles';
 
 const props = defineProps<{ profile: AiProfile; saving: boolean }>();
 const emit = defineEmits<{ (e: 'save', profile: AiProfile): void; (e: 'cancel'): void }>();
 
 // Edit a deep copy; nothing changes until saved (saving creates a new version)
 // (JSON copy: structuredClone cannot clone Vue reactive proxies)
-const clone = (p: AiProfile): AiProfile => ({ ...JSON.parse(JSON.stringify(p)), rationale: { ...(p.rationale || {}) } });
+const clone = (p: AiProfile): AiProfile => withDefaults({ ...JSON.parse(JSON.stringify(p)), rationale: { ...(p.rationale || {}) } });
 const draft = ref<AiProfile>(clone(props.profile));
 watch(() => props.profile, p => (draft.value = clone(p)));
 
@@ -25,6 +25,17 @@ const MODULES: { key: keyof AiProfile['modules']; label: string }[] = [
 
 const numberValue = (path: string) => Number(getPath(draft.value, path) ?? 0);
 const setNumber = (path: string, raw: string) => setPath(draft.value, path, Math.max(0, Number(raw) || 0));
+
+const noTimeLimit = computed({
+  get: () => !draft.value.session.taskMinutes,
+  set: v => (draft.value.session.taskMinutes = v ? 0 : 30)
+});
+const reminderText = computed({
+  get: () => draft.value.session.reminderMinutes.join(', '),
+  set: v => (draft.value.session.reminderMinutes = [...new Set(v.split(/[,，\s]+/).map(Number).filter(n => n > 0))].sort((a, b) => b - a))
+});
+const sessionNumber = (key: 'expectedParticipants' | 'maxParticipants' | 'taskMinutes', raw: string) =>
+  (draft.value.session[key] = Math.max(key === 'expectedParticipants' ? 1 : 0, Math.round(Number(raw) || 0)));
 
 const save = () => {
   draft.value.rationale = Object.fromEntries(Object.entries(draft.value.rationale || {}).filter(([, v]) => v?.trim()));
@@ -65,6 +76,41 @@ const input = 'w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 
         <input type="checkbox" v-model="draft.shadowAssessment" class="mt-0.5" />
         <span>背景影子判斷：AI 不發言時（無 AI、Reactive、冷卻中）仍在背景判斷協作狀態並記錄，作為比較基準。</span>
       </label>
+    </section>
+
+    <section class="space-y-3">
+      <h3 class="text-sm font-semibold text-slate-200">實驗流程</h3>
+      <div class="grid sm:grid-cols-3 gap-3">
+        <label class="space-y-1">
+          <span class="text-xs text-slate-400">預期人數（到齊自動開場）</span>
+          <input type="number" min="1" :value="draft.session.expectedParticipants" @input="sessionNumber('expectedParticipants', ($event.target as HTMLInputElement).value)" :class="input" />
+        </label>
+        <label class="space-y-1">
+          <span class="text-xs text-slate-400">同時在線上限（0＝不限；研究者不算）</span>
+          <input type="number" min="0" :value="draft.session.maxParticipants" @input="sessionNumber('maxParticipants', ($event.target as HTMLInputElement).value)" :class="input" />
+        </label>
+        <label class="space-y-1">
+          <span class="text-xs text-slate-400">任務時間（分鐘）</span>
+          <input type="number" min="1" :disabled="noTimeLimit" :value="draft.session.taskMinutes || ''" @input="sessionNumber('taskMinutes', ($event.target as HTMLInputElement).value)" :class="[input, noTimeLimit ? 'opacity-40' : '']" />
+          <span class="flex items-center gap-1.5 text-[11px] text-slate-300"><input type="checkbox" v-model="noTimeLimit" /> 無時間限制（沒有提醒，也沒有時間到訊息）</span>
+        </label>
+      </div>
+      <p v-if="draft.session.maxParticipants && draft.session.maxParticipants < draft.session.expectedParticipants" class="text-[11px] text-rose-300">上限小於預期人數，房間永遠不會開場。</p>
+      <div :class="{ 'opacity-50': draft.mode === 'none' }" class="space-y-3">
+        <label class="block space-y-1">
+          <span class="text-xs text-slate-400">提醒時間點（距離結束幾分鐘，可填多個，以逗號分隔；提醒內容由 AI 生成）</span>
+          <input v-model.lazy="reminderText" :disabled="noTimeLimit" :class="[input, noTimeLimit ? 'opacity-40' : '']" placeholder="例如：10, 5" />
+        </label>
+        <label class="block space-y-1">
+          <span class="text-xs text-slate-400">開場文字（開場時 AI 照原文發出；留空則不發）</span>
+          <textarea v-model="draft.session.openingText" rows="3" :class="input"></textarea>
+        </label>
+        <label class="block space-y-1">
+          <span class="text-xs text-slate-400">任務說明（AI 據此開啟話題，並在整場討論中參考；參與者看不到原文）</span>
+          <textarea v-model="draft.session.taskDescription" rows="3" :class="input"></textarea>
+        </label>
+        <p v-if="draft.mode === 'none'" class="text-[11px] text-amber-300">無 AI 條件：不發開場文字、不開話題、不提醒；只有時間到時發一則系統訊息。</p>
+      </div>
     </section>
 
     <section class="space-y-3" :class="{ 'opacity-50': draft.mode === 'none' }">

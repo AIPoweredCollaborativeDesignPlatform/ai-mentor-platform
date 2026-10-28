@@ -1,5 +1,5 @@
 // Bump whenever any prompt text changes; it is stored with every AI output for the research log.
-export const PROMPT_VERSION = 'v3-2026-10-26';
+export const PROMPT_VERSION = 'v4-2026-10-28';
 
 const LANGUAGE_NAMES = { en: 'English', 'zh-TW': 'Traditional Chinese (繁體中文)' };
 export const languageName = code => LANGUAGE_NAMES[code] || LANGUAGE_NAMES['zh-TW'];
@@ -79,7 +79,9 @@ export function mentorSystemPrompt({ config, language, whiteboardMemories, parti
   const name = profile?.displayName?.[language] || profile?.displayName?.en || 'AI Mentor';
   return `You are "${name}", an expert design mentor facilitating a remote collaborative design session between human designers.
 Persona: ${profile?.persona || 'calm, neutral and brief'}
-You are the same mentor for the whole session: keep continuity with your memory below.
+You are the same mentor for the whole session: keep continuity with your memory below.${
+  profile?.session?.taskDescription ? `
+The team's design task (keep the discussion anchored to it): ${profile.session.taskDescription}` : ''}
 Always write user-facing text in ${lang}.
 Modules enabled: 3D=${config.enable3D}, Moodboard=${config.enableMoodboard}, FactRetrieval=${config.enableFactRetrieval}, Summary=${config.enableSummary !== false}. Never produce an asset type whose module is disabled.
 ${renderMemory(memory)}
@@ -168,3 +170,24 @@ Return ONLY one JSON object:
   "openQuestions": ["unresolved questions or disagreements"],
   "participants": { "<uid>": { "name": string, "engagement": "active" | "moderate" | "quiet" | "silent", "stance": "short description", "tags": ["short labels"], "notes": "anything worth remembering" } }
 }`;
+
+/**
+ * Facilitation messages of the experiment flow (src/session.js). Always written by the AI itself,
+ * never canned: `kind` is kickoff (open the topic after the opening text), reminder or time_up.
+ */
+export function sessionMessagePrompt({ kind, profile, language, minutesLeft }) {
+  const lang = languageName(language);
+  const name = profile?.displayName?.[language] || profile?.displayName?.en || 'AI Mentor';
+  const task = profile?.session?.taskDescription || 'n/a';
+  const goals = {
+    kickoff: 'The session has just started and the opening text above has been posted. Open the discussion of the task: invite the team to begin with one concrete, easy first question. Do not repeat the opening text.',
+    reminder: `About ${minutesLeft} minute(s) remain in the session. Remind the team of the remaining time and, based on where the discussion stands, suggest what to focus on so they can converge.`,
+    time_up: 'The session time is up. Tell the team that time is up, briefly acknowledge where they ended, and thank them. Do not open new topics.'
+  };
+  return `You are "${name}", the mentor of a remote collaborative design session.
+Persona: ${profile?.persona || 'calm, neutral and brief'}
+The team's design task: ${task}
+Your role is a mentor: supportive and neutral; never evaluate people.
+Goal of this message: ${goals[kind]}
+Write 1-3 short sentences in ${lang}. Reply with the message text only (no JSON, no quotes).`;
+}

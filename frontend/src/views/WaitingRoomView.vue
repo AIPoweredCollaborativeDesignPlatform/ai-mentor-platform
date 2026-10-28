@@ -1,382 +1,195 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue';
+import { onMounted, onUnmounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import { doc, getDoc } from 'firebase/firestore';
+import { ArrowLeft, Loader2, LogIn, ShieldAlert, Users } from 'lucide-vue-next';
+import { db } from '../firebase/config';
+import { DEFAULT_CONSENT_TEXT } from '../constants/consent';
 import { useAuthStore } from '../stores/auth';
 import { useRoomStore } from '../stores/room';
-import { db } from '../firebase/config';
-import { doc, onSnapshot, type Unsubscribe } from 'firebase/firestore';
-import { Clock, ShieldAlert, ArrowLeft, RotateCcw, Sparkles, LogIn, Edit2, Check, Loader2 } from 'lucide-vue-next';
 
+/**
+ * Entry to a study room (functions/src/session.js): nickname + consent, then the server approves
+ * directly. Returning members and the researcher are let in without the form. When the room is
+ * full the request is retried every few seconds, so a free seat is taken automatically.
+ */
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
 const roomStore = useRoomStore();
 
-const roomId = ref(route.params.roomId as string);
-const pin = roomId.value.replace('room_', '');
+const roomId = route.params.roomId as string;
+const pin = roomId.replace('room_', '');
 
-const isCheckingRoom = ref(true);
-const roomExists = ref(true);
-const targetRoomName = ref('');
-const isEditingIdentity = ref(false);
-const customName = ref(authStore.displayName);
-const customAvatar = ref(authStore.avatar);
+type View = 'checking' | 'not_found' | 'form' | 'joining' | 'full' | 'ended' | 'error';
+const view = ref<View>('checking');
+const roomName = ref('');
+const consentText = ref('');
+const agreed = ref(false);
+const errorText = ref('');
+const fullInfo = ref({ online: 0, max: 0 });
 
-const avatarOptions = ['🦊', '🦉', '🎨', '🚀', '🔮', '📐', '🤖', '⚡', '🦅', '🐬'];
+const ADJECTIVES = ['Curious', 'Clever', 'Creative', 'Swift', 'Cosmic', 'Bold', 'Bright', 'Calm'];
+const NOUNS = ['Rocket', 'Falcon', 'Owl', 'Fox', 'Panda', 'Otter', 'Eagle', 'Dolphin'];
+const AVATARS = ['🦊', '🦉', '🎨', '🚀', '🔮', '📐', '🤖', '⚡', '🦅', '🐬'];
+const pick = <T,>(list: T[]) => list[Math.floor(Math.random() * list.length)];
 
-let hasApplied = false;
-let unsubMyParticipantDoc: Unsubscribe | null = null;
+// Always a nickname: the Google account name is never used in study rooms
+const nickname = ref(`${pick(ADJECTIVES)} ${pick(NOUNS)}`);
+const avatar = ref(pick(AVATARS));
 
-const listenToMyParticipantDoc = () => {
-  if (unsubMyParticipantDoc) {
-    unsubMyParticipantDoc();
-    unsubMyParticipantDoc = null;
-  }
-  if (!db || !authStore.uid || !roomId.value) return;
+let retryTimer: ReturnType<typeof setTimeout> | undefined;
+const FULL_RETRY_MS = 5000;
 
+const enterRoom = () => router.replace(`/room/${roomId}`);
+
+const attempt = async (consent: boolean, retry = false) => {
+  clearTimeout(retryTimer);
   try {
-    const myDocRef = doc(db, 'rooms', roomId.value, 'participants', authStore.uid);
-    unsubMyParticipantDoc = onSnapshot(myDocRef, (snap) => {
-      if (snap.exists()) {
-        const data = snap.data();
-        if (data?.status === 'approved') {
-          roomStore.myStatus = 'approved';
-          router.replace(`/room/${roomId.value}`);
-        } else if (data?.status === 'rejected') {
-          roomStore.myStatus = 'rejected';
-        } else if (data?.status === 'kicked') {
-          roomStore.myStatus = 'kicked';
-        }
-      }
-    }, (err) => {
-      console.warn('[WaitingRoom] Participant doc listener error:', err);
-    });
-  } catch (err) {
-    console.warn('[WaitingRoom] Error establishing participant doc listener:', err);
-  }
-};
-
-// Random friendly English name generator if user is generic Guest
-const generateFriendlyIdentity = () => {
-  if (authStore.displayName === 'Guest' || !authStore.displayName) {
-    const adjectives = ['Anonymous', 'Curious', 'Clever', 'Creative', 'Swift', 'Cosmic', 'Bold', 'Bright'];
-    const nouns = ['Rocket', 'Falcon', 'Owl', 'Fox', 'Panda', 'Otter', 'Eagle', 'Dolphin'];
-    const emojis = ['🚀', '🦅', '🦉', '🦊', '🐼', '🦦', '⚡', '🐬'];
-    const randIdx = Math.floor(Math.random() * adjectives.length);
-    const randName = `${adjectives[randIdx]} ${nouns[randIdx]}`;
-    const randAvatar = emojis[randIdx];
-    authStore.updateProfile(randName, randAvatar);
-    customName.value = randName;
-    customAvatar.value = randAvatar;
-  }
-};
-
-const checkStatus = () => {
-  if (!roomExists.value) return;
-
-  if (roomStore.currentRoom) {
-    targetRoomName.value = roomStore.currentRoom.roomName || targetRoomName.value;
-    const me = roomStore.currentRoom.participants?.[authStore.uid];
-    if (me) {
-      if (me.status === 'approved') {
-        roomStore.myStatus = 'approved';
-        router.replace(`/room/${roomId.value}`);
-      } else if (me.status === 'rejected') {
-        roomStore.myStatus = 'rejected';
-      } else if (me.status === 'kicked') {
-        roomStore.myStatus = 'kicked';
-      }
+    const result = await roomStore.joinRoom(pin, nickname.value.trim() || 'Participant', avatar.value, consent, retry);
+    if (result.status === 'approved') {
+      if (result.role === 'participant' && !result.returning) authStore.updateProfile(nickname.value.trim(), avatar.value);
+      enterRoom();
+    } else if (result.status === 'consent_required') {
+      view.value = 'form';
+    } else if (result.status === 'full') {
+      fullInfo.value = { online: result.online || 0, max: result.max || 0 };
+      view.value = 'full';
+      retryTimer = setTimeout(() => attempt(consent, true), FULL_RETRY_MS);
+    } else if (result.status === 'ended') {
+      view.value = 'ended';
     } else {
-      // User is not in participants list locally yet, auto-apply
-      if (authStore.uid && !hasApplied) {
-        hasApplied = true;
-        roomStore.applyToJoin(pin).then(() => {
-          listenToMyParticipantDoc();
-        }).catch((err) => {
-          console.error(err);
-        });
-      }
+      view.value = 'not_found';
     }
-  }
-};
-
-const handleSaveIdentity = () => {
-  if (customName.value.trim()) {
-    authStore.updateProfile(customName.value.trim(), customAvatar.value);
-  }
-  isEditingIdentity.value = false;
-  // If already in room as pending, re-apply with new name
-  if (hasApplied) {
-    roomStore.applyToJoin(pin);
-  }
-};
-
-const isGoogleSigningIn = ref(false);
-
-const handleGoogleSignIn = async () => {
-  if (isGoogleSigningIn.value) return;
-  isGoogleSigningIn.value = true;
-  try {
-    const res = await authStore.upgradeWithGoogle();
-    customName.value = authStore.displayName;
-    customAvatar.value = authStore.avatar;
-    if (res?.previousAnonUid && roomStore.currentRoom) {
-      await roomStore.transferHostOwnership(res.previousAnonUid, authStore.uid);
-    }
-    roomStore.applyToJoin(pin);
   } catch (err: any) {
-    if (err?.code !== 'auth/popup-closed-by-user' && err?.code !== 'auth/cancelled-popup-request') {
-      alert(`Sign-in error: ${err.message || err}`);
-    }
-  } finally {
-    isGoogleSigningIn.value = false;
+    errorText.value = err?.message || 'Could not join the room.';
+    view.value = 'error';
   }
 };
 
-const handleReapply = async () => {
-  hasApplied = true;
-  roomStore.myStatus = 'pending';
-  await roomStore.reapplyToJoin(pin);
+const submit = () => {
+  if (!agreed.value || !nickname.value.trim()) return;
+  view.value = 'joining';
+  attempt(true);
 };
-
-watch(
-  () => [roomStore.myStatus, roomStore.currentRoom?.participants?.[authStore.uid]?.status],
-  ([newStatus, partStatus]) => {
-    if (newStatus === 'approved' || partStatus === 'approved') {
-      router.replace(`/room/${roomId.value}`);
-    }
-  },
-  { immediate: true }
-);
-
-watch(() => roomStore.currentRoom, () => {
-  checkStatus();
-}, { deep: true });
-
-watch(() => authStore.uid, (newUid) => {
-  if (newUid) {
-    listenToMyParticipantDoc();
-    if (roomExists.value && !hasApplied) {
-      checkStatus();
-    }
-  }
-});
 
 onMounted(async () => {
-  generateFriendlyIdentity();
-  
-  // Ensure Firebase Auth is fully initialized before checking room
-  await authStore.waitForAuthReady().catch(() => {});
-
-  // Verify room exists first!
-  let check: { exists: boolean; roomName?: string } = { exists: false, roomName: '' };
-  if (roomStore.currentRoom?.pin === pin) {
-    check = { exists: true, roomName: roomStore.currentRoom.roomName || '' };
-  } else {
-    check = await roomStore.checkRoomExists(pin);
-  }
-  
-  isCheckingRoom.value = false;
+  const check = await roomStore.checkRoomExists(pin);
   if (!check.exists) {
-    roomExists.value = false;
+    view.value = 'not_found';
     return;
   }
-  targetRoomName.value = check.roomName || `Meeting ${pin}`;
-  
-  listenToMyParticipantDoc();
-  roomStore.startFirestoreListener(roomId.value);
-  setTimeout(checkStatus, 600);
+  roomName.value = check.roomName || `Meeting ${pin}`;
+  const config = await getDoc(doc(db, 'config', 'system')).catch(() => null);
+  consentText.value = config?.data()?.consentText || DEFAULT_CONSENT_TEXT;
+  // Researcher and returning members go straight in; everyone else gets the form
+  await attempt(false);
 });
 
-const handleCancelAndBack = async () => {
-  await roomStore.cancelJoinRequest(pin);
-  router.push('/');
-};
-
-onUnmounted(() => {
-  if (unsubMyParticipantDoc) {
-    unsubMyParticipantDoc();
-    unsubMyParticipantDoc = null;
-  }
-  if (roomStore.myStatus === 'pending') {
-    roomStore.cancelJoinRequest(pin);
-  }
-  // If navigating back to home or away entirely, stop listening.
-  // If navigating to the room, MeetingRoomView will handle the listeners.
-  if (!route.path.startsWith('/room/')) {
-    roomStore.stopListening();
-  }
-});
+onUnmounted(() => clearTimeout(retryTimer));
 </script>
 
 <template>
   <div class="min-h-[100dvh] flex items-center justify-center p-4 bg-slate-950 overflow-y-auto">
-    <!-- Checking room loading state -->
-    <div v-if="isCheckingRoom" class="text-center">
+    <div v-if="view === 'checking' || view === 'joining'" class="text-center">
       <div class="w-10 h-10 border-2 border-sky-500 border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
-      <p class="text-xs text-slate-400">Verifying meeting room...</p>
+      <p class="text-xs text-slate-400">{{ view === 'joining' ? 'Joining...' : 'Checking the room...' }}</p>
     </div>
 
-    <!-- Room Not Found State -->
-    <div v-else-if="!roomExists" class="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-2xl text-center">
-      <div class="w-14 h-14 mx-auto mb-4 rounded-full bg-rose-500/20 border border-rose-500/50 flex items-center justify-center text-rose-400">
-        <ShieldAlert class="w-7 h-7" />
-      </div>
-      <h2 class="text-lg font-bold text-white mb-2">Meeting Not Found</h2>
-      <p class="text-sm text-slate-400 mb-6 leading-relaxed">
-        Meeting room <span class="font-mono text-rose-400 font-semibold">{{ pin }}</span> does not exist or has been ended.
-      </p>
-      <router-link
-        to="/"
-        class="px-5 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold transition inline-flex items-center gap-2 shadow"
-      >
-        <ArrowLeft class="w-4 h-4" /> Back to Home
-      </router-link>
-    </div>
-
-    <!-- Main Card -->
-    <div v-else class="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-2xl text-center">
-      <!-- Pending Status -->
-      <div v-if="roomStore.myStatus !== 'rejected' && roomStore.myStatus !== 'kicked'">
-        <div class="relative w-20 h-20 mx-auto mb-4 flex items-center justify-center">
-          <div class="absolute inset-0 rounded-full bg-sky-500/20 animate-ping"></div>
-          <div class="relative z-10 w-16 h-16 rounded-full bg-slate-800 border-2 border-sky-500/50 flex items-center justify-center text-3xl shadow-lg">
-            {{ authStore.avatar }}
-          </div>
-        </div>
-
-        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30 text-xs font-semibold mb-3">
-          <Clock class="w-3.5 h-3.5 animate-spin" /> Waiting Room
-        </div>
-
-        <h2 class="text-xl font-bold text-white mb-1.5">
-          Waiting for host approval...
-        </h2>
-        <p class="text-xs sm:text-sm text-slate-400 leading-relaxed mb-4">
-          You've requested to join <span class="text-white font-semibold">"{{ targetRoomName || roomStore.currentRoom?.roomName || 'Meeting' }}"</span> (<span class="font-mono text-sky-400 font-semibold">{{ pin }}</span>).<br />
-          You'll be redirected automatically once the host approves.
-        </p>
-        
-        <div v-if="roomStore.currentRoom && roomStore.currentRoom.participants?.[roomStore.currentRoom.hostUid]?.isOnline === false" class="mb-5 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 text-[11px] font-medium text-left">
-          <ShieldAlert class="w-4 h-4 shrink-0" />
-          The host is currently offline and may take longer to approve your request.
-        </div>
-
-        <!-- Identity Card with Edit Capability -->
-        <div class="p-3.5 bg-slate-950/70 rounded-xl border border-slate-800 mb-5 text-left">
-          <div class="flex items-center justify-between mb-2">
-            <span class="text-[11px] font-medium text-slate-400">Your Identity</span>
-            <button
-              v-if="!isEditingIdentity"
-              @click="isEditingIdentity = true"
-              class="text-[11px] text-sky-400 hover:text-sky-300 transition flex items-center gap-1"
-            >
-              <Edit2 class="w-3 h-3" /> Change
-            </button>
-          </div>
-
-          <!-- Edit View -->
-          <div v-if="isEditingIdentity" class="space-y-3 pt-1">
-            <div class="flex items-center gap-2">
-              <span class="text-2xl p-1 bg-slate-800 rounded-lg border border-slate-700 shrink-0">{{ customAvatar }}</span>
-              <input
-                v-model="customName"
-                type="text"
-                maxlength="20"
-                class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-base sm:text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 min-h-[40px]"
-                placeholder="Enter name..."
-              />
-            </div>
-            <!-- Avatar Picker -->
-            <div class="flex flex-wrap gap-1.5">
-              <button
-                v-for="av in avatarOptions"
-                :key="av"
-                @click="customAvatar = av"
-                class="w-7 h-7 rounded-lg text-sm flex items-center justify-center transition border"
-                :class="customAvatar === av ? 'bg-sky-500/20 border-sky-400' : 'bg-slate-900 border-slate-800 hover:border-slate-700'"
-              >
-                {{ av }}
-              </button>
-            </div>
-            <div class="flex justify-end gap-2 pt-1">
-              <button
-                @click="isEditingIdentity = false"
-                class="px-2.5 py-1 text-xs text-slate-400 hover:text-white transition"
-              >
-                Cancel
-              </button>
-              <button
-                @click="handleSaveIdentity"
-                class="px-3 py-1 bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold rounded-lg transition flex items-center gap-1 shadow"
-              >
-                <Check class="w-3 h-3" /> Save
-              </button>
-            </div>
-          </div>
-
-          <!-- Normal Display View -->
-          <div v-else class="flex items-center justify-between">
-            <div class="flex items-center gap-2">
-              <span class="text-xl">{{ authStore.avatar }}</span>
-              <div>
-                <span class="text-sm font-semibold text-slate-200">{{ authStore.displayName }}</span>
-                <span v-if="authStore.isGoogleLinked" class="text-[10px] text-emerald-400 ml-2">● Google Verified</span>
-              </div>
-            </div>
-            <span class="text-xs text-amber-400 font-mono bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-full">Pending</span>
-          </div>
-
-          <!-- Google Sign-in Option if Guest -->
-          <div v-if="!authStore.isGoogleLinked && !isEditingIdentity" class="mt-3 pt-2.5 border-t border-slate-800/80">
-            <button
-              @click="handleGoogleSignIn"
-              :disabled="isGoogleSigningIn"
-              class="w-full py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-medium transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
-            >
-              <Loader2 v-if="isGoogleSigningIn" class="w-3.5 h-3.5 animate-spin text-sky-400" />
-              <LogIn v-else class="w-3.5 h-3.5 text-sky-400" />
-              {{ isGoogleSigningIn ? 'Signing in...' : 'Sign in with Google instead' }}
-            </button>
-          </div>
-        </div>
-
-        <button
-          @click="handleCancelAndBack"
-          class="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 transition"
-        >
-          <ArrowLeft class="w-3.5 h-3.5" /> Cancel and go back
-        </button>
-      </div>
-
-      <!-- Rejected or Kicked Status -->
-      <div v-else>
+    <div v-else class="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-2xl">
+      <!-- Not found / ended / error -->
+      <div v-if="view === 'not_found' || view === 'ended' || view === 'error'" class="text-center">
         <div class="w-14 h-14 mx-auto mb-4 rounded-full bg-rose-500/20 border border-rose-500/50 flex items-center justify-center text-rose-400">
           <ShieldAlert class="w-7 h-7" />
         </div>
         <h2 class="text-lg font-bold text-white mb-2">
-          {{ roomStore.myStatus === 'kicked' ? 'Removed from Meeting' : 'Request Declined' }}
+          {{ view === 'ended' ? 'This session has ended' : view === 'error' ? 'Could not join' : 'Room not found' }}
         </h2>
         <p class="text-sm text-slate-400 mb-6 leading-relaxed">
-          {{ roomStore.myStatus === 'kicked'
-            ? 'The host removed you from this meeting.'
-            : 'The host has declined your request to join this meeting.' }}
+          <template v-if="view === 'ended'">Thank you. This room is closed to new participants.</template>
+          <template v-else-if="view === 'error'">{{ errorText }}</template>
+          <template v-else>Room <span class="font-mono text-rose-400 font-semibold">{{ pin }}</span> does not exist. Please check the PIN.</template>
         </p>
-        <div class="flex flex-col sm:flex-row items-center justify-center gap-2.5">
-          <button
-            @click="handleReapply"
-            class="w-full sm:w-auto px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold transition inline-flex items-center justify-center gap-1.5 shadow"
-          >
-            <RotateCcw class="w-3.5 h-3.5" /> Request to Join Again
-          </button>
-          <router-link
-            to="/"
-            class="w-full sm:w-auto px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition inline-flex items-center justify-center gap-1.5"
-          >
-            <ArrowLeft class="w-3.5 h-3.5" /> Back to Home
+        <router-link to="/" class="px-5 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold transition inline-flex items-center gap-2 shadow">
+          <ArrowLeft class="w-4 h-4" /> Back to Home
+        </router-link>
+      </div>
+
+      <!-- Room full: retried automatically -->
+      <div v-else-if="view === 'full'" class="text-center">
+        <div class="w-14 h-14 mx-auto mb-4 rounded-full bg-amber-500/15 border border-amber-500/40 flex items-center justify-center text-amber-300">
+          <Users class="w-7 h-7" />
+        </div>
+        <h2 class="text-lg font-bold text-white mb-2">Room is full</h2>
+        <p class="text-sm text-slate-400 mb-2 leading-relaxed">
+          {{ fullInfo.online }} / {{ fullInfo.max }} participants are in this room.
+        </p>
+        <p class="text-xs text-slate-500 mb-6 inline-flex items-center gap-1.5">
+          <Loader2 class="w-3.5 h-3.5 animate-spin" /> You will join automatically when a seat opens.
+        </p>
+        <div>
+          <router-link to="/" class="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 transition">
+            <ArrowLeft class="w-3.5 h-3.5" /> Go back
           </router-link>
         </div>
       </div>
+
+      <!-- Nickname + consent -->
+      <form v-else @submit.prevent="submit" class="space-y-5">
+        <div class="text-center">
+          <h2 class="text-xl font-bold text-white mb-1">Join "{{ roomName }}"</h2>
+          <p class="text-xs text-slate-400">Room <span class="font-mono text-sky-400">{{ pin }}</span></p>
+        </div>
+
+        <div class="space-y-2">
+          <label class="text-[11px] font-medium text-slate-400" for="nickname">Nickname (please do not use your real name)</label>
+          <div class="flex items-center gap-2">
+            <span class="text-2xl p-1 bg-slate-800 rounded-lg border border-slate-700 shrink-0">{{ avatar }}</span>
+            <input
+              id="nickname"
+              v-model="nickname"
+              maxlength="20"
+              class="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-base sm:text-sm text-white focus:outline-none focus:border-sky-500 min-h-[40px]"
+            />
+          </div>
+          <div class="flex flex-wrap gap-1.5">
+            <button
+              v-for="av in AVATARS"
+              :key="av"
+              type="button"
+              @click="avatar = av"
+              class="w-8 h-8 rounded-lg text-sm flex items-center justify-center transition border"
+              :class="avatar === av ? 'bg-sky-500/20 border-sky-400' : 'bg-slate-950 border-slate-800 hover:border-slate-700'"
+            >
+              {{ av }}
+            </button>
+          </div>
+        </div>
+
+        <div class="space-y-2">
+          <div class="text-[11px] font-medium text-slate-400">Research consent</div>
+          <div class="max-h-48 overflow-y-auto whitespace-pre-line text-xs leading-relaxed text-slate-300 bg-slate-950/70 border border-slate-800 rounded-xl p-3">
+            {{ consentText || 'Loading...' }}
+          </div>
+          <label class="flex items-start gap-2 text-xs text-slate-200 cursor-pointer">
+            <input type="checkbox" v-model="agreed" class="mt-0.5" />
+            <span>I have read the information above and agree to take part.</span>
+          </label>
+        </div>
+
+        <button
+          type="submit"
+          :disabled="!agreed || !nickname.trim()"
+          class="w-full py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-semibold transition inline-flex items-center justify-center gap-2 shadow disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <LogIn class="w-4 h-4" /> Join
+        </button>
+        <div class="text-center">
+          <router-link to="/" class="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 transition">
+            <ArrowLeft class="w-3.5 h-3.5" /> Cancel
+          </router-link>
+        </div>
+      </form>
     </div>
   </div>
 </template>

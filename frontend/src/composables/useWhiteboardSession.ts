@@ -3,6 +3,7 @@ import { useAuthStore } from '../stores/auth';
 import { useRoomStore } from '../stores/room';
 import type { MessageItem } from '../types';
 import { isOwnBoard } from '../utils/chat';
+import { logEvent } from '../services/researchLog';
 
 /** Methods exposed by the whiteboard component that the room view relies on. */
 export interface WhiteboardHandle {
@@ -19,7 +20,7 @@ const newBoardId = () => `wb_${Date.now().toString(36)}_${Math.random().toString
  *  - public boards are collaborative for everyone; closing a board never closes it for anyone else
  *  - when a creator makes a board private, everyone else viewing it is ejected
  */
-export function useWhiteboardSession(whiteboardRef: Ref<WhiteboardHandle | null>) {
+export function useWhiteboardSession(whiteboardRef: Ref<WhiteboardHandle | null>, lockReason: () => string | null = () => null) {
   const authStore = useAuthStore();
   const roomStore = useRoomStore();
 
@@ -38,24 +39,35 @@ export function useWhiteboardSession(whiteboardRef: Ref<WhiteboardHandle | null>
     }
   };
 
-  const open = (boardId: string) => {
+  const open = (boardId: string, isNew = false) => {
+    if (activeBoardId.value && activeBoardId.value !== boardId) logEvent('whiteboard_close', { boardId: activeBoardId.value, reason: 'switched' });
+    logEvent('whiteboard_open', { boardId, isNew });
     activeBoardId.value = boardId;
     whiteboardSessionKey.value = `wb_${boardId}_${Date.now()}`;
     isWhiteboardOpen.value = true;
   };
 
   const closeWhiteboard = () => {
+    if (activeBoardId.value) logEvent('whiteboard_close', { boardId: activeBoardId.value });
     isWhiteboardOpen.value = false;
     activeBoardId.value = null;
   };
 
+  // Whiteboards are editable only while the session runs, and never by the observing researcher
+  const blockedByLock = () => {
+    const reason = lockReason();
+    if (reason) roomStore.pushToast('Whiteboard unavailable', reason, 'info');
+    return Boolean(reason);
+  };
+
   const openNewWhiteboard = async () => {
+    if (blockedByLock()) return;
     await flushOpenBoard();
-    open(newBoardId());
+    open(newBoardId(), true);
   };
 
   const openWhiteboardAsset = async (msg: MessageItem) => {
-    if (msg.type !== 'whiteboard_state') return;
+    if (msg.type !== 'whiteboard_state' || blockedByLock()) return;
     if (msg.metadata?.isPrivate && !isOwnBoard(msg, authStore.uid)) {
       roomStore.pushToast('Access Restricted', 'This whiteboard is set to private by its creator.', 'warning');
       return;
@@ -67,6 +79,14 @@ export function useWhiteboardSession(whiteboardRef: Ref<WhiteboardHandle | null>
     await flushOpenBoard();
     open(msg.id);
   };
+
+  // Session ended (or not yet running) while a board is open → close it
+  watch(lockReason, reason => {
+    if (reason && isWhiteboardOpen.value) {
+      whiteboardRef.value?.flush?.();
+      closeWhiteboard();
+    }
+  });
 
   // Made private by its creator while I am viewing it → leave
   watch(() => findMessage(activeBoardId.value)?.metadata?.isPrivate, isPrivate => {

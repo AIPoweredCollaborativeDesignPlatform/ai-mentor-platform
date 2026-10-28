@@ -14,7 +14,9 @@ import {
   X,
   Loader2
 } from 'lucide-vue-next';
-import { computed } from 'vue';
+import { computed, onMounted } from 'vue';
+import { assignRoomProfile, listProfiles } from '../services/admin';
+import { MODE_LABELS, type AiProfile } from '../utils/aiProfiles';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -61,11 +63,24 @@ const handleSaveProfile = () => {
   }
 };
 
+// The study administrator picks the experiment condition when creating a room (others get the default)
+const isStudyAdmin = computed(() => authStore.isGoogleLinked && authStore.email === 'bb900114@gmail.com');
+const profiles = ref<AiProfile[]>([]);
+const selectedProfileId = ref('');
+onMounted(async () => {
+  await authStore.waitForAuthReady().catch(() => {});
+  if (isStudyAdmin.value) profiles.value = await listProfiles().catch(() => []);
+});
+
 const handleCreateRoom = async () => {
   handleSaveProfile();
   isLoading.value = true;
   try {
     const newRoom = await roomStore.createRoom(roomNameInput.value, selectedRoomEmoji.value);
+    if (selectedProfileId.value) {
+      await assignRoomProfile(newRoom.roomId, selectedProfileId.value).catch(err =>
+        roomStore.pushToast('Profile not assigned', err?.message || 'Assign it from /#/admin.', 'error'));
+    }
     router.push(`/room/${newRoom.roomId}`);
   } catch (err) {
     console.error(err);
@@ -91,7 +106,6 @@ const handleJoinRoom = async () => {
       isLoading.value = false;
       return;
     }
-    await roomStore.applyToJoin(pin);
     router.push(`/waiting/room_${pin}`);
   } catch (err: any) {
     errorMsg.value = err.message || 'Failed to join room';
@@ -319,6 +333,15 @@ const handleGoogleSignIn = async () => {
               </div>
             </div>
           </div>
+          <select
+            v-if="isStudyAdmin && profiles.length"
+            v-model="selectedProfileId"
+            class="mb-2 w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-sky-500"
+            title="Experiment condition profile"
+          >
+            <option value="">Default profile</option>
+            <option v-for="p in profiles" :key="p.id" :value="p.id">{{ p.name }} · {{ MODE_LABELS[p.mode].split('（')[0] }}</option>
+          </select>
           <button
             @click="handleCreateRoom"
             :disabled="isLoading"

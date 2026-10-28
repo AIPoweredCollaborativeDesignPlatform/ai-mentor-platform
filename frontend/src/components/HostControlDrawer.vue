@@ -609,7 +609,7 @@ onUnmounted(() => {
 
           <!-- Reopen Meeting (If Ended & Host) -->
           <button
-            v-if="roomStore.isHost && roomStore.currentRoom?.roomStatus === 'ended'"
+            v-if="roomStore.isHost && roomStore.currentRoom?.roomStatus === 'ended' && !roomStore.currentRoom?.session"
             @click="handleReopenMeeting"
             class="w-full py-2.5 px-3 rounded-xl border border-emerald-500/40 bg-emerald-950/40 hover:bg-emerald-900/50 text-emerald-300 hover:text-emerald-100 text-xs font-semibold transition flex items-center justify-center gap-2 shadow"
           >
@@ -628,7 +628,7 @@ onUnmounted(() => {
 
           <!-- End Meeting for All (Host only) -->
           <button
-            v-if="roomStore.isHost && roomStore.currentRoom?.roomStatus !== 'ended'"
+            v-if="roomStore.isHost && roomStore.currentRoom?.roomStatus !== 'ended' && !roomStore.currentRoom?.session"
             @click="triggerEndFlow"
             class="w-full py-2.5 px-3 rounded-xl border border-rose-900/60 bg-rose-950/30 hover:bg-rose-900/50 text-rose-300 hover:text-rose-100 text-xs font-semibold transition flex items-center justify-center gap-2"
           >

@@ -37,6 +37,7 @@ export interface StudyRoom {
   lastActive?: number;
   roomStatus?: string;
   appVersion?: string;
+  session?: { phase: string; expected: number; maxOnline: number; taskMinutes: number; startedAt?: number; endedAt?: number; endedBy?: string };
   assignment?: { profileId: string | null; profileVersion: number; profileName?: string; mode?: string; assignedAt?: number; assignedBy?: string };
 }
 
@@ -64,6 +65,19 @@ export async function listStudyRooms(max = 100): Promise<StudyRoom[]> {
 export async function assignRoomProfile(roomId: string, profileId: string) {
   const fn = httpsCallable<{ roomId: string; profileId: string }, { profileId: string; profileVersion: number }>(functions, 'assignRoomProfile');
   return (await fn({ roomId, profileId })).data;
+}
+
+export interface LegacyRoom {
+  roomId: string;
+  roomName: string;
+  createdAt: number | null;
+  lastActive: number | null;
+}
+
+/** Rooms of the legacy site (no appVersion). dryRun lists them; otherwise they are deleted for good. */
+export async function purgeLegacyRooms(dryRun: boolean) {
+  const fn = httpsCallable<{ dryRun: boolean }, { dryRun: boolean; rooms?: LegacyRoom[]; deleted?: number; indexEntries?: number }>(functions, 'purgeLegacyRooms');
+  return (await fn({ dryRun })).data;
 }
 
 export async function getSystemConfig(): Promise<Record<string, any>> {

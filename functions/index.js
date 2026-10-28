@@ -2,7 +2,9 @@ import { Readable } from 'node:stream';
 import { initializeApp } from 'firebase-admin/app';
 import { defineSecret } from 'firebase-functions/params';
 import { HttpsError, onCall, onRequest } from 'firebase-functions/v2/https';
-import { onDocumentCreated } from 'firebase-functions/v2/firestore';
+import { onDocumentCreated, onDocumentWritten } from 'firebase-functions/v2/firestore';
+import { onSchedule } from 'firebase-functions/v2/scheduler';
+import { getFirestore } from 'firebase-admin/firestore';
 import { getSystemConfig } from './src/config.js';
 import { classifyError, createMessage, extractSvg, imageBlockFromDataUrl, responseText } from './src/claude.js';
 import { PROMPT_VERSION, VISION_PROMPT, sketchToSvgPrompt, textToSvgPrompt } from './src/prompts.js';
@@ -10,6 +12,8 @@ import { generate3D, refineMeshy } from './src/mesh3d.js';
 import { logAiCall } from './src/log.js';
 import { FRIENDLY_ERRORS } from './src/mentor.js';
 import { assignProfileToRoom, ensureRoomAi, handleNewMessage, loadProfile, runCheck } from './src/engine.js';
+import { endSession, joinRoom, maybeStartSession, runSessionJob, sessionTick } from './src/session.js';
+import { logBoardObjectChange, logMessageChange } from './src/events.js';
 
 initializeApp();
 
@@ -95,8 +99,77 @@ export const assignRoomProfile = onCall({ maxInstances: 5 }, async request => {
   const profile = await loadProfile(profileId);
   if (!profile.id) throw new HttpsError('not-found', 'Profile not found');
   await assignProfileToRoom(roomId, profile, request.auth.token.email);
+  await maybeStartSession(roomId);
   return { profileId: profile.id, profileVersion: profile.version };
 });
+
+/**
+ * Removes every room of the legacy site (rooms without appVersion) with all subcollections, plus the
+ * users/{uid}/rooms index entries pointing at them. dryRun lists them without deleting.
+ */
+export const purgeLegacyRooms = onCall({ timeoutSeconds: 540, memory: '512MiB', maxInstances: 1 }, async request => {
+  requireAdmin(request);
+  const db = getFirestore();
+  const snap = await db.collection('rooms').select('appVersion', 'roomName', 'createdAt', 'lastActive').get();
+  const legacy = snap.docs.filter(d => !d.data().appVersion).map(d => ({
+    roomId: d.id, roomName: d.data().roomName || '', createdAt: d.data().createdAt || null, lastActive: d.data().lastActive || null
+  }));
+  if (request.data?.dryRun !== false) return { dryRun: true, rooms: legacy };
+
+  const ids = new Set(legacy.map(r => r.roomId));
+  for (const r of legacy) await db.recursiveDelete(db.doc(`rooms/${r.roomId}`));
+  let indexEntries = 0;
+  for (const user of await db.collection('users').listDocuments()) {
+    for (const entry of await user.collection('rooms').listDocuments()) {
+      if (ids.has(entry.id)) {
+        await entry.delete();
+        indexEntries++;
+      }
+    }
+  }
+  return { dryRun: false, deleted: legacy.length, indexEntries };
+});
+
+// ---------- Experiment flow (src/session.js) ----------
+export const joinStudyRoom = onCall({ maxInstances: 20 }, async request => {
+  requireAuth(request);
+  const { roomId, displayName, avatar, consent, retry } = request.data || {};
+  if (!roomId) throw new HttpsError('invalid-argument', 'Missing roomId');
+  return joinRoom({ roomId: String(roomId), uid: request.auth.uid, displayName, avatar, consent: consent === true, retry: retry === true });
+});
+
+/** End button: the room's researcher (host) or the study administrator. */
+export const endStudySession = onCall({ maxInstances: 10 }, async request => {
+  requireAuth(request);
+  const { roomId } = request.data || {};
+  if (!roomId) throw new HttpsError('invalid-argument', 'Missing roomId');
+  const room = (await getFirestore().doc(`rooms/${roomId}`).get()).data();
+  if (!room) throw new HttpsError('not-found', 'Room not found');
+  const token = request.auth.token;
+  if (room.hostUid !== request.auth.uid && !(token?.email === ADMIN_EMAIL && token?.email_verified)) {
+    throw new HttpsError('permission-denied', 'Only the researcher can end the session');
+  }
+  return { ended: await endSession(roomId, room.hostUid === request.auth.uid ? 'researcher' : 'admin') };
+});
+
+export const sessionClock = onSchedule({ schedule: 'every 1 minutes', timeoutSeconds: 120, maxInstances: 1 }, () => sessionTick());
+
+export const onSessionJob = onDocumentCreated(
+  { document: 'sessionJobs/{jobId}', secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 300, maxInstances: 10 },
+  async event => {
+    const job = event.data?.data();
+    if (job) await runSessionJob(job, { anthropic: ANTHROPIC_API_KEY.value() });
+  }
+);
+
+// ---------- Research event log (src/events.js) ----------
+export const logMessageEvent = onDocumentWritten({ document: 'rooms/{roomId}/messages/{messageId}', maxInstances: 20 }, event =>
+  logMessageChange(event.params.roomId, event.params.messageId, event.data?.before?.data(), event.data?.after?.data())
+);
+
+export const logBoardEvent = onDocumentWritten({ document: 'rooms/{roomId}/boards/{boardId}/objects/{objectId}', maxInstances: 20 }, event =>
+  logBoardObjectChange(event.params.roomId, event.params.boardId, event.params.objectId, event.data?.before?.data(), event.data?.after?.data())
+);
 
 export const whiteboardVision = onCall(
   { secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 60, maxInstances: 20 },

@@ -20,6 +20,17 @@ export interface AiProfile {
   };
   memory: { updateEveryMessages: number; updateOnWhiteboardShare: boolean };
   modules: { enable3D: boolean; enableMoodboard: boolean; enableFactRetrieval: boolean; enableSummary: boolean; enableWhiteboardAi: boolean };
+  /** Experiment flow (functions/src/session.js) */
+  session: {
+    expectedParticipants: number;
+    maxParticipants: number;
+    openingText: string;
+    taskDescription: string;
+    /** 0 = no time limit */
+    taskMinutes: number;
+    /** Minutes before the end at which the AI writes a reminder */
+    reminderMinutes: number[];
+  };
   /** Optional basis / literature per field path, e.g. rationale['triggers.pauseSeconds'] */
   rationale: Record<string, string>;
   updatedAt?: number;
@@ -43,10 +54,14 @@ const base = (): AiProfile => ({
   triggers: { pauseSeconds: 8, minNewMessages: 3, maxMessagesBetweenChecks: 12, stallSeconds: 90, cooldownSeconds: 60 },
   memory: { updateEveryMessages: 15, updateOnWhiteboardShare: true },
   modules: { enable3D: true, enableMoodboard: true, enableFactRetrieval: true, enableSummary: true, enableWhiteboardAi: true },
+  session: { expectedParticipants: 3, maxParticipants: 3, openingText: '', taskDescription: '', taskMinutes: 30, reminderMinutes: [5] },
   rationale: {}
 });
 
 export const newProfile = (overrides: Partial<AiProfile> = {}): AiProfile => ({ ...base(), ...overrides });
+
+/** Profiles saved before a field existed get its default (mirrors the server-side merge). */
+export const withDefaults = (p: AiProfile): AiProfile => ({ ...base(), ...p, session: { ...base().session, ...(p.session || {}) } });
 
 /** Starting set for a study; timing values are placeholders until set from the literature. */
 export const SEED_PROFILES: AiProfile[] = [

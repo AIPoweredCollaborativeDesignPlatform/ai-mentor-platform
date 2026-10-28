@@ -20,7 +20,7 @@ export const DEFAULT_PROFILE = {
     minNewMessages: 3, // new messages needed for a pause-triggered check
     maxMessagesBetweenChecks: 12, // forces a check during long uninterrupted discussion
     stallSeconds: 90, // silence after activity that counts as a stall
-    cooldownSeconds: 60 // minimum gap between automatic interventions
+    cooldownSeconds: 180 // minimum gap between proactive interventions (Do et al. 2023 stepped in every 8 min; see _claude工作區/時間參數文獻.md)
   },
   memory: {
     updateEveryMessages: 15,

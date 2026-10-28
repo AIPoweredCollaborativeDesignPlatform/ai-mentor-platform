@@ -3,11 +3,11 @@ import { t } from '../i18n';
  * GLB Proxy Service — Firebase Storage Re-hosting + Blob URL Fallback
  *
  * Problem: Meshy/Tripo presigned AWS S3 URLs are missing `Access-Control-Allow-Origin: *`,
- * so the browser's WebGL context (used by <model-viewer>) cannot fetch the binary.
+ * so the browser's WebGL loader cannot fetch the binary.
  *
  * Two-tier solution:
  * 1. Blob URL (immediate, session-only): fetch GLB as ArrayBuffer → createObjectURL → 
- *    pass to model-viewer. Works if the Meshy/S3 CORS allows JS-level fetch.
+ *    pass to the viewer. Works if the Meshy/S3 CORS allows JS-level fetch.
  *
  * 2. Firebase Storage (permanent, cross-session): upload blob to Firebase Storage where
  *    we control CORS headers, then use the permanent download URL.
@@ -39,13 +39,6 @@ export function isFirebaseStorageUrl(url: string): boolean {
 }
 
 /**
- * Check if a given URL is a Blob URL (session-local, won't survive page reload).
- */
-export function isBlobUrl(url: string): boolean {
-  return url.startsWith('blob:');
-}
-
-/**
  * Attempt to download a GLB from a remote presigned URL, then:
  *   1. Always create a session-local Blob URL for immediate use.
  *   2. If Firebase Storage is available, also upload there for permanence.
@@ -63,7 +56,6 @@ export async function reHostGlbToFirebaseStorage(
   const cacheKey = `glb_firebase_url_${taskId}`;
   const cached = localStorage.getItem(cacheKey);
   if (cached && isFirebaseStorageUrl(cached)) {
-    console.log('[GLB Proxy] Permanent cache hit for', taskId);
     return { success: true, firebaseUrl: cached, isPermanent: true };
   }
 
@@ -87,7 +79,6 @@ export async function reHostGlbToFirebaseStorage(
       });
       if (fetchRes.ok) {
         arrayBuffer = await fetchRes.arrayBuffer();
-        console.log('[GLB Proxy] Direct CORS fetch succeeded');
       } else {
         proxyErrors.push(`Direct: ${fetchRes.status}`);
         throw new Error(`Direct fetch failed: ${fetchRes.status}`);
@@ -96,36 +87,13 @@ export async function reHostGlbToFirebaseStorage(
       if (!proxyErrors.length) proxyErrors.push(`Direct: ${corsErr.message}`);
       console.warn('[GLB Proxy] Direct fetch failed, trying CORS proxies...');
       
-      // Fallback 1: Native Firebase Cloud Function proxy (Most Reliable)
+      // Fallback: our own Hosting /api/proxy function (no third-party proxies: research data stays in-project)
       try {
-        const proxyUrl2 = `/api/proxy?url=${encodeURIComponent(remoteGlbUrl)}`;
-        const fetchRes2 = await fetch(proxyUrl2);
-        if (fetchRes2.ok) {
-          arrayBuffer = await fetchRes2.arrayBuffer();
-          console.log('[GLB Proxy] Firebase Cloud Function proxy succeeded');
-        } else {
-          proxyErrors.push(`firebaseProxy: ${fetchRes2.status}`);
-          throw new Error(`firebaseProxy failed: ${fetchRes2.status}`);
-        }
-      } catch (proxyErr2: any) {
-        if (!proxyErrors.find(e => e.startsWith('firebaseProxy'))) proxyErrors.push(`firebaseProxy: ${proxyErr2.message}`);
-        console.warn('[GLB Proxy] firebaseProxy failed, trying allorigins...', proxyErr2);
-        
-        // Fallback 2: allorigins.win
-        try {
-          const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(remoteGlbUrl)}`;
-          const fetchRes = await fetch(proxyUrl);
-          if (fetchRes.ok) {
-            arrayBuffer = await fetchRes.arrayBuffer();
-            console.log('[GLB Proxy] allorigins succeeded');
-          } else {
-            proxyErrors.push(`allorigins: ${fetchRes.status}`);
-            throw new Error(`allorigins failed: ${fetchRes.status}`);
-          }
-        } catch (proxyErr: any) {
-          if (!proxyErrors.find(e => e.startsWith('allorigins'))) proxyErrors.push(`allorigins: ${proxyErr.message}`);
-          console.warn('[GLB Proxy] allorigins failed');
-        }
+        const proxyRes = await fetch(`/api/proxy?url=${encodeURIComponent(remoteGlbUrl)}`);
+        if (!proxyRes.ok) throw new Error(String(proxyRes.status));
+        arrayBuffer = await proxyRes.arrayBuffer();
+      } catch (proxyErr: any) {
+        proxyErrors.push(`proxy: ${proxyErr.message}`);
       }
     }
 
@@ -140,7 +108,6 @@ export async function reHostGlbToFirebaseStorage(
 
     // ─── Step 2: Create a session-local Blob URL (immediate) ─────────────────
     const blobUrl = URL.createObjectURL(blob);
-    console.log('[GLB Proxy] Blob URL created:', blobUrl);
 
     // ─── Step 3: Upload to Firebase Storage if available (permanent) ──────────
     if (storage && taskId) {
@@ -155,7 +122,6 @@ export async function reHostGlbToFirebaseStorage(
         });
 
         const firebaseUrl = await getDownloadURL(fileRef);
-        console.log('[GLB Proxy] Uploaded to Firebase Storage:', firebaseUrl);
 
         // Cache the permanent URL
         localStorage.setItem(cacheKey, firebaseUrl);

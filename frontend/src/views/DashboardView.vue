@@ -19,9 +19,6 @@ import { db } from '../firebase/config';
 import {
   ArrowLeft,
   LayoutDashboard,
-  Box,
-  Palette,
-  FileText,
   Clock,
   LogOut,
   FolderOpen,
@@ -30,8 +27,7 @@ import {
   Check,
   CheckCheck,
   RefreshCw,
-  Loader2,
-  AlertTriangle
+  Loader2
 } from 'lucide-vue-next';
 
 import { ref, onMounted } from 'vue';

@@ -52,7 +52,6 @@ let elapsedAnimationTime = 0;
 
 let isDragging = false;
 let previousMousePosition = { x: 0, y: 0 };
-let initialPinchDistance = 0;
 
 const cycleSpeed = () => {
   if (playbackSpeed.value === 1.0) playbackSpeed.value = 1.5;
@@ -515,11 +514,9 @@ const handleMouseMove = (e: MouseEvent) => {
 const handleTouchEnd = (e: TouchEvent) => {
   if (e.touches.length === 0) {
     isDragging = false;
-    initialPinchDistance = 0;
   } else if (e.touches.length === 1) {
     isDragging = true;
     previousMousePosition = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-    initialPinchDistance = 0;
   }
 };
 const handleTouchMove = (e: TouchEvent) => {

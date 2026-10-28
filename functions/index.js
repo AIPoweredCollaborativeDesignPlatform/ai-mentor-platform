@@ -8,15 +8,15 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { getSystemConfig } from './src/config.js';
 import { classifyError, createMessage, extractSvg, imageBlockFromDataUrl, responseText } from './src/claude.js';
 import { PROMPT_VERSION, VISION_PROMPT, sketchToSvgPrompt, textToSvgPrompt } from './src/prompts.js';
-import { generate3D, refineMeshy } from './src/mesh3d.js';
+import { refineMeshy } from './src/mesh3d.js';
 import { logAiCall } from './src/log.js';
 import { FRIENDLY_ERRORS } from './src/mentor.js';
-import { assignProfileToRoom, ensureRoomAi, handleNewMessage, loadProfile, runCheck } from './src/engine.js';
+import { assignProfileToRoom, ensureRoomAi, handleNewMessage, loadProfile, postAiMessage, runCheck } from './src/engine.js';
 import { endSession, joinRoom, maybeStartSession, reopenSession, runSessionJob, sessionTick } from './src/session.js';
 import { logBoardObjectChange, logMessageChange } from './src/events.js';
 import { authUrl, exportRoom, handleCallback, runDueExports } from './src/drive.js';
 import { createRoom, listPins, markRoomDeleted } from './src/rooms.js';
-import { consentTextFor, roomLanguage } from './src/i18n.js';
+import { consentTextFor, roomLanguage, str } from './src/i18n.js';
 import { claimAnonymousRooms, isAdminToken, isObserverToken, listObservers, setObserver, syncRole } from './src/roles.js';
 
 initializeApp();
@@ -33,6 +33,24 @@ const oauthSecrets = () => ({ clientId: GOOGLE_OAUTH_CLIENT_ID.value(), clientSe
 
 const requireAuth = request => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in (guest is fine) to use AI features.');
+};
+
+/**
+ * AI endpoints cost money per call and anyone can get a guest account: the caller must be the room's
+ * host, an approved participant, or study staff. Returns the room document.
+ */
+const requireRoomMember = async request => {
+  requireAuth(request);
+  const roomId = String(request.data?.roomId || '');
+  if (!/^room_\d{4,6}$/.test(roomId)) throw new HttpsError('invalid-argument', 'Missing roomId');
+  const db = getFirestore();
+  const [roomSnap, me] = await Promise.all([db.doc(`rooms/${roomId}`).get(), db.doc(`rooms/${roomId}/participants/${request.auth.uid}`).get()]);
+  const room = roomSnap.data();
+  if (!room) throw new HttpsError('not-found', 'Room not found');
+  if (room.hostUid !== request.auth.uid && me.data()?.status !== 'approved' && !isObserverToken(request.auth.token)) {
+    throw new HttpsError('permission-denied', 'Room members only');
+  }
+  return room;
 };
 
 const toHttpsError = (err, label) => {
@@ -84,9 +102,13 @@ export const onRoomCreated = onDocumentCreated({ document: 'rooms/{roomId}', max
 export const mentorRespond = onCall(
   { secrets: ALL_SECRETS, timeoutSeconds: 540, memory: '512MiB', maxInstances: 20 },
   async request => {
-    requireAuth(request);
+    await requireRoomMember(request);
     const { roomId, retryMessageId = null } = request.data || {};
-    if (!roomId) throw new HttpsError('invalid-argument', 'Missing roomId');
+    // A retry may only replace an AI message
+    if (retryMessageId) {
+      const target = (await getFirestore().doc(`rooms/${roomId}/messages/${String(retryMessageId)}`).get()).data();
+      if (target?.senderUid !== 'ai_mentor') throw new HttpsError('invalid-argument', 'Not an AI message');
+    }
     await runCheck(roomId, engineSecrets(), { reason: 'retry', forced: true, callerUid: request.auth.uid, retryMessageId });
     return { ok: true };
   }
@@ -279,7 +301,7 @@ export const logBoardEvent = onDocumentWritten({ document: 'rooms/{roomId}/board
 export const whiteboardVision = onCall(
   { secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 60, maxInstances: 20 },
   async request => {
-    requireAuth(request);
+    await requireRoomMember(request);
     const sys = await getSystemConfig();
     try {
       const response = await createMessage(ANTHROPIC_API_KEY.value(), {
@@ -307,7 +329,7 @@ export const whiteboardVision = onCall(
 export const generateSvg = onCall(
   { secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 120, maxInstances: 20 },
   async request => {
-    requireAuth(request);
+    await requireRoomMember(request);
     const sys = await getSystemConfig();
     try {
       const response = await createMessage(ANTHROPIC_API_KEY.value(), {
@@ -329,7 +351,7 @@ export const generateSvg = onCall(
 export const sketchToSvg = onCall(
   { secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 120, maxInstances: 20 },
   async request => {
-    requireAuth(request);
+    await requireRoomMember(request);
     const { imageDataUrl, notes = '', language = 'zh-TW' } = request.data || {};
     const sys = await getSystemConfig();
     try {
@@ -351,34 +373,32 @@ export const sketchToSvg = onCall(
 // ---------- 3D ----------
 const meshKeys = () => ({ meshy: MESHY_API_KEY.value(), tripo: TRIPO_API_KEY.value() });
 
-export const generateModel3D = onCall(
-  { secrets: [MESHY_API_KEY, TRIPO_API_KEY], timeoutSeconds: 540, memory: '512MiB', maxInstances: 10 },
-  async request => {
-    requireAuth(request);
-    const sys = await getSystemConfig();
-    const prompt = String(request.data?.prompt || '').trim().slice(0, 1000);
-    if (!prompt) throw new HttpsError('invalid-argument', 'Missing 3D prompt');
-    try {
-      const result = await generate3D({ engine: sys.engine3D, prompt, keys: meshKeys() });
-      await logAiCall({ ...baseLog(request, 'model_3d', sys.engine3D), input: { prompt }, output: result });
-      return result;
-    } catch (err) {
-      console.error('[generateModel3D]', err?.message || err);
-      await logAiCall({ ...baseLog(request, 'model_3d', sys.engine3D), input: { prompt }, error: { message: String(err?.message || err).slice(0, 500) } });
-      throw new HttpsError('internal', err?.message || '3D generation failed');
-    }
-  }
-);
-
 export const refineModel3D = onCall(
   { secrets: [MESHY_API_KEY, TRIPO_API_KEY], timeoutSeconds: 540, memory: '512MiB', maxInstances: 10 },
   async request => {
-    requireAuth(request);
-    const { taskId, texturePrompt } = request.data || {};
+    const room = await requireRoomMember(request);
+    const { taskId, texturePrompt, roomId, title = '' } = request.data || {};
     if (!taskId) throw new HttpsError('invalid-argument', 'Missing Meshy task id');
     try {
       const result = await refineMeshy({ previewTaskId: taskId, texturePrompt, keys: meshKeys() });
       await logAiCall({ ...baseLog(request, 'model_3d_refine', 'meshy'), input: { taskId, texturePrompt: texturePrompt || '' }, output: result });
+      // The refined model is posted as an AI message by the server (browsers cannot post as the AI)
+      const name = String(title).slice(0, 200);
+      await postAiMessage(roomId, room, (await ensureRoomAi(roomId)).profile || {}, {
+        content: str('refinedMessage', room.language, { title: name }),
+        assetType: 'mesh_3d',
+        assetPayload: {
+          title: str('refinedTitle', room.language, { title: name }),
+          provider: result.provider,
+          taskId: result.taskId,
+          modelUrl: result.modelUrl,
+          originalModelUrl: result.originalModelUrl,
+          posterUrl: result.thumbnailUrl || null,
+          isRefined: true,
+          isInteractive: true
+        },
+        meta: { kind: 'model_3d_refine', requestedBy: request.auth.uid }
+      });
       return result;
     } catch (err) {
       console.error('[refineModel3D]', err?.message || err);
@@ -388,18 +408,30 @@ export const refineModel3D = onCall(
 );
 
 // ---------- Legacy GLB download proxy (older chat messages still point at provider URLs) ----------
+// Only https model hosts, so the endpoint cannot be used as an open proxy or to reach internal addresses
+const PROXY_HOSTS = ['meshy.ai', 'tripo3d.ai', 'tripo3d.com', 'amazonaws.com', 'cloudfront.net', 'firebasestorage.googleapis.com', 'storage.googleapis.com', 'firebasestorage.app'];
+const proxyAllowed = raw => {
+  try {
+    const u = new URL(String(raw));
+    return u.protocol === 'https:' && PROXY_HOSTS.some(h => u.hostname === h || u.hostname.endsWith(`.${h}`));
+  } catch {
+    return false;
+  }
+};
+
 export const proxyGlb = onRequest({ invoker: 'public', memory: '256MiB', maxInstances: 10, cors: true }, async (req, res) => {
   const { url, filename } = req.query;
   if (!url) return res.status(400).send('Missing url parameter');
+  if (!proxyAllowed(url)) return res.status(403).send('Host not allowed');
   try {
-    const upstream = await fetch(String(url));
-    if (!upstream.ok) return res.status(upstream.status).send('Upstream Error: ' + upstream.statusText);
+    const upstream = await fetch(String(url), { redirect: 'error' });
+    if (!upstream.ok) return res.status(upstream.status).send('Upstream error');
     res.set('Content-Type', 'application/octet-stream');
     res.set('Cache-Control', 'public, max-age=3600');
     if (filename) res.set('Content-Disposition', `attachment; filename="${encodeURIComponent(String(filename))}"`);
     Readable.fromWeb(upstream.body).pipe(res);
   } catch (err) {
-    console.error('Fetch error:', err);
-    res.status(500).send('Internal Server Error: ' + err.message);
+    console.error('[proxyGlb]', err?.message || err);
+    res.status(500).send('Proxy failed');
   }
 });

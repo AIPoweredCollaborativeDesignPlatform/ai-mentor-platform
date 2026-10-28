@@ -15,14 +15,7 @@ export default defineConfig({
     __BUILD_TIME__: JSON.stringify(buildTime)
   },
   plugins: [
-    vue({
-      template: {
-        compilerOptions: {
-          // Treat model-viewer as a custom element
-          isCustomElement: (tag) => tag === 'model-viewer'
-        }
-      }
-    })
+    vue()
   ],
   resolve: {
     alias: {

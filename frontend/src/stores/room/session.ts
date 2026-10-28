@@ -11,7 +11,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../../firebase/config';
 import { currentLocale, t } from '../../i18n';
-import type { MessageItem, Participant, ParticipantStatus, RoomData, TypingUser } from '../../types';
+import type { MessageItem, Participant, RoomData, TypingUser } from '../../types';
 import { roomCollection, roomDocRef, roomRef, type RoomContext } from './context';
 import { createStudyRoom, joinStudyRoom, peekStudyRoom, type RoomPeek } from '../../services/session';
 

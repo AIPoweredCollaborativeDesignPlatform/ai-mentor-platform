@@ -23,7 +23,9 @@ const STRINGS = {
   sessionReopened: { 'zh-TW': '本次討論已重新開啟。', en: 'The session has been reopened.' },
   timeUp: { 'zh-TW': '時間到。', en: 'Time is up.' },
   roomCreated: { 'zh-TW': '{emoji} 已建立房間「{name}」· PIN：{pin}', en: '{emoji} Room "{name}" created · PIN: {pin}' },
-  system: { 'zh-TW': '系統', en: 'System' }
+  system: { 'zh-TW': '系統', en: 'System' },
+  refinedMessage: { 'zh-TW': '✨ 已為「{title}」加上彩色 PBR 材質與細節。', en: '✨ Refined "{title}" with color PBR textures and details.' },
+  refinedTitle: { 'zh-TW': '{title}（彩色／PBR）', en: '{title} (Colored / PBR)' }
 };
 
 export function str(key, lang, params = {}) {

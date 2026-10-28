@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { t } from '../i18n';
 import { ref } from 'vue';
-import { ShieldCheck, CheckCircle2, AlertTriangle, ExternalLink, ChevronRight } from 'lucide-vue-next';
+import { ShieldCheck, CheckCircle2, ExternalLink, ChevronRight } from 'lucide-vue-next';
 
 defineProps<{
   assetData: {
@@ -74,6 +74,7 @@ const formatRefDisplay = (ref: string) => {
           <a
             :href="ref.startsWith('http') ? ref : `https://www.google.com/search?q=${encodeURIComponent(ref)}`"
             target="_blank"
+            rel="noopener noreferrer"
             class="text-sky-400 hover:text-sky-300 hover:underline flex items-start gap-1.5 break-all max-w-full"
             :title="ref.startsWith('http') ? t('fact.visit') : t('fact.search')"
           >

@@ -14,7 +14,6 @@ import {
   Palette,
   Loader2,
   RefreshCw,
-  Eye,
   Copy
 } from 'lucide-vue-next';
 import type { MessageItem } from '../types';
@@ -142,16 +141,12 @@ const initThreeScene = () => {
   animate();
 
   // Resize Observer with RAF Throttling and threshold check
-  let lastRenderWidth = width;
-  let lastRenderHeight = height;
 
   const updateDimensions = () => {
     if (!container || !camera || !renderer) return;
     const newWidth = container.clientWidth;
     const newHeight = container.clientHeight;
     if (newWidth > 0 && newHeight > 0) {
-      lastRenderWidth = newWidth;
-      lastRenderHeight = newHeight;
       camera.aspect = newWidth / newHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(newWidth, newHeight, false);

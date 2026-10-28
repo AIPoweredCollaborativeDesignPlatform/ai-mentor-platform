@@ -51,7 +51,7 @@ export const useRoomStore = defineStore('room', () => {
   const session = useRoomSession(ctx);
   const messages = useRoomMessages(ctx, session.setMyTyping);
   const whiteboard = useRoomWhiteboard(ctx);
-  const mentor = useRoomMentor(ctx, messages, session.typingUsers);
+  const mentor = useRoomMentor(ctx, session.typingUsers);
 
   const sendMessage = async (text: string, replyTo?: { id: string; senderName: string; text: string }) => {
     if (!currentRoom.value || !text.trim()) return;
@@ -145,7 +145,6 @@ export const useRoomStore = defineStore('room', () => {
     updateCustomMessage: messages.updateCustomMessage,
     retrySendMessage: messages.retrySendMessage,
     sendFileMessage: messages.sendFileMessage,
-    addAiMessage: messages.addAiMessage,
     toggleMessageReaction: messages.toggleMessageReaction,
     votePollOption: messages.votePollOption,
     addCustomPollOption: messages.addCustomPollOption,

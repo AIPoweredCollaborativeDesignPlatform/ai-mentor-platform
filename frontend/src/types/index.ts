@@ -135,49 +135,6 @@ export interface RoomAiView {
   };
 }
 
-export interface CursorData {
-  uid: string;
-  name: string;
-  avatar: string;
-  color: string;
-  x: number;
-  y: number;
-  updatedAt: number;
-  liveDrag?: {
-    targetId: string;
-    left: number;
-    top: number;
-    scaleX?: number;
-    scaleY?: number;
-    angle?: number;
-  } | null;
-  liveStroke?: {
-    points: { x: number; y: number }[];
-    color: string;
-    width: number;
-    tool: string;
-  } | null;
-  liveShape?: {
-    shapeType: 'rect' | 'circle' | 'triangle' | 'line';
-    x: number;
-    y: number;
-    w: number;
-    h: number;
-    color: string;
-    strokeWidth: number;
-    fill?: string;
-  } | null;
-  liveText?: {
-    targetId: string;
-    text: string;
-  } | null;
-  liveLock?: {
-    targetIds: string[];
-    isLocked: boolean;
-    timestamp: number;
-  } | null;
-}
-
 export type AnimationMotionType = 'harmonic' | 'bounce' | 'pendulum' | 'spin' | 'pulse' | 'wave';
 
 export interface ComponentAnimation {
@@ -188,16 +145,4 @@ export interface ComponentAnimation {
   phase?: number;
   damping?: number;
   acceleration?: number;
-}
-
-export interface ParametricComponent {
-  shape: 'box' | 'cylinder' | 'sphere' | 'torus';
-  dimensions?: Record<string, number>;
-  position?: { x?: number; y?: number; z?: number };
-  material?: {
-    color?: string;
-    roughness?: number;
-    metalness?: number;
-  };
-  animation?: ComponentAnimation;
 }

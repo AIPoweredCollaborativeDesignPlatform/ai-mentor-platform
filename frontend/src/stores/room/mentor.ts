@@ -4,16 +4,12 @@ import type { MessageItem, TypingUser } from '../../types';
 import { roomDocRef, roomRef, type RoomContext } from './context';
 import { t } from '../../i18n';
 
-type Messages = {
-  addAiMessage: (content: string, assetType?: any, assetPayload?: any, actionOptions?: string[], aiMeta?: unknown) => Promise<void>;
-};
-
 /**
  * Client view of the AI mentor. When and whether the AI speaks is decided server-side
  * (functions/src/engine.js, triggered by each new message); the browser only shows the
  * AI's presence, can stop a running reply, retry a failed one, and refine 3D models.
  */
-export function useRoomMentor(ctx: RoomContext, messages: Messages, typingUsers: Ref<TypingUser[]>) {
+export function useRoomMentor(ctx: RoomContext, typingUsers: Ref<TypingUser[]>) {
   const { currentRoom, pushToast } = ctx;
 
   const isAnalyzing = computed(() => typingUsers.value.some(u => u.uid === 'ai_mentor'));
@@ -59,17 +55,8 @@ export function useRoomMentor(ctx: RoomContext, messages: Messages, typingUsers:
     isRefining.value = true;
     try {
       const { refineModel3D } = await import('../../services/model3d');
-      const res = await refineModel3D(taskId, texturePrompt || title || 'high quality realistic pbr textures');
-      await messages.addAiMessage(t('ai.refinedMessage', { title }), 'mesh_3d', {
-        title: t('ai.refinedTitle', { title }),
-        provider: res.provider,
-        taskId: res.taskId,
-        modelUrl: res.modelUrl,
-        originalModelUrl: res.originalModelUrl,
-        posterUrl: res.thumbnailUrl,
-        isRefined: true,
-        isInteractive: true
-      });
+      // The server posts the refined model to the chat as an AI message
+      await refineModel3D(currentRoom.value.roomId, taskId, texturePrompt || title || 'high quality realistic pbr textures', title || '');
       pushToast(t('ai.refinedToastTitle'), t('ai.refinedToastText'), 'success');
     } catch (err: any) {
       console.error('Meshy refine error:', err);

@@ -1,4 +1,4 @@
-import { addDoc, increment, updateDoc } from 'firebase/firestore';
+import { addDoc, updateDoc } from 'firebase/firestore';
 import type { MessageItem } from '../../types';
 import { roomCollection, roomDocRef, roomRef, stripUndefined, tempId, type RoomContext } from './context';
 import { t } from '../../i18n';
@@ -106,39 +106,6 @@ export function useRoomMessages(ctx: RoomContext, setMyTyping: (typing: boolean)
     });
   };
 
-  /** `aiMeta` (model, prompt version, token usage) is kept on the message for the research log. */
-  const addAiMessage = async (content: string, assetType?: any, assetPayload?: any, actionOptions?: string[], aiMeta?: unknown) => {
-    if (!currentRoom.value) return;
-    const aiMsg: MessageItem = {
-      id: tempId('ai'),
-      senderUid: 'ai_mentor',
-      senderName: 'AI Mentor',
-      senderAvatar: '✨',
-      type: assetType ? 'ai_asset' : 'text',
-      content,
-      actionOptions: actionOptions || [],
-      timestamp: Date.now(),
-      assetType,
-      assetPayload,
-      ...(aiMeta ? { metadata: { ai: aiMeta } } : {}),
-      status: 'delivered'
-    };
-    // Render immediately so the AI response appears without waiting for the snapshot
-    currentRoom.value.messages.push(aiMsg);
-
-    try {
-      const { id, status, ...rawPayload } = aiMsg;
-      const ref = await addDoc(roomCollection(currentRoom.value.roomId, 'messages'), stripUndefined(rawPayload));
-      aiMsg.id = ref.id;
-      const preview = assetType
-        ? (assetType === 'parametric_3d' || assetType === 'mesh_3d' ? '🎨 3D Model Generated' : '✨ AI Asset Generated')
-        : content.slice(0, 100);
-      await touchRoom(preview, { name: 'AI Mentor', uid: 'ai_mentor' }, assetType ? { assetsCount: increment(1) } : {});
-    } catch (e) {
-      console.warn('[AI Message] Firestore addDoc failed:', e);
-    }
-  };
-
   /** Applies updates locally and in Firestore. `timestamp` is only changed when explicitly provided. */
   const updateCustomMessage = async (messageId: string, updates: Partial<MessageItem>) => {
     if (!currentRoom.value) return;
@@ -212,7 +179,6 @@ export function useRoomMessages(ctx: RoomContext, setMyTyping: (typing: boolean)
     sendCustomMessage,
     sendFileMessage,
     retrySendMessage,
-    addAiMessage,
     updateCustomMessage,
     toggleMessageReaction,
     votePollOption,

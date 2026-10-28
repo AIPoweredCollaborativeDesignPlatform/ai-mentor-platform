@@ -1,15 +1,27 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    // 3D model files: public read (for model-viewer / CORS), authenticated write only
+    // 3D model files re-hosted by the browser (services/glbProxy.ts): public read for the 3D viewer
     match /models/{modelFile} {
       allow read: if true;
-      allow write: if request.auth != null;
+      allow write: if request.auth != null
+        && request.resource.size < 60 * 1024 * 1024
+        && request.resource.contentType == 'model/gltf-binary';
     }
 
-    // All other paths: authenticated users only
+    // Whiteboard images (components/whiteboard/WhiteboardBoard.vue, downscaled before upload)
+    match /rooms/{roomId}/boards/{boardId}/{file} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+        && request.resource.size < 10 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    // Everything else (AI images, 3D results) is written by Cloud Functions only; files are served
+    // through tokenized download URLs
     match /{allPaths=**} {
-      allow read, write: if request.auth != null;
+      allow read: if request.auth != null;
+      allow write: if false;
     }
   }
 }

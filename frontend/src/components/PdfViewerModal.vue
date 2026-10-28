@@ -59,6 +59,7 @@ const handleDownload = () => {
           <a
             :href="pdfUrl"
             target="_blank"
+            rel="noopener noreferrer"
             class="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
             :title="t('pdf.newTab')"
           >

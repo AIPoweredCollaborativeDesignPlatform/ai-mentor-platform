@@ -160,19 +160,20 @@ service cloud.firestore {
 
       match /messages/{messageId} {
         allow read: if isMember() || isObserver();
-        // Participants post as themselves (or 'system'/'ai_mentor' notices); the researcher (host)
-        // is a read-only observer and may only post system notices.
+        // Participants post as themselves (or 'system' notices such as a profile change); the researcher
+        // (host) is a read-only observer and may only post system notices. AI messages come from Functions only.
         allow create: if (isRoomHost(roomId) && request.resource.data.senderUid == 'system') ||
           (isApprovedParticipant(roomId) && !isRoomHost(roomId) &&
           (request.resource.data.senderUid == request.auth.uid ||
-           request.resource.data.senderUid == 'system' ||
-           request.resource.data.senderUid == 'ai_mentor'));
-        allow update: if isRoomHost(roomId) ||
+           request.resource.data.senderUid == 'system'));
+        // The sender of a message never changes (no re-attributing a message to someone else or the AI)
+        allow update: if !request.resource.data.diff(resource.data).affectedKeys().hasAny(['senderUid']) && (
+          isRoomHost(roomId) ||
           (isAuthenticated() && resource.data.senderUid == request.auth.uid) ||
           (isApprovedParticipant(roomId) && (
             resource.data.type == 'whiteboard_state' ||
             request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions', 'pollVotes', 'actionOptions'])
-          ));
+          )));
         allow delete: if isRoomHost(roomId) ||
           (isAuthenticated() && resource.data.senderUid == request.auth.uid);
       }

@@ -6,19 +6,6 @@ import type { MentorConfig } from '../types';
 
 // All model calls run in Cloud Functions (functions/index.js); models are chosen in config/system.
 
-export interface AiCallMeta {
-  model: string;
-  promptVersion: string;
-  usage: { input: number; output: number } | null;
-}
-
-export interface WhiteboardMemoryItem {
-  timestamp: number;
-  timeFormatted: string;
-  summary: string;
-  assetId?: string;
-}
-
 export interface SvgGenerationError {
   isAiError: true;
   category: 'KEY_INVALID' | 'HIGH_DEMAND' | 'QUOTA_EXCEEDED' | 'PARSE_ERROR' | 'NETWORK' | 'BAD_REQUEST' | 'UNKNOWN';

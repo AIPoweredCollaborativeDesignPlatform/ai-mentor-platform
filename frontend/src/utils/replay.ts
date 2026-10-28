@@ -30,6 +30,7 @@ export interface ReplayMessage {
   assetType?: string | null;
   assetPayload?: any;
   fileData?: { name?: string; type?: string; url?: string; mimeType?: string } | null;
+  metadata?: { isPrivate?: boolean; wasPublished?: boolean; creatorUid?: string; creatorName?: string } | null;
   deleted?: boolean;
 }
 
@@ -44,6 +45,18 @@ export interface Member {
   alias: string;
   nickname: string;
 }
+
+/**
+ * Final objects of a board (rooms/{id}/boards/{boardId}/objects, admin-readable). Rooms recorded
+ * before 2026-10-28 cut long freehand paths out of their events; replay borrows those from here.
+ */
+export async function loadFinalBoard(roomId: string, boardId: string): Promise<Map<string, ReplayObject>> {
+  const snap = await getDocs(collection(db, 'rooms', roomId, 'boards', boardId, 'objects'));
+  return new Map(snap.docs.map(d => [d.id, { id: d.id, z: (d.data() as any).z ?? 0, fabric: (d.data() as any).fabric }]));
+}
+
+export const wasTruncated = (fabric: Record<string, any>) =>
+  Object.values(fabric || {}).some(v => typeof v === 'string' && v.startsWith('[omitted '));
 
 export async function loadEvents(roomId: string): Promise<ResearchEvent[]> {
   const snap = await getDocs(query(collection(db, 'rooms', roomId, 'events'), orderBy('at')));
@@ -101,7 +114,8 @@ export function stateAt(events: ResearchEvent[], upto: number): ReplayState {
         pollVotes: m.pollVotes,
         assetType: m.assetType || null,
         assetPayload: m.assetPayload,
-        fileData: m.fileData || null
+        fileData: m.fileData || null,
+        metadata: m.metadata || null
       });
     } else if (e.kind === 'message_deleted') {
       const m = messages.get(d.messageId);

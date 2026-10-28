@@ -9,7 +9,7 @@ import { formatDate, isDuplicateBoardPointer, isMentioning } from '../utils/chat
 import { useNotificationSound } from '../composables/useNotificationSound';
 import { useWhiteboardResize, useWhiteboardSession, type WhiteboardHandle } from '../composables/useWhiteboardSession';
 import { useAiReadTracking } from '../composables/useAiReadTracking';
-import { startResearchLog, stopResearchLog } from '../services/researchLog';
+import { setRecording, startResearchLog, stopResearchLog } from '../services/researchLog';
 import { reopenStudySession } from '../services/session';
 
 import RoomHeader from '../components/room/RoomHeader.vue';
@@ -79,6 +79,9 @@ const confirmEnd = async () => {
   isEnding.value = false;
   showEndConfirm.value = false;
 };
+
+// Browser events are not recorded after the session ended (resumes on Reopen)
+watch(() => session.value?.phase, phase => setRecording(phase !== 'ended'));
 
 // ---------- Whiteboard ----------
 const whiteboardRef = ref<WhiteboardHandle | null>(null);
@@ -266,6 +269,7 @@ onMounted(async () => {
   watch(() => [roomStore.myStatus, roomStore.currentRoom?.hostUid] as const, ([status]) => {
     if (!roomStore.currentRoom) return;
     if (roomStore.isHost || status === 'approved') {
+      setRecording(session.value?.phase !== 'ended');
       if (isVerifyingAccess.value) startResearchLog(roomId, authStore.uid, isResearcher.value ? 'researcher' : 'participant');
       isVerifyingAccess.value = false;
       clearTimeout(accessCheckTimer);

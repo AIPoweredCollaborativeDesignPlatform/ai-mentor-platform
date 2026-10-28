@@ -22,9 +22,20 @@ let uid = '';
 let role: ResearchRole = 'participant';
 let buffer: PendingEvent[] = [];
 let timer: ReturnType<typeof setInterval> | null = null;
+// Off while the session has ended (nothing is recorded until it is reopened)
+let recording = true;
+
+export function setRecording(on: boolean) {
+  if (on && !recording && roomId) {
+    recording = true;
+    logEvent('room_enter', { resumed: true });
+    return;
+  }
+  recording = on;
+}
 
 export function logEvent(kind: string, data: Record<string, unknown> = {}) {
-  if (!roomId) return;
+  if (!roomId || !recording) return;
   buffer.push({ at: Date.now(), kind, data });
 }
 

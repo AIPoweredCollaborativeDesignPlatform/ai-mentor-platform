@@ -5,7 +5,8 @@ import { ArrowLeft, Loader2, Pause, Play } from 'lucide-vue-next';
 import { useAuthStore } from '../stores/auth';
 import BoardReplayCanvas from '../components/admin/BoardReplayCanvas.vue';
 import {
-  KIND_GROUPS, describe, fmtOffset, groupOf, indexAt, loadEvents, membersOf, stateAt, type ReplayMessage, type ResearchEvent
+  KIND_GROUPS, describe, fmtOffset, groupOf, indexAt, loadEvents, loadFinalBoard, membersOf, stateAt, wasTruncated,
+  type ReplayMessage, type ReplayObject, type ResearchEvent
 } from '../utils/replay';
 import { formatMessageText } from '../utils/chat';
 
@@ -30,11 +31,31 @@ const who = (e: { uid: string | null; role: string }) => {
   return m ? m.alias : e.role === 'unknown' ? '—' : e.role;
 };
 
+// Option: leave the observing researcher's own actions out of the timeline
+const hideObserver = ref(true);
 const idx = computed(() => indexAt(events.value, t.value));
 const state = computed(() => stateAt(events.value, idx.value));
 
 // ---------- Boards ----------
-const boardIds = computed(() => [...state.value.boards.keys()]);
+// Every board that exists at this moment: from its objects or its chat card, private ones included
+const boardCards = computed(() => new Map(state.value.messages.filter(m => m.type === 'whiteboard_state').map(m => [m.id, m])));
+const boardIds = computed(() => [...new Set([...boardCards.value.keys(), ...state.value.boards.keys()])]);
+const boardLabel = (id: string) => {
+  const card = boardCards.value.get(id);
+  const creator = card?.metadata?.creatorUid ? aliasOfUid(card.metadata.creatorUid) : '?';
+  return `${creator} · ${card?.metadata?.isPrivate ? '私人' : card ? '公開' : '—'}`;
+};
+const showBoard = (id: string) => {
+  boardId.value = id;
+  followBoard.value = false;
+};
+// Final objects, used only for objects whose stored event was cut short (older recordings)
+const finalBoards = ref<Record<string, Map<string, ReplayObject>>>({});
+watch(() => boardId.value, async id => {
+  if (!id || finalBoards.value[id]) return;
+  const needs = [...(state.value.boards.get(id)?.values() || [])].some(o => wasTruncated(o.fabric));
+  if (needs) finalBoards.value = { ...finalBoards.value, [id]: await loadFinalBoard(roomId, id).catch(() => new Map()) };
+});
 const boardId = ref<string | null>(null);
 watch(boardIds, ids => {
   if (!boardId.value || !ids.includes(boardId.value)) boardId.value = ids[0] || null;
@@ -51,7 +72,13 @@ watch(idx, i => {
     }
   }
 });
-const boardObjects = computed(() => (boardId.value ? [...(state.value.boards.get(boardId.value)?.values() || [])] : []));
+const boardObjects = computed(() => {
+  if (!boardId.value) return [];
+  const final = finalBoards.value[boardId.value];
+  return [...(state.value.boards.get(boardId.value)?.values() || [])]
+    .map(o => (wasTruncated(o.fabric) && final?.get(o.id) ? final.get(o.id)! : o))
+    .filter(o => !wasTruncated(o.fabric));
+});
 const pickBoard = (id: string) => {
   boardId.value = id;
   followBoard.value = false;
@@ -79,7 +106,8 @@ onUnmounted(() => clearInterval(timer));
 
 // ---------- Event list ----------
 const groups = ref<Record<string, boolean>>(Object.fromEntries(KIND_GROUPS.map(g => [g.id, g.id !== 'board'])));
-const listed = computed(() => events.value.map((e, i) => ({ e, i })).filter(({ e }) => groups.value[groupOf(e.kind)]));
+const listed = computed(() => events.value.map((e, i) => ({ e, i }))
+  .filter(({ e }) => groups.value[groupOf(e.kind)] && !(hideObserver.value && e.role === 'researcher')));
 const jumpTo = (e: ResearchEvent) => (t.value = e.at);
 const listRef = ref<HTMLElement | null>(null);
 const followTimeline = ref(true);
@@ -175,7 +203,9 @@ onMounted(async () => {
                 </b>
                 {{ m.senderName }} · {{ fmtOffset(m.timestamp - t0) }}
               </div>
-              <div v-if="m.type === 'whiteboard_state'" class="text-slate-300">🖼 白板卡片（{{ m.id }}）</div>
+              <button v-if="m.type === 'whiteboard_state'" @click="showBoard(m.id)" class="text-sky-300 hover:underline text-left">
+                🖼 白板（{{ boardLabel(m.id) }}）— 點擊在右側檢視
+              </button>
               <div v-else-if="m.content" class="replay-md text-slate-200" v-html="formatMessageText(m.content)"></div>
 
               <!-- Attached file -->
@@ -239,7 +269,8 @@ onMounted(async () => {
               @click="pickBoard(id)"
               class="px-2 py-0.5 rounded-lg text-[10px] font-mono shrink-0 border"
               :class="id === boardId ? 'border-sky-400 bg-sky-500/15 text-sky-200' : 'border-slate-700 text-slate-400'"
-            >{{ id }}</button>
+              :title="id"
+            >{{ boardLabel(id) }}</button>
             <label class="ml-auto flex items-center gap-1 text-[10px] text-slate-400 shrink-0"><input type="checkbox" v-model="followBoard" />跟隨最新變更</label>
           </div>
           <div class="flex-1 flex items-center justify-center overflow-hidden p-2">
@@ -254,6 +285,7 @@ onMounted(async () => {
         <div class="px-3 py-2 border-b border-slate-800 flex flex-wrap items-center gap-3 text-[11px]">
           <h2 class="text-xs font-semibold text-slate-300">時間軸</h2>
           <label class="flex items-center gap-1 text-slate-400"><input type="checkbox" v-model="followTimeline" />時間軸跟著播放</label>
+          <label class="flex items-center gap-1 text-violet-300"><input type="checkbox" v-model="hideObserver" />隱藏觀察者行為</label>
           <label v-for="g in KIND_GROUPS" :key="g.id" class="flex items-center gap-1 text-slate-300"><input type="checkbox" v-model="groups[g.id]" />{{ g.label }}</label>
         </div>
         <div ref="listRef" class="relative max-h-72 overflow-y-auto text-[11px] font-mono">

@@ -9,6 +9,9 @@ import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 
 const AI_UIDS = new Set(['ai_mentor', 'ai_mentor_3d']);
 const MAX_STRING = 20_000;
+// Whiteboard objects are kept whole (freehand paths are long strings) so the board can be replayed;
+// the object document itself is already below Firestore's 1 MiB limit
+const BOARD_MAX_STRING = 900_000;
 
 // Host uid and whether the room belongs to this site, cached per instance (hosts rarely change)
 const roomCache = new Map();
@@ -31,14 +34,26 @@ export const roleOf = (hostUid, uid) =>
     : 'participant';
 
 /** Replaces very long strings (data URLs, big SVGs) so an event stays far below the 1 MiB doc limit. */
-export function compact(value, depth = 0) {
-  if (typeof value === 'string') return value.length > MAX_STRING ? `[omitted ${value.length} chars]` : value;
+export function compact(value, depth = 0, max = MAX_STRING) {
+  if (typeof value === 'string') return value.length > max ? `[omitted ${value.length} chars]` : value;
   if (!value || typeof value !== 'object' || depth > 12) return value;
-  if (Array.isArray(value)) return value.map(v => compact(v, depth + 1));
-  return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined).map(([k, v]) => [k, compact(v, depth + 1)]));
+  if (Array.isArray(value)) return value.map(v => compact(v, depth + 1, max));
+  return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined).map(([k, v]) => [k, compact(v, depth + 1, max)]));
 }
 
-export async function writeEvent(roomId, { kind, uid = null, role, data = {}, at = Date.now() }) {
+// Nothing participants do is recorded after the session ended (until it is reopened)
+const phaseCache = new Map();
+const PHASE_CACHE_MS = 10_000;
+async function sessionEnded(roomId) {
+  const hit = phaseCache.get(roomId);
+  if (hit && Date.now() - hit.at < PHASE_CACHE_MS) return hit.ended;
+  const room = (await getFirestore().doc(`rooms/${roomId}`).get()).data() || {};
+  const ended = room.session?.phase === 'ended';
+  phaseCache.set(roomId, { at: Date.now(), ended });
+  return ended;
+}
+
+export async function writeEvent(roomId, { kind, uid = null, role, data = {}, at = Date.now(), maxString = MAX_STRING }) {
   try {
     const info = role ? null : await roomInfo(roomId);
     await getFirestore().collection(`rooms/${roomId}/events`).add({
@@ -48,7 +63,7 @@ export async function writeEvent(roomId, { kind, uid = null, role, data = {}, at
       kind,
       uid,
       role: role || roleOf(info.hostUid, uid),
-      data: compact(data)
+      data: compact(data, 0, maxString)
     });
   } catch (err) {
     console.error('[events] write failed:', kind, err?.message || err);
@@ -64,7 +79,7 @@ const changedKeys = (before, after) =>
 /** Every create/update/delete of a chat message (including reactions, poll votes and board cards). */
 export async function logMessageChange(roomId, messageId, before, after) {
   const info = await roomInfo(roomId);
-  if (!info.tracked) return;
+  if (!info.tracked || await sessionEnded(roomId)) return;
   const type = changeType(before, after);
   const doc = after || before;
   const uid = type === 'updated' ? null : doc.senderUid; // updates (reactions, votes) do not say who made them
@@ -85,7 +100,7 @@ export async function logMessageChange(roomId, messageId, before, after) {
 /** Every whiteboard object change; the stored fabric JSON allows replaying the board. */
 export async function logBoardObjectChange(roomId, boardId, objectId, before, after) {
   const info = await roomInfo(roomId);
-  if (!info.tracked) return;
+  if (!info.tracked || await sessionEnded(roomId)) return;
   const type = changeType(before, after);
   const uid = after?.updatedBy || null; // deletes carry no author
   await writeEvent(roomId, {
@@ -93,6 +108,7 @@ export async function logBoardObjectChange(roomId, boardId, objectId, before, af
     uid,
     role: uid ? roleOf(info.hostUid, uid) : 'unknown',
     at: after?.updatedAt || Date.now(),
-    data: { boardId, objectId, z: after?.z ?? null, fabric: after?.fabric ?? null }
+    data: { boardId, objectId, z: after?.z ?? null, fabric: after?.fabric ?? null },
+    maxString: BOARD_MAX_STRING
   });
 }

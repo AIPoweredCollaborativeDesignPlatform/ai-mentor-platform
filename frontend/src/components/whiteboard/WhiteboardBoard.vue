@@ -1152,6 +1152,15 @@ const cursorStyle = (p: PresenceDoc) => {
   return { transform: `translate(${pt.x}px, ${pt.y}px)` };
 };
 
+// Dot grid follows the viewport (pan + zoom)
+const gridStyle = computed(() => {
+  void viewTick.value;
+  const vpt = canvas?.viewportTransform;
+  if (!vpt) return {};
+  const size = 22 * vpt[0];
+  return { backgroundSize: `${size}px ${size}px`, backgroundPosition: `${vpt[4]}px ${vpt[5]}px` };
+});
+
 function drawOverlay() {
   viewTick.value++;
   const o = overlayEl.value;
@@ -1337,6 +1346,7 @@ const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(()
       <div
         ref="containerRef"
         class="absolute inset-0 wb-grid touch-none"
+        :style="gridStyle"
         @dragover.prevent
         @drop="onDrop"
       >

@@ -38,6 +38,7 @@ export interface StudyRoom {
   roomStatus?: string;
   appVersion?: string;
   session?: { phase: string; expected: number; maxOnline: number; taskMinutes: number; startedAt?: number; endedAt?: number; endedBy?: string };
+  upload?: RoomExport;
   assignment?: { profileId: string | null; profileVersion: number; profileName?: string; mode?: string; assignedAt?: number; assignedBy?: string };
 }
 
@@ -46,6 +47,8 @@ export async function listStudyRooms(max = 100): Promise<StudyRoom[]> {
   const snap = await getDocs(query(collection(db, 'rooms'), orderBy('appVersion'), limit(max)));
   const rooms = snap.docs.map(d => ({ ...(d.data() as any), roomId: d.id }) as StudyRoom).filter(r => !(r as any).deletedAt);
   await Promise.all(rooms.map(async r => {
+    const exp = await getDoc(doc(db, 'roomExports', r.roomId));
+    if (exp.exists()) r.upload = exp.data() as RoomExport;
     const ai = await getDoc(doc(db, 'roomAi', r.roomId));
     const data = ai.data();
     if (data) {
@@ -65,6 +68,40 @@ export async function listStudyRooms(max = 100): Promise<StudyRoom[]> {
 export async function assignRoomProfile(roomId: string, profileId: string) {
   const fn = httpsCallable<{ roomId: string; profileId: string }, { profileId: string; profileVersion: number }>(functions, 'assignRoomProfile');
   return (await fn({ roomId, profileId })).data;
+}
+
+// ---------- Google Drive export (functions/src/drive.js) ----------
+export interface RoomExport {
+  status: 'pending' | 'uploading' | 'done' | 'error' | 'needs_auth';
+  dueAt?: number;
+  attempts?: number;
+  finishedAt?: number;
+  folderUrl?: string;
+  fileCount?: number;
+  error?: string | null;
+}
+
+export interface DriveStatus {
+  status: 'ok' | 'needs_auth';
+  connectedAt?: number;
+  connectedBy?: string;
+  rootFolderId?: string;
+  error?: string | null;
+}
+
+export async function getDriveStatus(): Promise<DriveStatus | null> {
+  return ((await getDoc(doc(db, 'driveStatus', 'current'))).data() as DriveStatus) || null;
+}
+
+/** Google consent page for connecting (or reconnecting) the study Drive. */
+export async function getDriveAuthUrl() {
+  const fn = httpsCallable<void, { url: string }>(functions, 'driveAuthUrl');
+  return (await fn()).data.url;
+}
+
+export async function exportRoomNow(roomId: string) {
+  const fn = httpsCallable<{ roomId: string }, RoomExport & { status: string }>(functions, 'exportRoomNow');
+  return (await fn({ roomId })).data;
 }
 
 export interface LegacyRoom {

@@ -9,8 +9,8 @@ import {
   type AiProfile, type CostInputs, type Prices
 } from '../utils/aiProfiles';
 import {
-  assignRoomProfile, getSystemConfig, listProfiles, listStudyRooms, loadUsage, purgeLegacyRooms, saveProfile, saveSystemConfig,
-  type LegacyRoom, type StudyRoom, type UsageRow
+  assignRoomProfile, exportRoomNow, getDriveAuthUrl, getDriveStatus, getSystemConfig, listProfiles, listStudyRooms, loadUsage,
+  purgeLegacyRooms, saveProfile, saveSystemConfig, type DriveStatus, type LegacyRoom, type StudyRoom, type UsageRow
 } from '../services/admin';
 import { DEFAULT_CONSENT_TEXT } from '../constants/consent';
 
@@ -134,7 +134,7 @@ const pendingChoice = ref<Record<string, string>>({});
 const loadRooms = async () => {
   roomsLoading.value = true;
   try {
-    rooms.value = await listStudyRooms();
+    [rooms.value] = await Promise.all([listStudyRooms(), loadDrive()]);
   } catch (e: any) {
     roomStore.pushToast('讀取房間失敗', e?.message || String(e), 'error');
   } finally {
@@ -251,6 +251,41 @@ const deleteLegacy = async () => {
   }
 };
 
+// ---------- Google Drive export ----------
+const drive = ref<DriveStatus | null>(null);
+const loadDrive = async () => {
+  drive.value = await getDriveStatus().catch(() => null);
+};
+const connectDrive = async () => {
+  try {
+    window.location.href = await getDriveAuthUrl();
+  } catch (e: any) {
+    roomStore.pushToast('無法開始授權', e?.message || String(e), 'error');
+  }
+};
+const exporting = ref<Record<string, boolean>>({});
+const uploadNow = async (room: StudyRoom) => {
+  if (room.upload?.status === 'done' && !window.confirm('這個房間已上傳過。要再上傳一份（新資料夾）嗎？')) return;
+  exporting.value[room.roomId] = true;
+  try {
+    const res = await exportRoomNow(room.roomId);
+    if (res.status === 'done') roomStore.pushToast('已上傳', `${res.fileCount} 個檔案`, 'success');
+    else roomStore.pushToast('上傳失敗', res.error || res.status, 'error');
+    await Promise.all([loadRooms(), loadDrive()]);
+  } catch (e: any) {
+    roomStore.pushToast('上傳失敗', e?.message || String(e), 'error');
+  } finally {
+    exporting.value[room.roomId] = false;
+  }
+};
+const UPLOAD_LABELS: Record<string, { text: string; cls: string }> = {
+  pending: { text: '等待上傳', cls: 'text-slate-300' },
+  uploading: { text: '上傳中', cls: 'text-sky-300' },
+  done: { text: '已上傳', cls: 'text-emerald-300' },
+  error: { text: '上傳失敗', cls: 'text-rose-300' },
+  needs_auth: { text: '需要重新授權', cls: 'text-amber-300' }
+};
+
 const PHASE_LABELS: Record<string, string> = { waiting: '等待開場', running: '進行中', ended: '已結束' };
 
 const card = 'p-4 rounded-2xl border border-slate-800 bg-slate-900/70';
@@ -326,6 +361,19 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
           <button @click="loadRooms" class="ml-auto p-1.5 rounded-lg hover:bg-slate-800 text-slate-400"><RefreshCw class="w-4 h-4" :class="{ 'animate-spin': roomsLoading }" /></button>
         </div>
         <div v-if="roomsLoading && !rooms.length" class="text-xs text-slate-500 flex items-center gap-2"><Loader2 class="w-4 h-4 animate-spin" />讀取中…</div>
+        <div :class="card" class="flex flex-wrap items-center gap-3">
+          <div class="min-w-0 flex-1 text-xs space-y-0.5">
+            <div class="text-sm font-semibold">Google Drive 研究資料</div>
+            <div v-if="!drive" class="text-slate-400">尚未連接。房間結束 10 分鐘後的自動上傳會先排隊，連接後自動補傳。</div>
+            <div v-else-if="drive.status === 'needs_auth'" class="text-amber-300">需要重新授權：{{ drive.error }}</div>
+            <div v-else class="text-emerald-300">已連接（{{ drive.connectedBy }}，{{ fmtTime(drive.connectedAt) }}）</div>
+            <a v-if="drive?.rootFolderId" :href="`https://drive.google.com/drive/folders/${drive.rootFolderId}`" target="_blank" rel="noopener" class="text-sky-400 hover:underline">開啟「AI Mentor 研究資料」資料夾</a>
+          </div>
+          <button @click="connectDrive" class="px-3 py-1.5 rounded-lg text-xs font-semibold" :class="drive?.status === 'ok' ? 'border border-slate-700 hover:bg-slate-800' : 'bg-sky-600 hover:bg-sky-500'">
+            {{ !drive ? '連接 Google Drive' : drive.status === 'ok' ? '重新連接' : '重新授權' }}
+          </button>
+        </div>
+
         <div v-for="r in rooms" :key="r.roomId" :class="card" class="flex flex-wrap items-center gap-3">
           <div class="min-w-0 flex-1">
             <div class="font-semibold text-sm">{{ r.roomName || 'Meeting' }} <span class="font-mono text-xs text-sky-400">{{ r.pin }}</span>
@@ -338,6 +386,12 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
             <div class="text-[11px] text-slate-300 mt-0.5">
               目前：{{ r.assignment ? `${r.assignment.profileName || '—'} v${r.assignment.profileVersion}（${r.assignment.mode}）· ${fmtTime(r.assignment.assignedAt)} by ${r.assignment.assignedBy}` : '尚未指派' }}
             </div>
+            <div v-if="r.upload" class="text-[11px] mt-0.5">
+              <span :class="UPLOAD_LABELS[r.upload.status]?.cls">Drive：{{ UPLOAD_LABELS[r.upload.status]?.text || r.upload.status }}</span>
+              <span v-if="r.upload.status === 'pending' && r.upload.dueAt" class="text-slate-500">（預定 {{ fmtTime(r.upload.dueAt) }}）</span>
+              <a v-if="r.upload.folderUrl" :href="r.upload.folderUrl" target="_blank" rel="noopener" class="ml-1 text-sky-400 hover:underline">資料夾</a>
+              <span v-if="r.upload.error" class="ml-1 text-rose-300/80">{{ r.upload.error }}</span>
+            </div>
           </div>
           <div class="flex items-center gap-1.5">
             <select v-model="pendingChoice[r.roomId]" :class="select">
@@ -345,6 +399,9 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
               <option v-for="p in profiles" :key="p.id" :value="p.id">{{ p.name }} v{{ p.version }}</option>
             </select>
             <button @click="assign(r)" :disabled="!pendingChoice[r.roomId]" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-xs font-semibold disabled:opacity-40">指派</button>
+            <button v-if="r.session" @click="uploadNow(r)" :disabled="exporting[r.roomId]" class="px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs disabled:opacity-40">
+              {{ exporting[r.roomId] ? '上傳中…' : '上傳 Drive' }}
+            </button>
             <router-link v-if="r.session" :to="`/admin/replay/${r.roomId}`" class="px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs">重播</router-link>
           </div>
         </div>

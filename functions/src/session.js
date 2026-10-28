@@ -6,6 +6,7 @@ import { buildTranscript, PROMPT_VERSION, sessionMessagePrompt } from './prompts
 import { acquireLock, ensureRoomAi, fetchContext, postAiMessage, releaseLock } from './engine.js';
 import { writeEvent } from './events.js';
 import { logAiCall } from './log.js';
+import { queueRoomExport } from './drive.js';
 
 /**
  * Experiment flow of a room (rooms/{id}.session, written only here):
@@ -133,6 +134,7 @@ export async function endSession(roomId, endedBy) {
     senderUid: 'system', senderName: 'System', senderAvatar: '🛑', type: 'text', content: 'This session has ended.', timestamp: Date.now()
   });
   await writeEvent(roomId, { kind: 'session_ended', role: 'system', data: { endedBy } });
+  await queueRoomExport(roomId);
   return true;
 }
 

@@ -30,6 +30,10 @@
         "function": "proxyGlb"
       },
       {
+        "source": "/api/drive/callback",
+        "function": "driveOAuthCallback"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }

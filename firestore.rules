@@ -49,6 +49,17 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Google Drive export status (functions/src/drive.js); the OAuth token itself is in privateConfig,
+    // which has no rule and is therefore unreachable from browsers
+    match /driveStatus/{docId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+    match /roomExports/{roomId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
     match /users/{userId} {
       allow read, write: if isAuthenticated() && request.auth.uid == userId;
       match /{allSubcollections=**} {

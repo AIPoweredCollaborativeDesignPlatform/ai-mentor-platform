@@ -14,6 +14,7 @@ import { FRIENDLY_ERRORS } from './src/mentor.js';
 import { assignProfileToRoom, ensureRoomAi, handleNewMessage, loadProfile, runCheck } from './src/engine.js';
 import { endSession, joinRoom, maybeStartSession, runSessionJob, sessionTick } from './src/session.js';
 import { logBoardObjectChange, logMessageChange } from './src/events.js';
+import { authUrl, exportRoom, handleCallback, runDueExports } from './src/drive.js';
 
 initializeApp();
 
@@ -22,6 +23,10 @@ const ANTHROPIC_API_KEY = defineSecret('ANTHROPIC_API_KEY');
 const FAL_KEY = defineSecret('FAL_KEY');
 const MESHY_API_KEY = defineSecret('MESHY_API_KEY');
 const TRIPO_API_KEY = defineSecret('TRIPO_API_KEY');
+// OAuth client (Google Cloud Console → Credentials) used to upload research data to the admin's Drive
+const GOOGLE_OAUTH_CLIENT_ID = defineSecret('GOOGLE_OAUTH_CLIENT_ID');
+const GOOGLE_OAUTH_CLIENT_SECRET = defineSecret('GOOGLE_OAUTH_CLIENT_SECRET');
+const oauthSecrets = () => ({ clientId: GOOGLE_OAUTH_CLIENT_ID.value(), clientSecret: GOOGLE_OAUTH_CLIENT_SECRET.value() });
 
 const requireAuth = request => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in (guest is fine) to use AI features.');
@@ -152,7 +157,50 @@ export const endStudySession = onCall({ maxInstances: 10 }, async request => {
   return { ended: await endSession(roomId, room.hostUid === request.auth.uid ? 'researcher' : 'admin') };
 });
 
-export const sessionClock = onSchedule({ schedule: 'every 1 minutes', timeoutSeconds: 120, maxInstances: 1 }, () => sessionTick());
+// Session timing every minute, then due Drive exports (src/drive.js)
+export const sessionClock = onSchedule(
+  { schedule: 'every 1 minutes', timeoutSeconds: 540, memory: '512MiB', maxInstances: 1, secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] },
+  async () => {
+    await sessionTick();
+    await runDueExports(oauthSecrets());
+  }
+);
+
+// ---------- Google Drive export (src/drive.js) ----------
+export const driveAuthUrl = onCall({ maxInstances: 2, secrets: [GOOGLE_OAUTH_CLIENT_ID] }, async request => {
+  requireAdmin(request);
+  return { url: await authUrl(GOOGLE_OAUTH_CLIENT_ID.value(), request.auth.token.email) };
+});
+
+/** OAuth redirect target, served at /api/drive/callback through a Hosting rewrite. */
+export const driveOAuthCallback = onRequest(
+  { invoker: 'public', maxInstances: 2, secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] },
+  async (req, res) => {
+    const page = (title, text) => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>`
+      + `<body style="font-family:system-ui;background:#020617;color:#e2e8f0;display:grid;place-items:center;min-height:100vh;margin:0">`
+      + `<div style="max-width:28rem;padding:2rem;text-align:center"><h1 style="font-size:1.2rem">${title}</h1><p style="color:#94a3b8">${text}</p>`
+      + `<a href="/#/admin" style="color:#38bdf8">Back to admin</a></div></body>`;
+    const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+    try {
+      const { requeued } = await handleCallback({ code: String(req.query.code || ''), state: String(req.query.state || ''), error: req.query.error }, oauthSecrets());
+      res.status(200).send(page('Google Drive connected', `Research data will be uploaded automatically.${requeued ? ` ${requeued} waiting room(s) were queued again.` : ''}`));
+    } catch (err) {
+      console.error('[driveOAuthCallback]', err?.message || err);
+      res.status(400).send(page('Could not connect Google Drive', esc(err?.message || err)));
+    }
+  }
+);
+
+/** Manual upload button in /#/admin (also used to re-upload a room). */
+export const exportRoomNow = onCall(
+  { timeoutSeconds: 540, memory: '512MiB', maxInstances: 3, secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] },
+  async request => {
+    requireAdmin(request);
+    const { roomId } = request.data || {};
+    if (!roomId) throw new HttpsError('invalid-argument', 'Missing roomId');
+    return exportRoom(String(roomId), oauthSecrets(), { manual: true });
+  }
+);
 
 export const onSessionJob = onDocumentCreated(
   { document: 'sessionJobs/{jobId}', secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 300, maxInstances: 10 },

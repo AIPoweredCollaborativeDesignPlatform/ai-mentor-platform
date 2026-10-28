@@ -33,6 +33,18 @@ export async function reopenStudySession(roomId: string): Promise<boolean> {
   return (await fn({ roomId })).data.reopened;
 }
 
+/** Name/avatar change in a room; the server announces it in the chat (system messages are server-only). */
+export async function updateRoomProfile(roomId: string, displayName: string, avatar: string): Promise<void> {
+  const fn = httpsCallable<{ roomId: string; displayName: string; avatar: string }, { changed: boolean }>(functions, 'updateRoomProfile');
+  await fn({ roomId, displayName, avatar });
+}
+
+/** Room name/emoji change by the host; the server applies it and posts the notice. */
+export async function updateStudyRoomDetails(roomId: string, roomName: string, roomEmoji: string): Promise<{ roomName: string; roomEmoji: string }> {
+  const fn = httpsCallable<{ roomId: string; roomName: string; roomEmoji: string }, { roomName: string; roomEmoji: string }>(functions, 'updateStudyRoomDetails');
+  return (await fn({ roomId, roomName, roomEmoji })).data;
+}
+
 export async function endStudySession(roomId: string): Promise<boolean> {
   const fn = httpsCallable<{ roomId: string }, { ended: boolean }>(functions, 'endStudySession');
   return (await fn({ roomId })).data.ended;

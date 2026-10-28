@@ -120,9 +120,10 @@ service cloud.firestore {
         allow read: if isAuthenticated() &&
           (isRoomHost(roomId) || request.auth.uid == participantId || isApprovedParticipant(roomId) || isObserver());
 
-        // Own record: presence, name, avatar; never self-approval or the consent record
+        // Own record: presence and the open board; never self-approval or the consent record. Name and
+        // avatar go through the updateRoomProfile function, which announces the change in the chat.
         allow update: if isRoomHost(roomId) || (isAuthenticated() && request.auth.uid == participantId &&
-          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['consent']) &&
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['consent', 'displayName', 'avatar']) &&
           (request.resource.data.status == resource.data.status || request.resource.data.status in ['pending', 'cancelled', 'left']));
         allow delete: if isRoomHost(roomId) || (isAuthenticated() && request.auth.uid == participantId);
       }
@@ -160,19 +161,21 @@ service cloud.firestore {
 
       match /messages/{messageId} {
         allow read: if isMember() || isObserver();
-        // Participants post as themselves (or 'system' notices such as a profile change); the researcher
-        // (host) is a read-only observer and may only post system notices. AI messages come from Functions only.
-        allow create: if (isRoomHost(roomId) && request.resource.data.senderUid == 'system') ||
-          (isApprovedParticipant(roomId) && !isRoomHost(roomId) &&
-          (request.resource.data.senderUid == request.auth.uid ||
-           request.resource.data.senderUid == 'system'));
-        // The sender of a message never changes (no re-attributing a message to someone else or the AI)
-        allow update: if !request.resource.data.diff(resource.data).affectedKeys().hasAny(['senderUid']) && (
+        // Participants post only as themselves; the researcher (host) is a read-only observer. AI and
+        // system messages (notices, profile/room changes, time-up…) are written by Cloud Functions only.
+        allow create: if isApprovedParticipant(roomId) && !isRoomHost(roomId) &&
+          request.resource.data.senderUid == request.auth.uid;
+        // Sender and type never change (no re-attributing a message to someone else, the AI or the system).
+        // Other members may react/vote, and refresh the thumbnail of a shared board they edit.
+        allow update: if !request.resource.data.diff(resource.data).affectedKeys().hasAny(['senderUid', 'type']) && (
           isRoomHost(roomId) ||
           (isAuthenticated() && resource.data.senderUid == request.auth.uid) ||
           (isApprovedParticipant(roomId) && (
-            resource.data.type == 'whiteboard_state' ||
-            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions', 'pollVotes', 'actionOptions'])
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions', 'pollVotes', 'actionOptions']) ||
+            (resource.data.type == 'whiteboard_state' &&
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fileData', 'metadata']) &&
+              request.resource.data.get('fileData', {}).diff(resource.data.get('fileData', {})).affectedKeys().hasOnly(['url']) &&
+              request.resource.data.get('metadata', {}).diff(resource.data.get('metadata', {})).affectedKeys().hasOnly(['updatedAt', 'boardV']))
           )));
         allow delete: if isRoomHost(roomId) ||
           (isAuthenticated() && resource.data.senderUid == request.auth.uid);

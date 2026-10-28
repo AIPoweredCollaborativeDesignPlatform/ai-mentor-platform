@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import { useRoomStore } from '../stores/room';
 import { db } from '../firebase/config';
-import { doc, updateDoc, addDoc, collection } from 'firebase/firestore';
+import { doc, updateDoc } from 'firebase/firestore';
 import {
   Sliders,
   Users,
@@ -170,16 +170,9 @@ const handleReopenMeeting = async () => {
   roomStore.currentRoom.roomStatus = 'active';
   if (db) {
     try {
+      // Rooms from before the experiment flow (no session); the header banner shows the change
       await updateDoc(doc(db, 'rooms', roomStore.currentRoom.roomId), {
         roomStatus: 'active'
-      });
-      await addDoc(collection(db, 'rooms', roomStore.currentRoom.roomId, 'messages'), {
-        senderUid: 'system',
-        senderName: t('common.system'),
-        senderAvatar: '🔓',
-        type: 'text',
-        content: t('drawer.reopenedNotice'),
-        timestamp: Date.now()
       });
     } catch (e) {
       console.error(e);

@@ -25,6 +25,8 @@ const STRINGS = {
   roomCreated: { 'zh-TW': '{emoji} 已建立房間「{name}」· PIN：{pin}', en: '{emoji} Room "{name}" created · PIN: {pin}' },
   system: { 'zh-TW': '系統', en: 'System' },
   refinedMessage: { 'zh-TW': '已為「{title}」加上彩色 PBR 材質與細節。', en: 'Refined "{title}" with color PBR textures and details.' },
+  profileUpdated: { 'zh-TW': '{old} 已將名稱改為 {name} {avatar}', en: '{old} updated profile to {name} {avatar}' },
+  detailsUpdated: { 'zh-TW': '房間資訊已更新為 {emoji} {name}', en: 'Room details updated to {emoji} {name}' },
   aiAsset: { 'zh-TW': 'AI 產生了新素材', en: 'AI Asset Generated' },
   aiErrorPrefix: { 'zh-TW': '⚠️ {name}：{message}', en: '⚠️ {name}: {message}' },
   'aiError.KEY_INVALID': { 'zh-TW': 'AI 服務金鑰設定有誤，請聯絡研究人員。', en: 'The AI service key is not configured correctly. Please contact the study administrator.' },

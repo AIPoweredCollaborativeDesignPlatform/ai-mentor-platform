@@ -76,7 +76,7 @@ export async function createRoom(uid, { roomName, roomEmoji, language, mentorCon
     });
   }
   batch.set(roomDoc.collection('messages').doc(`msg_${now}`), {
-    senderUid: 'system', senderName: 'System', senderAvatar: '🏛️', type: 'text',
+    senderUid: 'system', senderName: str('system', lang), senderAvatar: '🏛️', type: 'text',
     content: str('roomCreated', lang, { emoji, name, pin }), timestamp: now
   });
   batch.update(db().doc(`roomPins/${roomId}`), { createdAt: now });
@@ -113,4 +113,46 @@ export async function listPins() {
   const free = [];
   for (let n = PIN_MIN; n <= PIN_MAX; n++) if (!taken.has(`room_${n}`)) free.push(String(n));
   return { inUse: inUse.sort(byPin), ended: ended.sort(byPin), invalid: invalid.sort(byPin), free };
+}
+
+// ---------- Changes that post a chat notice (system messages are written only by the server) ----------
+const systemNotice = (roomId, language, content, avatar) =>
+  db().collection(`rooms/${roomId}/messages`).add({
+    senderUid: 'system', senderName: str('system', language), senderAvatar: avatar, type: 'text', content, timestamp: Date.now()
+  });
+
+/**
+ * A member changes their name or avatar in a room. Participants' changes are announced in the chat;
+ * the researcher (host) and observers stay invisible.
+ */
+export async function updateMyProfile(roomId, uid, { displayName, avatar }) {
+  const roomSnap = await db().doc(`rooms/${roomId}`).get();
+  const room = roomSnap.data();
+  if (!room) throw new Error('Room not found');
+  const partRef = db().doc(`rooms/${roomId}/participants/${uid}`);
+  const me = (await partRef.get()).data();
+  if (!me || !['approved', 'observer'].includes(me.status)) throw new Error('Not a member of this room');
+  const name = String(displayName || '').trim().slice(0, 20) || me.displayName || 'Participant';
+  const icon = String(avatar || '').trim().slice(0, 8) || me.avatar || '🙂';
+  if (name === me.displayName && icon === me.avatar) return { changed: false };
+  await partRef.update({ displayName: name, avatar: icon });
+  const silent = room.hostUid === uid || me.status === 'observer';
+  if (!silent) {
+    await systemNotice(roomId, room.language, str('profileUpdated', room.language, { old: me.displayName || '', name, avatar: icon }), '✏️');
+  }
+  return { changed: true };
+}
+
+/** The room's host renames the room or changes its emoji; the change is announced in the chat. */
+export async function updateRoomDetails(roomId, uid, isAdmin, { roomName, roomEmoji }) {
+  const ref = db().doc(`rooms/${roomId}`);
+  const room = (await ref.get()).data();
+  if (!room) throw new Error('Room not found');
+  if (room.hostUid !== uid && !isAdmin) throw new Error('Only the room host can change the room details');
+  const name = String(roomName || '').trim().slice(0, 60) || room.roomName;
+  const emoji = String(roomEmoji || '').trim().slice(0, 8) || room.roomEmoji || '💡';
+  if (name === room.roomName && emoji === room.roomEmoji) return { roomName: name, roomEmoji: emoji, changed: false };
+  await ref.update({ roomName: name, roomEmoji: emoji, updatedAt: Date.now() });
+  await systemNotice(roomId, room.language, str('detailsUpdated', room.language, { emoji, name }), '📝');
+  return { roomName: name, roomEmoji: emoji, changed: true };
 }

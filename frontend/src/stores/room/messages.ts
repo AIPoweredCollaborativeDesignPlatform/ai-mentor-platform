@@ -93,18 +93,6 @@ export function useRoomMessages(ctx: RoomContext, setMyTyping: (typing: boolean)
     }
   };
 
-  /** Posts a message authored by the system (not the current user); no optimistic rendering. */
-  const postSystemMessage = (content: string, senderAvatar: string) => {
-    if (!currentRoom.value) return Promise.resolve();
-    return addDoc(roomCollection(currentRoom.value.roomId, 'messages'), {
-      senderUid: 'system',
-      senderName: t('common.system'),
-      senderAvatar,
-      type: 'text',
-      content,
-      timestamp: Date.now()
-    });
-  };
 
   /** Applies updates locally and in Firestore. `timestamp` is only changed when explicitly provided. */
   const updateCustomMessage = async (messageId: string, updates: Partial<MessageItem>) => {
@@ -174,7 +162,6 @@ export function useRoomMessages(ctx: RoomContext, setMyTyping: (typing: boolean)
   };
 
   return {
-    postSystemMessage,
     sendTextMessage,
     sendCustomMessage,
     sendFileMessage,

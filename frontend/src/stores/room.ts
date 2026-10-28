@@ -1,11 +1,10 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import { updateDoc } from 'firebase/firestore';
 import type { ParticipantStatus, RoomData, ToastMessage } from '../types';
 import { useAuthStore } from './auth';
 import { useMentorStore } from './mentor';
-import { roomDocRef, roomRef, type PushToast, type RoomContext } from './room/context';
-import { endStudySession } from '../services/session';
+import { type PushToast, type RoomContext } from './room/context';
+import { endStudySession, updateRoomProfile, updateStudyRoomDetails } from '../services/session';
 import { t } from '../i18n';
 import { useRoomSession } from './room/session';
 import { useRoomMessages } from './room/messages';
@@ -71,15 +70,11 @@ export const useRoomStore = defineStore('room', () => {
 
   const updateParticipantProfile = async (newName: string, newAvatar: string) => {
     if (!currentRoom.value) return;
-    const oldName = currentRoom.value.participants[authStore.uid]?.displayName || authStore.displayName;
     authStore.updateProfile(newName, newAvatar);
     if (!authStore.uid) return;
     try {
-      await updateDoc(roomDocRef(currentRoom.value.roomId, 'participants', authStore.uid), { displayName: newName, avatar: newAvatar });
-      // The observing researcher stays invisible: no notice in the chat
-      if (!((isHost.value || myStatus.value === 'observer') && currentRoom.value.session)) {
-        await messages.postSystemMessage(t('room.profileUpdated', { old: oldName, name: newName, avatar: newAvatar }), '✏️');
-      }
+      // The server updates the record and announces participants' changes (the researcher and observers stay invisible)
+      await updateRoomProfile(currentRoom.value.roomId, newName, newAvatar);
     } catch (e) {
       console.error(e);
     }
@@ -89,21 +84,13 @@ export const useRoomStore = defineStore('room', () => {
     if (!currentRoom.value) return;
     const cleanName = name.trim() || t('room.defaultName');
     const cleanEmoji = emoji.trim() || '💡';
-    const changed = currentRoom.value.roomName !== cleanName || currentRoom.value.roomEmoji !== cleanEmoji;
     currentRoom.value.roomName = cleanName;
     currentRoom.value.roomEmoji = cleanEmoji;
 
     try {
-      const fields = { roomName: cleanName, roomEmoji: cleanEmoji, updatedAt: Date.now() };
-      await updateDoc(roomRef(currentRoom.value.roomId), fields);
-      session.upsertMyRoomIndex(currentRoom.value.roomId, fields);
-      if (changed) {
-        await messages.sendCustomMessage({
-          senderUid: 'system',
-          senderName: t('common.system'),
-          content: t('room.detailsUpdated', { emoji: cleanEmoji, name: cleanName })
-        }).catch(() => {});
-      }
+      // Applied and announced by the server (system messages are server-only)
+      const saved = await updateStudyRoomDetails(currentRoom.value.roomId, cleanName, cleanEmoji);
+      session.upsertMyRoomIndex(currentRoom.value.roomId, { ...saved, updatedAt: Date.now() });
     } catch (err) {
       console.error('Failed to update room info in Firestore:', err);
     }

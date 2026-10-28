@@ -15,7 +15,7 @@ import { assignProfileToRoom, ensureRoomAi, handleNewMessage, loadProfile, postA
 import { endSession, joinRoom, maybeStartSession, reopenSession, runSessionJob, sessionTick } from './src/session.js';
 import { logBoardObjectChange, logMessageChange } from './src/events.js';
 import { authUrl, exportRoom, handleCallback, runDueExports } from './src/drive.js';
-import { createRoom, listPins, markRoomDeleted } from './src/rooms.js';
+import { createRoom, listPins, markRoomDeleted, updateMyProfile, updateRoomDetails } from './src/rooms.js';
 import { consentTextFor, roomLanguage, str } from './src/i18n.js';
 import { claimAnonymousRooms, isAdminToken, isObserverToken, listObservers, setObserver, syncRole } from './src/roles.js';
 
@@ -190,6 +190,32 @@ export const createStudyRoom = onCall({ maxInstances: 10 }, async request => {
 });
 
 export const onRoomDeleted = onDocumentDeleted({ document: 'rooms/{roomId}', maxInstances: 5 }, event => markRoomDeleted(event.params.roomId));
+
+const ROOM_ID = /^room_\d{4,6}$/;
+
+/** Name/avatar change inside a room (announces it to the chat for participants). */
+export const updateRoomProfile = onCall({ maxInstances: 10 }, async request => {
+  requireAuth(request);
+  const roomId = String(request.data?.roomId || '');
+  if (!ROOM_ID.test(roomId)) throw new HttpsError('invalid-argument', 'Missing roomId');
+  try {
+    return await updateMyProfile(roomId, request.auth.uid, request.data || {});
+  } catch (err) {
+    throw new HttpsError('permission-denied', err?.message || String(err));
+  }
+});
+
+/** Room name/emoji change by the host (announced to the chat). */
+export const updateStudyRoomDetails = onCall({ maxInstances: 10 }, async request => {
+  requireAuth(request);
+  const roomId = String(request.data?.roomId || '');
+  if (!ROOM_ID.test(roomId)) throw new HttpsError('invalid-argument', 'Missing roomId');
+  try {
+    return await updateRoomDetails(roomId, request.auth.uid, isAdminToken(request.auth.token), request.data || {});
+  } catch (err) {
+    throw new HttpsError('permission-denied', err?.message || String(err));
+  }
+});
 
 export const listRoomPins = onCall({ maxInstances: 2 }, async request => {
   if (!isObserverToken(request.auth?.token)) throw new HttpsError('permission-denied', 'Study staff only');

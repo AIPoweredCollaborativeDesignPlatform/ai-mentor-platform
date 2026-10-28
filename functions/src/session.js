@@ -145,7 +145,7 @@ export async function endSession(roomId, endedBy) {
   });
   if (!ended) return false;
   await roomRef(roomId).collection('messages').add({
-    senderUid: 'system', senderName: 'System', senderAvatar: '🛑', type: 'text', content: str('sessionEnded', language), timestamp: Date.now()
+    senderUid: 'system', senderName: str('system', language), senderAvatar: '🛑', type: 'text', content: str('sessionEnded', language), timestamp: Date.now()
   });
   await writeEvent(roomId, { kind: 'session_ended', role: 'system', data: { endedBy } });
   await queueRoomExport(roomId);
@@ -173,7 +173,7 @@ export async function reopenSession(roomId, by) {
   if (!reopened) return false;
   await cancelPendingExport(roomId);
   await roomRef(roomId).collection('messages').add({
-    senderUid: 'system', senderName: 'System', senderAvatar: '🔓', type: 'text', content: str('sessionReopened', language), timestamp: Date.now()
+    senderUid: 'system', senderName: str('system', language), senderAvatar: '🔓', type: 'text', content: str('sessionReopened', language), timestamp: Date.now()
   });
   await writeEvent(roomId, { kind: 'session_reopened', role: 'system', data: { by } });
   return true;
@@ -281,7 +281,7 @@ export async function runSessionJob(job, secrets) {
     // Control condition: nothing but a neutral time-up notice
     if (kind === 'time_up') {
       await roomRef(roomId).collection('messages').add({
-        senderUid: 'system', senderName: 'System', senderAvatar: '⏰', type: 'text', content: str('timeUp', room.language), timestamp: Date.now()
+        senderUid: 'system', senderName: str('system', room.language), senderAvatar: '⏰', type: 'text', content: str('timeUp', room.language), timestamp: Date.now()
       });
     }
     return;

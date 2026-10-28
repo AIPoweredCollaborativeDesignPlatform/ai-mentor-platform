@@ -100,6 +100,9 @@ const activeUsersOn = (assetId: string) =>
     p => p.status === 'approved' && p.isOnline !== false && p.activeWhiteboardId === assetId
   );
 
+// Hiding applies to everyone in the room, so only the item's sender or the room host may do it (firestore.rules)
+const canHide = (m: MessageItem) => roomStore.isHost || m.senderUid === authStore.uid;
+
 const toggleHidden = async (m: MessageItem) => {
   const isHidden = !m.metadata?.isHidden;
   const metadata = { ...(m.metadata || {}), isHidden };
@@ -182,7 +185,7 @@ const openItem = (m: MessageItem) => {
           :key="m.id"
           :msg="m"
           :hidden="false"
-          :managing="isManaging"
+          :managing="isManaging && canHide(m)"
           :thumbnail="thumbnailFor(m)"
           :activeUsers="activeUsersOn(m.id)"
           @open="openItem(m)"
@@ -205,7 +208,7 @@ const openItem = (m: MessageItem) => {
             :key="m.id"
             :msg="m"
             :hidden="true"
-            :managing="isManaging"
+            :managing="isManaging && canHide(m)"
             :thumbnail="thumbnailFor(m)"
             @open="openItem(m)"
             @toggle-hide="toggleHidden(m)"

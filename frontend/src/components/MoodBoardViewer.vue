@@ -102,16 +102,16 @@ const closePreview = () => {
 </script>
 
 <template>
-  <div class="mt-3 bg-slate-950/80 border border-amber-500/30 rounded-2xl p-4 shadow-xl">
+  <div class="mt-3 bg-slate-900 border border-slate-800 rounded-2xl p-4">
     <!-- Header with strictly non-wrapping AI Generated pill -->
     <div class="flex items-center justify-between gap-2 mb-3 min-w-0">
       <div class="flex items-center gap-2 min-w-0">
-        <Palette class="w-4 h-4 sm:w-5 sm:h-5 text-amber-400 shrink-0" />
+        <Palette class="w-4 h-4 sm:w-5 sm:h-5 text-slate-400 shrink-0" />
         <h4 class="font-semibold text-slate-100 text-xs sm:text-sm tracking-wide truncate">
           {{ assetData?.title || t('mood.title') }}
         </h4>
       </div>
-      <span class="text-[9px] sm:text-[10px] bg-amber-500/20 text-amber-300 font-mono px-2 py-0.5 rounded-full border border-amber-500/30 whitespace-nowrap shrink-0">
+      <span class="text-[9px] sm:text-[10px] bg-slate-800 text-slate-400 font-mono px-2 py-0.5 rounded-full border border-slate-700 whitespace-nowrap shrink-0">
         {{ t('mood.aiGenerated') }}
       </span>
     </div>
@@ -137,7 +137,7 @@ const closePreview = () => {
           v-for="(img, i) in (assetData.images || assetData.slices || (assetData.keywords || ['concept']).slice(0, 4).map((kw: string) => ({ title: kw, caption: kw })))"
           :key="i"
           class="group relative rounded-xl overflow-hidden aspect-[4/3] bg-slate-900 border cursor-pointer shadow transition duration-300"
-          :class="isHeroCard(img, i) ? 'border-indigo-500/50 hover:border-indigo-400 ring-1 ring-indigo-500/30' : 'border-slate-800 hover:border-amber-500/50'"
+          :class="isHeroCard(img, i) ? 'border-slate-600 hover:border-slate-500' : 'border-slate-800 hover:border-slate-600'"
           @click="openPreview(img, i)"
         >
           <img
@@ -153,7 +153,7 @@ const closePreview = () => {
             <!-- Card 1: Dedicated Hero Concept Badge -->
             <span
               v-if="isHeroCard(img, i)"
-              class="bg-indigo-950/85 backdrop-blur-xs text-indigo-300 px-1.5 py-0.5 rounded text-[8px] font-semibold border border-indigo-500/40 shadow-xs flex items-center gap-1 shrink-0"
+              class="bg-indigo-950/85 text-indigo-300 px-1.5 py-0.5 rounded text-[8px] font-semibold border border-indigo-500/40 shadow-xs flex items-center gap-1 shrink-0"
             >
               <Sparkles class="w-2.5 h-2.5 text-indigo-400" />
               <span>{{ t('mood.hero') }}</span>
@@ -161,7 +161,7 @@ const closePreview = () => {
             <!-- Other Cards: Specific Category Badge -->
             <span
               v-else-if="img?.category"
-              class="bg-black/75 backdrop-blur-xs text-amber-300 px-1.5 py-0.5 rounded text-[8px] font-semibold border border-amber-500/30 shadow-xs truncate"
+              class="bg-black/75 text-white px-1.5 py-0.5 rounded text-[8px] font-semibold border border-amber-500/30 shadow-xs truncate"
             >
               {{ categoryLabel(img.category) }}
             </span>
@@ -172,7 +172,7 @@ const closePreview = () => {
               :href="getSourceUrl(img)"
               target="_blank"
               rel="noopener noreferrer"
-              class="bg-black/75 hover:bg-slate-800 backdrop-blur-xs text-slate-300 hover:text-white p-1 rounded-md border border-slate-700/80 shadow-xs flex items-center justify-center transition shrink-0"
+              class="bg-black/75 hover:bg-slate-800 text-slate-300 hover:text-white p-1 rounded-md border border-slate-700/80 shadow-xs flex items-center justify-center transition shrink-0"
               @click.stop
               :title="t('mood.openRef', { url: getSourceUrl(img) })"
             >
@@ -236,7 +236,7 @@ const closePreview = () => {
     >
       <div
         v-if="selectedItem"
-        class="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/90 backdrop-blur-md p-4 sm:p-6 select-none"
+        class="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/90 p-4 sm:p-6 select-none"
         @click="closePreview"
       >
         <div
@@ -255,7 +255,7 @@ const closePreview = () => {
               </span>
               <span
                 v-else-if="selectedItem.category"
-                class="bg-amber-950 text-amber-300 px-2 py-0.5 rounded text-xs font-semibold border border-amber-500/40 shrink-0"
+                class="bg-slate-800 text-slate-300 px-2 py-0.5 rounded text-xs font-semibold border border-slate-700 shrink-0"
               >
                 {{ categoryLabel(selectedItem.category) }}
               </span>
@@ -268,7 +268,7 @@ const closePreview = () => {
                 :href="selectedItem.sourceUrl"
                 target="_blank"
                 rel="noopener noreferrer"
-                class="px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white text-xs font-medium flex items-center gap-1.5 transition"
+                class="px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-ink text-xs font-medium flex items-center gap-1.5 transition"
                 :title="t('mood.openSource')"
               >
                 <span>{{ t('mood.viewSource') }}</span>

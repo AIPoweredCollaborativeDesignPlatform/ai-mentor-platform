@@ -19,6 +19,7 @@ import { listProfiles } from '../services/admin';
 import { modeLabel, type AiProfile } from '../utils/aiProfiles';
 import { t } from '../i18n';
 import LocaleSwitch from '../components/LocaleSwitch.vue';
+import ThemeSwitch from '../components/ThemeSwitch.vue';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -152,11 +153,11 @@ const handleGoogleSignIn = async () => {
 </script>
 
 <template>
-  <div class="min-h-[100dvh] flex flex-col items-center justify-center p-4 sm:p-6 bg-gradient-to-b from-slate-900 via-slate-950 to-slate-900 overflow-y-auto relative">
-    <div class="absolute top-3 right-3"><LocaleSwitch /></div>
+  <div class="min-h-[100dvh] flex flex-col items-center justify-center p-4 sm:p-6 bg-slate-950 overflow-y-auto relative">
+    <div class="absolute top-3 right-3 flex items-center gap-1.5"><ThemeSwitch /><LocaleSwitch /></div>
     <!-- Brand / Header -->
     <div class="text-center max-w-xl mb-5">
-      <h1 class="text-xl sm:text-2xl font-black text-white mb-1.5 tracking-tight flex items-center justify-center gap-2">
+      <h1 class="text-xl sm:text-2xl font-black text-ink mb-1.5 tracking-tight flex items-center justify-center gap-2">
         <Sparkles class="w-5 h-5 sm:w-6 sm:h-6 inline-block text-sky-400 mr-1.5" />
         {{ t('home.title') }}
       </h1>
@@ -166,7 +167,7 @@ const handleGoogleSignIn = async () => {
     </div>
 
     <!-- Main Card -->
-    <div class="w-full max-w-lg bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-6 shadow-2xl backdrop-blur-xl">
+    <div class="w-full max-w-lg bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-6 shadow-2xl">
       <!-- Guest Profile Setup -->
       <section class="mb-5">
         <div class="flex items-center gap-3 mb-3">
@@ -251,14 +252,14 @@ const handleGoogleSignIn = async () => {
             <!-- Room Emoji Picker Popover -->
             <div
               v-if="isEmojiPickerOpen"
-              class="absolute z-50 top-12 left-0 w-72 sm:w-80 bg-slate-900/95 backdrop-blur-md border border-slate-700 rounded-2xl shadow-2xl p-3 text-slate-100 animate-in fade-in zoom-in-95 duration-100"
+              class="absolute z-50 top-12 left-0 w-72 sm:w-80 bg-slate-900/95 border border-slate-700 rounded-2xl shadow-2xl p-3 text-slate-100 animate-in fade-in zoom-in-95 duration-100"
             >
               <div class="flex items-center justify-between pb-2 mb-2 border-b border-slate-800 text-xs">
                 <span class="font-semibold text-slate-300">{{ t('home.chooseEmblem') }}</span>
                 <button
                   type="button"
                   @click="isEmojiPickerOpen = false"
-                  class="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white"
+                  class="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-ink"
                 >
                   <X class="w-3.5 h-3.5" />
                 </button>
@@ -356,18 +357,18 @@ const handleGoogleSignIn = async () => {
           <button
             @click="handleCreateRoom"
             :disabled="isLoading"
-            class="flex-1 flex flex-col justify-between p-4 rounded-xl bg-gradient-to-br from-sky-600 to-indigo-700 hover:from-sky-500 hover:to-indigo-600 text-white shadow-lg transition text-left group disabled:opacity-50 min-h-[110px] cursor-pointer"
+            class="flex-1 flex flex-col justify-between p-4 rounded-xl bg-sky-600 hover:bg-sky-500 text-white shadow-lg transition text-left group disabled:opacity-50 min-h-[110px] cursor-pointer"
           >
             <div>
               <div class="p-2 bg-white/10 rounded-lg w-fit mb-2">
-                <Users class="w-4 h-4 text-white" />
+                <Users class="w-4 h-4 text-ink" />
               </div>
               <h3 class="font-bold text-sm mb-0.5">{{ t('home.createMeeting') }}</h3>
               <p class="text-[11px] text-sky-100 opacity-90">
                 {{ t('home.createHint') }}
               </p>
             </div>
-            <div class="mt-3 flex items-center gap-1 text-xs font-semibold text-white group-hover:translate-x-1 transition">
+            <div class="mt-3 flex items-center gap-1 text-xs font-semibold text-ink group-hover:translate-x-1 transition">
               {{ isLoading ? t('home.creating') : t('home.createNow') }} <ArrowRight class="w-3.5 h-3.5" />
             </div>
           </button>
@@ -388,7 +389,7 @@ const handleGoogleSignIn = async () => {
               type="text"
               maxlength="6"
               :placeholder="t('home.pinPlaceholder')"
-              class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-center text-lg sm:text-base tracking-widest font-mono text-white placeholder-slate-600 focus:outline-none focus:border-sky-500 min-h-[44px]"
+              class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-center text-lg sm:text-base tracking-widest font-mono text-ink placeholder-slate-600 focus:outline-none focus:border-sky-500 min-h-[44px]"
             />
             <p v-if="errorMsg" class="text-[11px] text-rose-400 mt-1">{{ errorMsg }}</p>
           </div>

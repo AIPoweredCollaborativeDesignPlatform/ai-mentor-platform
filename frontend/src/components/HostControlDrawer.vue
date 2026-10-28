@@ -218,7 +218,7 @@ onUnmounted(() => {
     >
       <div
         v-if="isOpen"
-        class="fixed inset-x-0 bottom-0 z-[90] bg-slate-950/60 backdrop-blur-xs"
+        class="fixed inset-x-0 bottom-0 z-[90] bg-slate-950/60"
         :style="{ top: topOffset }"
         @click="emit('close')"
       ></div>
@@ -324,7 +324,7 @@ onUnmounted(() => {
                   type="text"
                   :placeholder="t('drawer.roomNamePlaceholder')"
                   maxlength="50"
-                  class="flex-1 bg-slate-900 border border-slate-700 disabled:opacity-60 disabled:cursor-not-allowed rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 transition min-w-0"
+                  class="flex-1 bg-slate-900 border border-slate-700 disabled:opacity-60 disabled:cursor-not-allowed rounded-xl px-3 py-1.5 text-xs text-ink placeholder-slate-500 focus:outline-none focus:border-sky-500 transition min-w-0"
                 />
                 <button
                   v-if="roomStore.isHost"
@@ -353,7 +353,7 @@ onUnmounted(() => {
               <button
                 type="button"
                 @click="isEmojiPickerOpen = false"
-                class="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition"
+                class="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-ink transition"
               >
                 <X class="w-3.5 h-3.5" />
               </button>
@@ -366,13 +366,13 @@ onUnmounted(() => {
                 v-model="emojiSearchQuery"
                 type="text"
                 :placeholder="t('drawer.emojiSearch')"
-                class="w-full bg-slate-950 border border-slate-700 rounded-xl pl-8 pr-7 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500"
+                class="w-full bg-slate-950 border border-slate-700 rounded-xl pl-8 pr-7 py-1.5 text-xs text-ink placeholder-slate-500 focus:outline-none focus:border-sky-500"
               />
               <button
                 v-if="emojiSearchQuery"
                 type="button"
                 @click="emojiSearchQuery = ''"
-                class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-0.5"
+                class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-ink p-0.5"
               >
                 <X class="w-3 h-3" />
               </button>
@@ -525,7 +525,7 @@ onUnmounted(() => {
                 <span
                   v-if="p.isHost"
                   class="text-[10px] px-2 py-0.5 rounded-full font-medium"
-                  :class="p.isOnline !== false ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'bg-slate-800 text-slate-400 border border-slate-700'"
+                  :class="p.isOnline !== false ? 'bg-slate-800 text-slate-300 border border-slate-700' : 'bg-slate-900 text-slate-500 border border-slate-800'"
                 >
                   {{ t('host.hostBadge') }} {{ p.isOnline !== false ? '' : t('host.offlineSuffix') }}
                 </span>
@@ -606,7 +606,7 @@ onUnmounted(() => {
           <!-- Leave Meeting -->
           <button
             @click="triggerLeaveFlow"
-            class="w-full py-2.5 px-3 rounded-xl border border-slate-700 bg-slate-950/60 hover:bg-slate-800 text-slate-300 hover:text-white text-xs font-semibold transition flex items-center justify-center gap-2"
+            class="w-full py-2.5 px-3 rounded-xl border border-slate-700 bg-slate-950/60 hover:bg-slate-800 text-slate-300 hover:text-ink text-xs font-semibold transition flex items-center justify-center gap-2"
           >
             <LogOut class="w-4 h-4 text-amber-400" />
             <span>{{ roomStore.isHost ? t('drawer.leaveKeep') : t('drawer.leave') }}</span>
@@ -626,12 +626,12 @@ onUnmounted(() => {
     </div>
 
     <!-- Anonymous Host Warning Modal -->
-    <div v-if="showAnonWarningModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs">
+    <div v-if="showAnonWarningModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80">
       <div class="w-full max-w-sm bg-slate-900 border border-amber-500/40 rounded-2xl p-6 shadow-2xl text-center">
         <div class="w-12 h-12 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center mx-auto mb-3">
           <AlertTriangle class="w-6 h-6" />
         </div>
-        <h3 class="text-base font-bold text-white mb-2">{{ t('drawer.saveFirst') }}</h3>
+        <h3 class="text-base font-bold text-ink mb-2">{{ t('drawer.saveFirst') }}</h3>
         <p class="text-xs text-slate-300 mb-5 leading-relaxed">
           {{ t('drawer.saveFirstText') }}
         </p>
@@ -661,9 +661,9 @@ onUnmounted(() => {
     </div>
 
     <!-- Confirm Leave Modal -->
-    <div v-if="showLeaveModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs">
+    <div v-if="showLeaveModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75">
       <div class="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-6 shadow-2xl text-center">
-        <h3 class="text-base font-bold text-white mb-2">{{ t('drawer.leaveTitle') }}</h3>
+        <h3 class="text-base font-bold text-ink mb-2">{{ t('drawer.leaveTitle') }}</h3>
         <p class="text-xs text-slate-400 mb-5 leading-relaxed">
           {{ roomStore.isHost ? t('drawer.leaveHostText') : t('drawer.leaveText') }}
         </p>
@@ -685,7 +685,7 @@ onUnmounted(() => {
     </div>
 
     <!-- Confirm End for All Modal -->
-    <div v-if="showEndAllModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs">
+    <div v-if="showEndAllModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75">
       <div class="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-6 shadow-2xl text-center">
         <h3 class="text-base font-bold text-rose-400 mb-2">{{ t('drawer.closeTitle') }}</h3>
         <p class="text-xs text-slate-400 mb-5 leading-relaxed">

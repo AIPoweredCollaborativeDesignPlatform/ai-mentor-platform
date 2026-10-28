@@ -15,7 +15,7 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div v-if="isOpen" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+  <div v-if="isOpen" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
     <div class="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-6 shadow-2xl text-center">
       <div
         class="mx-auto w-12 h-12 rounded-full mb-4 flex items-center justify-center"
@@ -30,7 +30,7 @@ const emit = defineEmits<{
         <CheckCircle v-else class="w-6 h-6" />
       </div>
 
-      <h3 class="text-lg font-bold text-white mb-2">{{ title }}</h3>
+      <h3 class="text-lg font-bold text-ink mb-2">{{ title }}</h3>
       <p class="text-sm text-slate-400 mb-6">{{ message }}</p>
 
       <button

@@ -6,6 +6,7 @@ import { useAuthStore } from '../stores/auth';
 // `t` is the playback time in this view
 import { t as tr, type MessageKey } from '../i18n';
 import LocaleSwitch from '../components/LocaleSwitch.vue';
+import ThemeSwitch from '../components/ThemeSwitch.vue';
 import BoardReplayCanvas from '../components/admin/BoardReplayCanvas.vue';
 import {
   KIND_GROUPS, describe, fmtOffset, groupOf, indexAt, loadEvents, loadFinalBoard, membersOf, stateAt, wasTruncated,
@@ -173,7 +174,8 @@ onMounted(async () => {
       <router-link to="/admin" class="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400"><ArrowLeft class="w-4 h-4" /></router-link>
       <h1 class="font-semibold text-sm">{{ tr('rp.title') }} <span class="font-mono text-sky-400">{{ roomId }}</span></h1>
       <span v-if="events.length" class="text-[11px] text-slate-500">{{ tr('rp.eventsLength', { count: events.length, length: fmtOffset(tEnd - t0) }) }}</span>
-      <LocaleSwitch class="ml-auto" />
+      <ThemeSwitch class="ml-auto" />
+      <LocaleSwitch />
       <div class="flex flex-wrap gap-2 text-[11px]">
         <span v-for="m in members.values()" :key="m.uid" class="px-2 py-0.5 rounded-full bg-slate-800 border border-slate-700">
           <b>{{ m.alias }}</b> {{ m.nickname }}
@@ -319,7 +321,7 @@ onMounted(async () => {
 
 <style scoped>
 .replay-md :deep(table) { border-collapse: collapse; margin: 0.25rem 0; font-size: 10px; }
-.replay-md :deep(th), .replay-md :deep(td) { border: 1px solid #334155; padding: 2px 4px; }
+.replay-md :deep(th), .replay-md :deep(td) { border: 1px solid rgb(var(--c-n-700)); padding: 2px 4px; }
 .replay-md :deep(h1), .replay-md :deep(h2), .replay-md :deep(h3) { font-weight: 600; margin-top: 0.25rem; }
 .replay-md :deep(ul) { list-style: disc; padding-left: 1rem; }
 .replay-md :deep(ol) { list-style: decimal; padding-left: 1rem; }

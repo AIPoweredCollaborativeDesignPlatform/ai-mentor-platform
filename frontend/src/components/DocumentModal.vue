@@ -43,7 +43,7 @@ const downloadMarkdown = () => {
 </script>
 
 <template>
-  <div v-if="isOpen" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+  <div v-if="isOpen" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
     <div class="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
       <!-- Header -->
       <div class="flex items-center justify-between p-4 border-b border-slate-800 bg-slate-950/60">
@@ -91,36 +91,36 @@ const downloadMarkdown = () => {
   width: 100%;
   border-collapse: collapse;
   margin: 1.25rem 0;
-  border: 1px solid #334155;
+  border: 1px solid rgb(var(--c-n-700));
   border-radius: 0.5rem;
   overflow: hidden;
   display: block;
   overflow-x: auto;
 }
 :deep(th) {
-  background-color: #1e293b;
-  color: #38bdf8;
+  background-color: rgb(var(--c-n-800));
+  color: rgb(var(--c-blue-400));
   font-weight: 600;
   text-align: left;
   padding: 0.625rem 0.875rem;
-  border: 1px solid #334155;
+  border: 1px solid rgb(var(--c-n-700));
   white-space: nowrap;
 }
 :deep(td) {
   padding: 0.5rem 0.875rem;
-  border: 1px solid #334155;
-  color: #cbd5e1;
+  border: 1px solid rgb(var(--c-n-700));
+  color: rgb(var(--c-n-300));
 }
 :deep(tr:nth-child(even)) {
-  background-color: rgba(30, 41, 59, 0.4);
+  background-color: rgb(var(--c-n-800) / 0.4);
 }
 :deep(tr:hover) {
-  background-color: rgba(56, 189, 248, 0.05);
+  background-color: rgb(var(--c-blue-400) / 0.06);
 }
 :deep(blockquote) {
-  border-left: 3px solid #38bdf8;
+  border-left: 3px solid rgb(var(--c-blue-400));
   padding-left: 1rem;
-  color: #94a3b8;
+  color: rgb(var(--c-n-400));
   font-style: italic;
   margin: 1rem 0;
 }

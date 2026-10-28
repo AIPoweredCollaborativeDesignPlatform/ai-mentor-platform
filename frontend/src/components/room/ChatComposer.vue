@@ -287,7 +287,7 @@ defineExpose({ setReply, sendFile });
 </script>
 
 <template>
-  <footer class="border-t border-slate-800 bg-slate-900/90 backdrop-blur-md p-2.5 sm:p-3 shrink-0">
+  <footer class="border-t border-slate-800 bg-slate-900/90 p-2.5 sm:p-3 shrink-0">
     <div class="max-w-4xl mx-auto space-y-1.5">
       <!-- Room-wide AI task banner -->
       <div
@@ -306,7 +306,7 @@ defineExpose({ setReply, sendFile });
         <button
           v-if="roomStore.currentRoom.aiActiveTask.callerUid === authStore.uid || roomStore.isHost"
           @click="roomStore.abortCurrentAiGeneration()"
-          class="ml-2 px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 hover:text-white text-[11px] font-medium transition cursor-pointer flex items-center gap-1 shrink-0"
+          class="ml-2 px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 hover:text-ink text-[11px] font-medium transition cursor-pointer flex items-center gap-1 shrink-0"
           :title="t('composer.stopAi')"
         >
           <X class="w-3 h-3" /> {{ t('common.stop') }}
@@ -351,7 +351,7 @@ defineExpose({ setReply, sendFile });
             </p>
           </div>
         </div>
-        <button @click="stagedAttachment = null" class="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition shrink-0" :title="t('composer.removeAttachment')">
+        <button @click="stagedAttachment = null" class="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-ink transition shrink-0" :title="t('composer.removeAttachment')">
           <X class="w-4 h-4" />
         </button>
       </div>
@@ -371,7 +371,7 @@ defineExpose({ setReply, sendFile });
         <button
           @click="emit('open-whiteboard')"
           :disabled="isBlocked || isWhiteboardOpen"
-          class="p-2.5 rounded-xl border border-indigo-500/40 bg-indigo-950/40 hover:bg-indigo-900/60 text-indigo-300 hover:text-white transition disabled:opacity-40 disabled:cursor-not-allowed shrink-0 min-h-[44px] min-w-[44px] flex items-center justify-center cursor-pointer"
+          class="p-2.5 rounded-xl border border-indigo-500/40 bg-indigo-950/40 hover:bg-indigo-900/60 text-indigo-300 hover:text-ink transition disabled:opacity-40 disabled:cursor-not-allowed shrink-0 min-h-[44px] min-w-[44px] flex items-center justify-center cursor-pointer"
           :title="t('composer.openWhiteboard')"
         >
           <Palette class="w-4 h-4 text-indigo-400" />
@@ -380,7 +380,7 @@ defineExpose({ setReply, sendFile });
         <div class="relative flex-1 min-w-0">
           <div
             v-if="isMentionMenuOpen && mentionCandidates.length"
-            class="absolute bottom-full left-0 mb-2 w-72 sm:w-80 bg-slate-900/95 border border-slate-700/80 rounded-xl shadow-2xl p-1.5 backdrop-blur-md z-50 max-h-56 overflow-y-auto"
+            class="absolute bottom-full left-0 mb-2 w-72 sm:w-80 bg-slate-900/95 border border-slate-700/80 rounded-xl shadow-2xl p-1.5 z-50 max-h-56 overflow-y-auto"
           >
             <div class="px-2 py-1 text-[10px] font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-800 mb-1 flex items-center justify-between">
               <span>{{ t('room.mentionMember') }}</span>
@@ -392,7 +392,7 @@ defineExpose({ setReply, sendFile });
               type="button"
               @mousedown.prevent="selectMentionCandidate(cand)"
               class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left transition cursor-pointer text-xs"
-              :class="idx === mentionMenuIndex ? 'bg-sky-600/30 text-white ring-1 ring-sky-500' : 'hover:bg-slate-800 text-slate-200'"
+              :class="idx === mentionMenuIndex ? 'bg-sky-600/30 text-ink ring-1 ring-sky-500' : 'hover:bg-slate-800 text-slate-200'"
             >
               <div class="w-6 h-6 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center shrink-0 text-sm">{{ cand.avatar }}</div>
               <div class="flex-1 min-w-0">

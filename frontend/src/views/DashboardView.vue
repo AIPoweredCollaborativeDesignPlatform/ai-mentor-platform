@@ -33,6 +33,7 @@ import {
 import { ref, onMounted } from 'vue';
 import { intlLocale, t } from '../i18n';
 import LocaleSwitch from '../components/LocaleSwitch.vue';
+import ThemeSwitch from '../components/ThemeSwitch.vue';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -604,7 +605,7 @@ const handleLogout = async () => {
             <ArrowLeft class="w-5 h-5" />
           </router-link>
           <div class="min-w-0">
-            <h1 class="text-lg sm:text-xl font-bold text-white flex items-center gap-2 truncate">
+            <h1 class="text-lg sm:text-xl font-bold text-ink flex items-center gap-2 truncate">
               <LayoutDashboard class="w-4 h-4 sm:w-5 sm:h-5 text-sky-400 shrink-0" />
               {{ t('common.dashboard') }}
             </h1>
@@ -627,6 +628,7 @@ const handleLogout = async () => {
             <span class="hidden sm:inline">{{ t('dash.sync') }}</span>
           </button>
 
+          <ThemeSwitch />
           <LocaleSwitch />
 
           <button
@@ -660,7 +662,7 @@ const handleLogout = async () => {
               <template v-if="isManageMode">
                 <button
                   @click="toggleSelectAll"
-                  class="text-xs px-2.5 py-1.5 rounded-lg border border-slate-700 bg-slate-800 text-slate-300 hover:text-white transition flex items-center gap-1"
+                  class="text-xs px-2.5 py-1.5 rounded-lg border border-slate-700 bg-slate-800 text-slate-300 hover:text-ink transition flex items-center gap-1"
                 >
                   <CheckCheck class="w-3.5 h-3.5 text-sky-400" />
                   <span>{{ selectedRooms.size === (isTrashView ? trashRooms.length : historyRooms.length) ? t('dash.deselectAll') : t('dash.selectAll') }}</span>
@@ -711,7 +713,7 @@ const handleLogout = async () => {
                 <button
                   v-if="(isTrashView ? trashRooms.length : historyRooms.length) > 0"
                   @click="isManageMode = true"
-                  class="text-xs px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white transition flex items-center gap-1.5"
+                  class="text-xs px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-ink transition flex items-center gap-1.5"
                 >
                   <SlidersHorizontal class="w-3.5 h-3.5 text-sky-400" />
                   <span>{{ t('dash.manage') }}</span>
@@ -813,7 +815,7 @@ const handleLogout = async () => {
     <!-- Custom Modal Confirmation Dialog for Trash -->
     <div
       v-if="showDeleteModal"
-      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-xs"
+      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80"
       @click.self="showDeleteModal = false"
     >
       <div class="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl text-slate-100">
@@ -822,14 +824,14 @@ const handleLogout = async () => {
             <Trash2 class="w-5 h-5" />
           </div>
           <div>
-            <h3 class="text-base font-bold text-white">{{ t('dash.moveTitle') }}</h3>
+            <h3 class="text-base font-bold text-ink">{{ t('dash.moveTitle') }}</h3>
             <p class="text-xs text-slate-400">{{ t('dash.moveText') }}</p>
           </div>
         </div>
 
         <p class="text-sm text-slate-300 mb-6">
           {{ t('dash.moveQ1') }}
-          <span class="font-semibold text-white">
+          <span class="font-semibold text-ink">
             {{ t('dash.meetingsN', { count: selectedRooms.size }) }}
           </span>
           {{ t('dash.moveQ2') }}
@@ -855,7 +857,7 @@ const handleLogout = async () => {
     <!-- Custom Modal Confirmation Dialog for Permanent Delete -->
     <div
       v-if="showPermanentDeleteModal"
-      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-xs"
+      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80"
       @click.self="showPermanentDeleteModal = false"
     >
       <div class="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl text-slate-100">
@@ -864,14 +866,14 @@ const handleLogout = async () => {
             <Trash2 class="w-5 h-5" />
           </div>
           <div>
-            <h3 class="text-base font-bold text-white">{{ t('dash.deleteTitle') }}</h3>
+            <h3 class="text-base font-bold text-ink">{{ t('dash.deleteTitle') }}</h3>
             <p class="text-xs text-slate-400">{{ t('dash.deleteText') }}</p>
           </div>
         </div>
 
         <p class="text-sm text-slate-300 mb-6">
           {{ t('dash.deleteQ') }}
-          <span class="font-semibold text-white">
+          <span class="font-semibold text-ink">
             {{ t('dash.meetingsN', { count: selectedRooms.size }) }}
           </span>?
         </p>

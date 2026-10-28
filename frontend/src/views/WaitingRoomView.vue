@@ -122,7 +122,7 @@ onUnmounted(() => {
         <div class="w-14 h-14 mx-auto mb-4 rounded-full bg-rose-500/20 border border-rose-500/50 flex items-center justify-center text-rose-400">
           <ShieldAlert class="w-7 h-7" />
         </div>
-        <h2 class="text-lg font-bold text-white mb-2">
+        <h2 class="text-lg font-bold text-ink mb-2">
           {{ view === 'ended' ? t('join.endedTitle') : view === 'error' ? t('join.errorTitle') : t('join.notFoundTitle') }}
         </h2>
         <p class="text-sm text-slate-400 mb-6 leading-relaxed">
@@ -138,20 +138,20 @@ onUnmounted(() => {
       <!-- Observer: watch invisibly or take part -->
       <div v-else-if="view === 'choose'" class="space-y-4">
         <div class="text-center">
-          <h2 class="text-xl font-bold text-white mb-1">"{{ roomName }}"</h2>
+          <h2 class="text-xl font-bold text-ink mb-1">"{{ roomName }}"</h2>
           <p class="text-xs text-slate-400">{{ t('join.room') }} <span class="font-mono text-sky-400">{{ pin }}</span></p>
         </div>
         <button @click="choose(false)" class="w-full text-left p-4 rounded-xl border border-violet-500/40 bg-violet-500/10 hover:bg-violet-500/20 transition flex gap-3">
           <Eye class="w-5 h-5 text-violet-300 shrink-0 mt-0.5" />
           <span>
-            <span class="block text-sm font-semibold text-white">{{ t('join.observe') }}</span>
+            <span class="block text-sm font-semibold text-ink">{{ t('join.observe') }}</span>
             <span class="block text-xs text-slate-400 mt-0.5">{{ t('join.observeHint') }}</span>
           </span>
         </button>
         <button @click="choose(true)" class="w-full text-left p-4 rounded-xl border border-slate-700 bg-slate-950/60 hover:border-sky-500/60 transition flex gap-3">
           <UserPlus class="w-5 h-5 text-sky-300 shrink-0 mt-0.5" />
           <span>
-            <span class="block text-sm font-semibold text-white">{{ t('join.asParticipant') }}</span>
+            <span class="block text-sm font-semibold text-ink">{{ t('join.asParticipant') }}</span>
             <span class="block text-xs text-slate-400 mt-0.5">{{ t('join.asParticipantHint') }}</span>
           </span>
         </button>
@@ -167,7 +167,7 @@ onUnmounted(() => {
         <div class="w-14 h-14 mx-auto mb-4 rounded-full bg-amber-500/15 border border-amber-500/40 flex items-center justify-center text-amber-300">
           <Users class="w-7 h-7" />
         </div>
-        <h2 class="text-lg font-bold text-white mb-2">{{ t('join.fullTitle') }}</h2>
+        <h2 class="text-lg font-bold text-ink mb-2">{{ t('join.fullTitle') }}</h2>
         <p class="text-sm text-slate-400 mb-2 leading-relaxed">
           {{ t('join.fullText', { online: fullInfo.online, max: fullInfo.max }) }}
         </p>
@@ -184,7 +184,7 @@ onUnmounted(() => {
       <!-- Nickname + consent -->
       <form v-else @submit.prevent="submit" class="space-y-5">
         <div class="text-center">
-          <h2 class="text-xl font-bold text-white mb-1">{{ t('join.title', { name: roomName }) }}</h2>
+          <h2 class="text-xl font-bold text-ink mb-1">{{ t('join.title', { name: roomName }) }}</h2>
           <p class="text-xs text-slate-400">{{ t('join.room') }} <span class="font-mono text-sky-400">{{ pin }}</span></p>
         </div>
 
@@ -196,7 +196,7 @@ onUnmounted(() => {
               id="nickname"
               v-model="nickname"
               maxlength="20"
-              class="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-base sm:text-sm text-white focus:outline-none focus:border-sky-500 min-h-[40px]"
+              class="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-base sm:text-sm text-ink focus:outline-none focus:border-sky-500 min-h-[40px]"
             />
           </div>
           <div class="flex flex-wrap gap-1.5">

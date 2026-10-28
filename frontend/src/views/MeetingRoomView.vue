@@ -407,7 +407,7 @@ onUnmounted(() => {
           <button
             v-show="showScrollFab"
             @click="scrollToBottom"
-            class="sticky bottom-4 left-1/2 -translate-x-1/2 p-2 rounded-full bg-slate-800 border border-slate-700 shadow-xl text-sky-400 hover:text-white transition z-20 animate-fade-in opacity-90 hover:opacity-100"
+            class="sticky bottom-4 left-1/2 -translate-x-1/2 p-2 rounded-full bg-slate-800 border border-slate-700 shadow-xl text-sky-400 hover:text-ink transition z-20 animate-fade-in opacity-90 hover:opacity-100"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
           </button>
@@ -429,7 +429,7 @@ onUnmounted(() => {
         @mousedown="startWhiteboardResize"
         :title="t('room.resizeHandle')"
       >
-        <div class="h-8 w-1 rounded-full bg-slate-600 group-hover:bg-white transition-colors"></div>
+        <div class="h-8 w-1 rounded-full bg-slate-600 group-hover:bg-slate-300 transition-colors"></div>
       </div>
 
       <div
@@ -500,11 +500,11 @@ onUnmounted(() => {
 <style scoped>
 .custom-scrollbar {
   scrollbar-width: thin;
-  scrollbar-color: rgba(148, 163, 184, 0.12) transparent;
+  scrollbar-color: rgb(var(--c-n-400) / 0.15) transparent;
   transition: scrollbar-color 0.4s ease;
 }
 .custom-scrollbar.is-scrolling {
-  scrollbar-color: rgba(148, 163, 184, 0.55) transparent;
+  scrollbar-color: rgb(var(--c-n-400) / 0.55) transparent;
 }
 .custom-scrollbar::-webkit-scrollbar {
   width: 6px;
@@ -513,11 +513,11 @@ onUnmounted(() => {
   background: transparent;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.12);
+  background: rgb(var(--c-n-400) / 0.15);
   border-radius: 9999px;
   transition: background 0.4s ease;
 }
 .custom-scrollbar.is-scrolling::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.55);
+  background: rgb(var(--c-n-400) / 0.55);
 }
 </style>

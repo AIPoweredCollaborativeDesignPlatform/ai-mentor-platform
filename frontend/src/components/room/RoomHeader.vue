@@ -6,6 +6,7 @@ import { useAuthStore } from '../../stores/auth';
 import { useRoomStore } from '../../stores/room';
 import { useNotificationSound } from '../../composables/useNotificationSound';
 import { useRoomAi } from '../../composables/useRoomAi';
+import ThemeSwitch from '../ThemeSwitch.vue';
 
 const props = defineProps<{
   pin: string;
@@ -49,12 +50,12 @@ const pillButton = 'inline-flex items-center gap-1 text-[11px] px-2 py-1.5 round
   >
     <Lock class="w-3.5 h-3.5 text-amber-400 shrink-0" />
     <span class="truncate">{{ t('header.closedByHost') }}</span>
-    <button v-if="roomStore.isHost" @click="emit('toggle-settings')" class="underline font-semibold hover:text-white ml-1 cursor-pointer shrink-0">
+    <button v-if="roomStore.isHost" @click="emit('toggle-settings')" class="underline font-semibold hover:text-ink ml-1 cursor-pointer shrink-0">
       {{ t('common.reopen') }}
     </button>
   </div>
 
-  <header class="h-14 border-b border-slate-800 bg-slate-900/90 backdrop-blur-md px-2.5 sm:px-5 flex items-center justify-between z-40 shrink-0 gap-2 relative">
+  <header class="h-14 border-b border-slate-800 bg-slate-900/90 px-2.5 sm:px-5 flex items-center justify-between z-40 shrink-0 gap-2 relative">
     <div class="flex items-center gap-1.5 sm:gap-2 min-w-0">
       <router-link
         :to="authStore.isGoogleLinked ? '/dashboard' : '/'"
@@ -71,7 +72,7 @@ const pillButton = 'inline-flex items-center gap-1 text-[11px] px-2 py-1.5 round
           :title="roomStore.isHost ? t('header.editRoom') : t('header.roomSettings')"
         >
           <span class="text-base sm:text-lg select-none shrink-0 group-hover:scale-110 transition-transform">{{ roomStore.currentRoom?.roomEmoji || '💡' }}</span>
-          <h1 class="font-bold text-xs sm:text-base text-white truncate max-w-[110px] xs:max-w-[160px] sm:max-w-xs group-hover:text-sky-300 transition-colors">
+          <h1 class="font-bold text-xs sm:text-base text-ink truncate max-w-[110px] xs:max-w-[160px] sm:max-w-xs group-hover:text-sky-300 transition-colors">
             {{ roomStore.currentRoom?.roomName || 'Meeting' }}
           </h1>
           <Edit3 v-if="roomStore.isHost" class="w-3 h-3 text-slate-500 group-hover:text-sky-400 hidden sm:inline transition-colors shrink-0" />
@@ -87,7 +88,7 @@ const pillButton = 'inline-flex items-center gap-1 text-[11px] px-2 py-1.5 round
             <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
             {{ t('header.onlineCount', { n: roomStore.onlineParticipants.length, total: roomStore.approvedParticipants.length }) }}
           </span>
-          <span v-if="roomStore.isHost" class="text-amber-400 font-medium">{{ t('header.host') }}</span>
+          <span v-if="roomStore.isHost" class="text-slate-400 font-medium">{{ t('header.host') }}</span>
         </div>
       </div>
     </div>
@@ -145,10 +146,12 @@ const pillButton = 'inline-flex items-center gap-1 text-[11px] px-2 py-1.5 round
         <Bell v-else class="w-3.5 h-3.5" />
       </button>
 
+      <ThemeSwitch class="!w-9 !h-9 shrink-0" />
+
       <button
         @click="emit('toggle-assets')"
         class="relative inline-flex items-center gap-1 text-[11px] px-2 py-1.5 rounded-lg border transition cursor-pointer min-h-[36px]"
-        :class="isAssetsOpen ? 'border-amber-500/60 bg-amber-500/20 text-amber-300 shadow-xs' : 'border-slate-700 bg-slate-800 hover:bg-slate-700 text-amber-400 font-medium'"
+        :class="isAssetsOpen ? 'border-sky-500/60 bg-sky-500/15 text-sky-300' : 'border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 font-medium'"
         :title="t('header.assets')"
       >
         <Box class="w-3.5 h-3.5" />
@@ -165,7 +168,7 @@ const pillButton = 'inline-flex items-center gap-1 text-[11px] px-2 py-1.5 round
         <span class="hidden sm:inline">{{ t('header.settingsBtn') }}</span>
         <span
           v-if="roomStore.pendingParticipants.length > 0"
-          class="absolute -top-1 -right-1 w-4 h-4 bg-amber-500 text-slate-950 font-bold text-[9px] rounded-full flex items-center justify-center animate-bounce shadow-md"
+          class="absolute -top-1 -right-1 w-4 h-4 bg-amber-500 text-slate-950 font-bold text-[9px] rounded-full flex items-center justify-center shadow-sm"
         >
           {{ roomStore.pendingParticipants.length }}
         </span>

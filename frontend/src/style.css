@@ -2,30 +2,172 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Day/night palettes (P7, see tailwind.config.js). Day is the default; <html data-theme="dark"> switches. */
+:root {
+  color-scheme: light;
+  --c-ink: 11 13 18;
+  --wb-canvas: #f9fafb;
+  --wb-dot: #d1d5db;
+  --scroll-thumb: rgba(107, 114, 128, 0.35);
+  --scroll-thumb-hover: rgba(107, 114, 128, 0.55);
+  --mention-member-fg: #1d4ed8;
+  --mention-member-bg: rgba(37, 99, 235, 0.10);
+  --mention-ai-fg: #374151;
+  --mention-ai-bg: rgba(107, 114, 128, 0.14);
+  --mention-me-fg: #78350f;
+  --mention-me-bg: #fde68a;
+  --c-n-50: 11 13 18;
+  --c-n-100: 17 24 39;
+  --c-n-200: 31 41 55;
+  --c-n-300: 55 65 81;
+  --c-n-400: 91 100 114;
+  --c-n-500: 107 114 128;
+  --c-n-600: 156 163 175;
+  --c-n-700: 209 213 219;
+  --c-n-800: 229 231 235;
+  --c-n-900: 243 244 246;
+  --c-n-950: 255 255 255;
+  --c-blue-50: 23 37 84;
+  --c-blue-100: 30 58 138;
+  --c-blue-200: 30 64 175;
+  --c-blue-300: 29 78 216;
+  --c-blue-400: 37 99 235;
+  --c-blue-500: 59 130 246;
+  --c-blue-600: 37 99 235;
+  --c-blue-700: 29 78 216;
+  --c-blue-800: 191 219 254;
+  --c-blue-900: 219 234 254;
+  --c-blue-950: 239 246 255;
+  --c-amber-50: 69 26 3;
+  --c-amber-100: 120 53 15;
+  --c-amber-200: 146 64 14;
+  --c-amber-300: 180 83 9;
+  --c-amber-400: 217 119 6;
+  --c-amber-500: 245 158 11;
+  --c-amber-600: 217 119 6;
+  --c-amber-700: 180 83 9;
+  --c-amber-800: 253 230 138;
+  --c-amber-900: 254 243 199;
+  --c-amber-950: 255 251 235;
+  --c-emerald-50: 2 44 34;
+  --c-emerald-100: 6 78 59;
+  --c-emerald-200: 6 95 70;
+  --c-emerald-300: 4 120 87;
+  --c-emerald-400: 5 150 105;
+  --c-emerald-500: 16 185 129;
+  --c-emerald-600: 5 150 105;
+  --c-emerald-700: 4 120 87;
+  --c-emerald-800: 167 243 208;
+  --c-emerald-900: 209 250 229;
+  --c-emerald-950: 236 253 245;
+  --c-rose-50: 76 5 25;
+  --c-rose-100: 136 19 55;
+  --c-rose-200: 159 18 57;
+  --c-rose-300: 190 18 60;
+  --c-rose-400: 225 29 72;
+  --c-rose-500: 244 63 94;
+  --c-rose-600: 225 29 72;
+  --c-rose-700: 190 18 60;
+  --c-rose-800: 254 205 211;
+  --c-rose-900: 255 228 230;
+  --c-rose-950: 255 241 242;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --c-ink: 255 255 255;
+  --wb-canvas: #202020;
+  --wb-dot: #3a3a3a;
+  --scroll-thumb: rgba(148, 148, 148, 0.30);
+  --scroll-thumb-hover: rgba(148, 148, 148, 0.50);
+  --mention-member-fg: #93c5fd;
+  --mention-member-bg: rgba(59, 130, 246, 0.16);
+  --mention-ai-fg: #e8e8e8;
+  --mention-ai-bg: rgba(148, 148, 148, 0.20);
+  --mention-me-fg: #1c1c1c;
+  --mention-me-bg: #fbbf24;
+  --c-n-50: 245 245 245;
+  --c-n-100: 232 232 232;
+  --c-n-200: 210 210 210;
+  --c-n-300: 180 180 180;
+  --c-n-400: 148 148 148;
+  --c-n-500: 118 118 118;
+  --c-n-600: 90 90 90;
+  --c-n-700: 66 66 66;
+  --c-n-800: 50 50 50;
+  --c-n-900: 38 38 38;
+  --c-n-950: 28 28 28;
+  --c-blue-50: 239 246 255;
+  --c-blue-100: 219 234 254;
+  --c-blue-200: 191 219 254;
+  --c-blue-300: 147 197 253;
+  --c-blue-400: 96 165 250;
+  --c-blue-500: 59 130 246;
+  --c-blue-600: 37 99 235;
+  --c-blue-700: 29 78 216;
+  --c-blue-800: 30 64 175;
+  --c-blue-900: 30 58 138;
+  --c-blue-950: 23 37 84;
+  --c-amber-50: 255 251 235;
+  --c-amber-100: 254 243 199;
+  --c-amber-200: 253 230 138;
+  --c-amber-300: 252 211 77;
+  --c-amber-400: 251 191 36;
+  --c-amber-500: 245 158 11;
+  --c-amber-600: 217 119 6;
+  --c-amber-700: 180 83 9;
+  --c-amber-800: 146 64 14;
+  --c-amber-900: 120 53 15;
+  --c-amber-950: 69 26 3;
+  --c-emerald-50: 236 253 245;
+  --c-emerald-100: 209 250 229;
+  --c-emerald-200: 167 243 208;
+  --c-emerald-300: 110 231 183;
+  --c-emerald-400: 52 211 153;
+  --c-emerald-500: 16 185 129;
+  --c-emerald-600: 5 150 105;
+  --c-emerald-700: 4 120 87;
+  --c-emerald-800: 6 95 70;
+  --c-emerald-900: 6 78 59;
+  --c-emerald-950: 2 44 34;
+  --c-rose-50: 255 241 242;
+  --c-rose-100: 255 228 230;
+  --c-rose-200: 254 205 211;
+  --c-rose-300: 253 164 175;
+  --c-rose-400: 251 113 133;
+  --c-rose-500: 244 63 94;
+  --c-rose-600: 225 29 72;
+  --c-rose-700: 190 18 60;
+  --c-rose-800: 159 18 57;
+  --c-rose-900: 136 19 55;
+  --c-rose-950: 76 5 25;
+}
+
 @layer base {
+  html,
   body {
-    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    @apply bg-slate-950 text-slate-100;
   }
 }
 
-/* Custom modern scrollbars */
+/* Scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: rgba(15, 23, 42, 0.6);
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(100, 116, 139, 0.4);
+  background: var(--scroll-thumb);
   border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.6);
+  background: var(--scroll-thumb-hover);
 }
 
 /* @mentions in chat messages (utils/chat.ts highlightMentions) */
-.mention { font-weight: 600; border-radius: 0.3rem; padding: 0 0.2rem; }
-.mention-member { color: #7dd3fc; background: rgba(14, 165, 233, 0.15); }
-.mention-ai { color: #fcd34d; background: rgba(245, 158, 11, 0.15); }
-.mention-me { color: #0f172a; background: #fbbf24; }
+.mention { font-weight: 600; border-radius: 0.25rem; padding: 0 0.2rem; }
+.mention-member { color: var(--mention-member-fg); background: var(--mention-member-bg); }
+.mention-ai { color: var(--mention-ai-fg); background: var(--mention-ai-bg); }
+.mention-me { color: var(--mention-me-fg); background: var(--mention-me-bg); }

@@ -26,11 +26,11 @@ const roomStore = useRoomStore();
           <AlertCircle v-else class="w-5 h-5 text-rose-400 shrink-0" />
           
           <div class="flex-1 flex flex-col">
-            <h4 class="text-sm font-bold text-white">{{ toast.title }}</h4>
+            <h4 class="text-sm font-bold text-ink">{{ toast.title }}</h4>
             <p class="text-[11px] text-slate-300">{{ toast.description }}</p>
           </div>
           
-          <button @click="roomStore.removeToast(toast.id)" class="text-white/50 hover:text-white transition mt-0.5">
+          <button @click="roomStore.removeToast(toast.id)" class="text-ink/50 hover:text-ink transition mt-0.5">
             <X class="w-4 h-4" />
           </button>
         </div>

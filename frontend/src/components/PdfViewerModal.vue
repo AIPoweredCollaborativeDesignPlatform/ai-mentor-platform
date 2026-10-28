@@ -26,7 +26,7 @@ const handleDownload = () => {
 <template>
   <div
     v-if="isOpen"
-    class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-xs animate-fade-in"
+    class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/80 animate-fade-in"
     @click="emit('close')"
   >
     <div
@@ -40,7 +40,7 @@ const handleDownload = () => {
             <FileText class="w-4 h-4" />
           </div>
           <div class="min-w-0">
-            <h3 class="text-sm font-semibold text-white truncate max-w-sm sm:max-w-md">
+            <h3 class="text-sm font-semibold text-ink truncate max-w-sm sm:max-w-md">
               {{ title || t('pdf.document') }}
             </h3>
             <p class="text-[10px] text-slate-400">{{ t('pdf.viewer') }}</p>
@@ -67,7 +67,7 @@ const handleDownload = () => {
           </a>
           <button
             @click="emit('close')"
-            class="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition"
+            class="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-ink transition"
           >
             <X class="w-5 h-5" />
           </button>

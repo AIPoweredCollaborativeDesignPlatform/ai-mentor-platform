@@ -200,7 +200,7 @@ const input = 'w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 
 
     <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
       <span class="text-[11px] text-slate-500 mr-auto">{{ t('pe.versionNote', { version: profile.version || 0 }) }}</span>
-      <button type="button" @click="emit('cancel')" class="px-4 py-2 rounded-lg text-xs text-slate-400 hover:text-white">{{ t('common.cancel') }}</button>
+      <button type="button" @click="emit('cancel')" class="px-4 py-2 rounded-lg text-xs text-slate-400 hover:text-ink">{{ t('common.cancel') }}</button>
       <button
         type="button"
         @click="save"

@@ -1330,7 +1330,7 @@ const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(()
         <span
           v-for="p in others"
           :key="p.uid"
-          class="w-6 h-6 rounded-full border-2 border-slate-950 text-[10px] font-bold flex items-center justify-center text-white"
+          class="w-6 h-6 rounded-full border-2 border-slate-950 text-[10px] font-bold flex items-center justify-center text-ink"
           :style="{ background: p.color }"
           :title="p.name"
         >{{ p.name.slice(0, 1).toUpperCase() }}</span>
@@ -1363,7 +1363,7 @@ const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(()
         <template v-for="p in others" :key="p.uid">
           <div class="absolute left-0 top-0 pointer-events-none z-10 transition-transform duration-75" :style="cursorStyle(p)">
             <svg width="18" height="18" viewBox="0 0 24 24" :fill="p.color" stroke="white" stroke-width="1.5"><path d="M4 2l16 9-7 2-3 7z" /></svg>
-            <span class="ml-3 -mt-1 inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold text-white whitespace-nowrap" :style="{ background: p.color }">{{ p.name }}</span>
+            <span class="ml-3 -mt-1 inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold text-ink whitespace-nowrap" :style="{ background: p.color }">{{ p.name }}</span>
           </div>
         </template>
       </div>
@@ -1377,7 +1377,7 @@ const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(()
       </div>
 
       <!-- Tool rail -->
-      <div class="absolute left-3 top-1/2 -translate-y-1/2 z-20 flex flex-col gap-1 p-1.5 rounded-2xl bg-slate-950/90 border border-slate-800 shadow-xl backdrop-blur">
+      <div class="absolute left-3 top-1/2 -translate-y-1/2 z-20 flex flex-col gap-1 p-1.5 rounded-2xl bg-slate-950/90 border border-slate-800 shadow-xl">
         <button
           v-for="tl in tools"
           :key="tl.id"
@@ -1403,7 +1403,7 @@ const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(()
         v-if="['pen', 'rect', 'ellipse', 'text', 'sticky', 'arrow'].includes(tool) || selectionKinds.any"
         class="absolute left-16 right-3 top-3 z-20 flex justify-center pointer-events-none"
       >
-      <div class="pointer-events-auto flex flex-wrap items-center gap-2 px-2.5 py-1.5 rounded-xl bg-slate-950/90 border border-slate-800 shadow-xl backdrop-blur">
+      <div class="pointer-events-auto flex flex-wrap items-center gap-2 px-2.5 py-1.5 rounded-xl bg-slate-950/90 border border-slate-800 shadow-xl">
         <template v-if="tool === 'sticky' || selectionKinds.sticky">
           <button
             v-for="c in STICKY_COLORS"
@@ -1480,7 +1480,7 @@ const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(()
       <!-- AI generate panel -->
       <div
         v-if="ai.open && showWhiteboardAi"
-        class="absolute left-16 top-1/2 -translate-y-1/2 z-30 w-72 p-3 rounded-2xl bg-slate-950/95 border border-slate-800 shadow-2xl backdrop-blur"
+        class="absolute left-16 top-1/2 -translate-y-1/2 z-30 w-72 p-3 rounded-2xl bg-slate-950/95 border border-slate-800 shadow-2xl"
       >
         <p class="text-xs font-semibold mb-2 flex items-center gap-1.5"><Sparkles class="w-3.5 h-3.5 text-fuchsia-300" /> {{ t('wb.generateSvg', { name: aiName }) }}</p>
         <textarea
@@ -1502,7 +1502,7 @@ const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(()
       <!-- Zoom -->
       <div class="absolute right-3 bottom-3 z-20 flex items-center gap-1 px-1.5 py-1 rounded-xl bg-slate-950/90 border border-slate-800 shadow-xl text-xs">
         <button class="wb-tool !w-7 !h-7" :title="t('wb.zoomOut')" @click="zoomBy(1 / 1.2)"><Minus class="w-3.5 h-3.5" /></button>
-        <button class="w-12 text-center text-slate-300 hover:text-white" :title="t('wb.zoomFit')" @click="zoomToFit">{{ zoomPct }}%</button>
+        <button class="w-12 text-center text-slate-300 hover:text-ink" :title="t('wb.zoomFit')" @click="zoomToFit">{{ zoomPct }}%</button>
         <button class="wb-tool !w-7 !h-7" :title="t('wb.zoomIn')" @click="zoomBy(1.2)"><Plus class="w-3.5 h-3.5" /></button>
       </div>
 
@@ -1515,8 +1515,8 @@ const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(()
 
 <style scoped>
 .wb-grid {
-  background-color: #f8fafc;
-  background-image: radial-gradient(#cbd5e1 1px, transparent 1px);
+  background-color: var(--wb-canvas);
+  background-image: radial-gradient(var(--wb-dot) 1px, transparent 1px);
   background-size: 22px 22px;
 }
 .wb-btn {
@@ -1526,14 +1526,14 @@ const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(()
   align-items: center;
   gap: 0.375rem;
   padding: 0.375rem 0.625rem;
-  border-radius: 0.5rem;
+  border-radius: 0.375rem;
   font-size: 0.75rem;
   font-weight: 600;
-  background: rgb(30 41 59);
-  color: rgb(226 232 240);
+  background: rgb(var(--c-n-800));
+  color: rgb(var(--c-n-200));
 }
 .wb-btn:hover {
-  background: rgb(51 65 85);
+  background: rgb(var(--c-n-700));
 }
 .wb-tool {
   width: 2.25rem;
@@ -1541,18 +1541,18 @@ const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(()
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 0.6rem;
-  color: rgb(203 213 225);
+  border-radius: 0.375rem;
+  color: rgb(var(--c-n-300));
 }
 .wb-tool:hover:not(:disabled) {
-  background: rgb(30 41 59);
-  color: white;
+  background: rgb(var(--c-n-800));
+  color: rgb(var(--c-ink));
 }
 .wb-tool:disabled {
   opacity: 0.35;
 }
 .wb-tool-active {
-  background: rgb(79 70 229) !important;
+  background: rgb(var(--c-blue-600)) !important;
   color: white !important;
 }
 .wb-chip {
@@ -1563,14 +1563,14 @@ const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(()
   border-radius: 0.5rem;
   font-size: 0.7rem;
   font-weight: 600;
-  background: rgb(30 41 59);
-  color: rgb(203 213 225);
+  background: rgb(var(--c-n-800));
+  color: rgb(var(--c-n-300));
 }
 .wb-chip:disabled {
   opacity: 0.5;
 }
 .wb-chip-active {
-  background: rgb(79 70 229);
+  background: rgb(var(--c-blue-600));
   color: white;
 }
 </style>

@@ -31,12 +31,14 @@ const KINDS: Record<Exclude<Kind, 'whiteboard' | 'image'>, { icon: any; color: s
   fact_check: { icon: ShieldCheck, color: 'emerald', badge: () => t('tile.verify'), label: m => m.assetPayload?.claim || m.assetPayload?.verdict || t('tile.factCheck') }
 };
 
-// Spelled out in full so Tailwind's scanner picks up every class
+// Spelled out in full so Tailwind's scanner picks up every class. Asset kinds share one neutral style
+// (P7: no colour coding that could draw attention to some AI outputs over others); the icon tells them apart.
+const NEUTRAL = { tile: 'bg-slate-900 border-slate-800 hover:bg-slate-800', badge: 'bg-slate-900/90 text-slate-300 border-slate-700', icon: 'text-slate-400', text: 'text-slate-300' };
 const COLOR_CLASSES: Record<string, { tile: string; badge: string; icon: string; text: string }> = {
-  sky: { tile: 'bg-sky-950/30 border-sky-500/30 hover:bg-sky-900/50', badge: 'bg-sky-950/90 text-sky-300 border-sky-500/40', icon: 'text-sky-400', text: 'text-sky-300' },
-  amber: { tile: 'bg-amber-950/30 border-amber-500/30 hover:bg-amber-900/50', badge: 'bg-amber-950/90 text-amber-300 border-amber-500/40', icon: 'text-amber-400', text: 'text-amber-300' },
-  violet: { tile: 'bg-violet-950/30 border-violet-500/30 hover:bg-violet-900/50', badge: 'bg-violet-950/90 text-violet-300 border-violet-500/40', icon: 'text-violet-400', text: 'text-violet-300' },
-  emerald: { tile: 'bg-emerald-950/30 border-emerald-500/30 hover:bg-emerald-900/50', badge: 'bg-emerald-950/90 text-emerald-300 border-emerald-500/40', icon: 'text-emerald-400', text: 'text-emerald-300' },
+  sky: NEUTRAL,
+  amber: NEUTRAL,
+  violet: NEUTRAL,
+  emerald: NEUTRAL,
   hidden: { tile: 'bg-slate-950 border-amber-500/40 hover:border-amber-400', badge: 'bg-slate-950/90 text-amber-300 border-amber-500/50', icon: 'text-amber-400 opacity-70', text: 'text-amber-300' }
 };
 
@@ -71,25 +73,25 @@ const onClick = () => {
   <div v-if="kind === 'whiteboard'" class="relative aspect-square cursor-pointer transition group" @click="onClick" :title="hidden ? t('tile.editHiddenBoard') : t('tile.editBoard')">
     <div
       class="w-full h-full rounded-xl bg-slate-950 border-2 overflow-hidden shadow-md relative"
-      :class="hidden ? 'border-amber-500/40 hover:border-amber-400' : 'border-indigo-500/40 hover:border-indigo-400'"
+      :class="hidden ? 'border-amber-500/40 hover:border-amber-400' : 'border-slate-800 hover:border-slate-600'"
     >
       <img v-if="thumbnail" :src="thumbnail" class="w-full h-full object-cover group-hover:scale-105 transition duration-300 bg-white" />
       <div v-else class="w-full h-full bg-slate-900 flex flex-col items-center justify-center text-slate-400 gap-1.5 p-2 text-center">
-        <Palette class="w-6 h-6 opacity-60 animate-pulse" :class="hidden ? 'text-amber-400' : 'text-indigo-400'" />
+        <Palette class="w-6 h-6 opacity-60 animate-pulse" :class="hidden ? 'text-amber-400' : 'text-slate-400'" />
         <span class="text-[9px] text-slate-300 font-medium">{{ t('tile.renderingThumb') }}</span>
       </div>
 
       <div
-        class="absolute top-1 left-1 px-1.5 py-0.5 rounded text-[8px] font-bold border backdrop-blur-sm flex items-center gap-1 z-10 shadow"
-        :class="hidden ? 'bg-slate-950/90 text-amber-300 border-amber-500/50' : 'bg-indigo-950/90 text-indigo-300 border-indigo-500/50'"
+        class="absolute top-1 left-1 px-1.5 py-0.5 rounded text-[8px] font-bold border flex items-center gap-1 z-10 shadow"
+        :class="hidden ? 'bg-slate-950/90 text-amber-300 border-amber-500/50' : 'bg-slate-900/90 text-slate-300 border-slate-700'"
       >
         <Lock v-if="msg.metadata?.isPrivate" class="w-2.5 h-2.5 text-amber-400" />
-        <Palette v-else class="w-2.5 h-2.5" :class="hidden ? 'text-amber-400' : 'text-indigo-400'" />
+        <Palette v-else class="w-2.5 h-2.5" :class="hidden ? 'text-amber-400' : 'text-slate-400'" />
         <span v-if="hidden">{{ msg.metadata?.isPrivate ? t('tile.hiddenPrivate') : t('tile.hidden') }}</span>
         <span v-else>{{ msg.metadata?.isPrivate ? 'Private' : 'Whiteboard' }}</span>
       </div>
 
-      <div class="absolute bottom-1 left-1 right-1 bg-slate-950/85 px-1.5 py-0.5 rounded text-[8px] text-slate-300 font-medium truncate backdrop-blur-xs z-10 flex items-center gap-1">
+      <div class="absolute bottom-1 left-1 right-1 bg-slate-950/85 px-1.5 py-0.5 rounded text-[8px] text-slate-300 font-medium truncate z-10 flex items-center gap-1">
         <span class="text-[9px]">{{ msg.metadata?.creatorAvatar || msg.senderAvatar || '🎨' }}</span>
         <span class="truncate">{{ msg.metadata?.creatorName || msg.senderName || t('tile.member') }}</span>
       </div>
@@ -126,16 +128,16 @@ const onClick = () => {
   <div
     v-else-if="kind === 'image'"
     class="aspect-square rounded-xl bg-slate-950 border overflow-hidden cursor-pointer transition group relative"
-    :class="hidden ? 'border-amber-500/40 hover:border-amber-400' : 'border-slate-800 hover:border-sky-500/50'"
+    :class="hidden ? 'border-amber-500/40 hover:border-amber-400' : 'border-slate-800 hover:border-slate-600'"
     @click="onClick"
     :title="hidden ? t('tile.viewHiddenImage') : t('tile.viewImage')"
   >
     <img :src="msg.fileData!.url" class="w-full h-full object-cover group-hover:scale-105 transition duration-300" :class="{ 'opacity-70': hidden }" />
     <div
-      class="absolute top-1 left-1 px-1.5 py-0.5 rounded text-[8px] font-medium border backdrop-blur-sm flex items-center gap-1 z-10 shadow"
+      class="absolute top-1 left-1 px-1.5 py-0.5 rounded text-[8px] font-medium border flex items-center gap-1 z-10 shadow"
       :class="hidden ? 'bg-slate-950/90 text-amber-300 border-amber-500/50' : 'bg-slate-900/90 text-slate-300 border-slate-700/60'"
     >
-      <ImageIcon class="w-2.5 h-2.5" :class="hidden ? 'text-amber-400' : 'text-sky-400'" />
+      <ImageIcon class="w-2.5 h-2.5" :class="hidden ? 'text-amber-400' : 'text-slate-400'" />
       <span>{{ hidden ? 'Hidden' : 'Image' }}</span>
     </div>
     <div v-if="!managing && !hidden" class="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
@@ -153,7 +155,7 @@ const onClick = () => {
     @click="onClick"
     :title="cardKind.label(msg)"
   >
-    <div class="absolute top-1 left-1 px-1.5 py-0.5 rounded text-[8px] font-bold border backdrop-blur-sm flex items-center gap-1" :class="colors.badge">
+    <div class="absolute top-1 left-1 px-1.5 py-0.5 rounded text-[8px] font-bold border flex items-center gap-1" :class="colors.badge">
       <component :is="cardKind.icon" class="w-2.5 h-2.5" :class="colors.icon" />
       <span>{{ cardBadge }}</span>
     </div>
@@ -165,7 +167,7 @@ const onClick = () => {
   <button
     v-if="managing"
     @click.stop="emit('toggle-hide')"
-    class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-white text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5"
+    class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-ink text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5"
     :class="hidden ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-rose-600 hover:bg-rose-500'"
     :title="hidden ? t('tile.unhide') : t('tile.hide')"
   >

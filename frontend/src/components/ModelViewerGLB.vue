@@ -545,7 +545,7 @@ onUnmounted(() => {
           v-if="showShiftPrompt"
           class="absolute inset-0 z-30 flex items-center justify-center pointer-events-none"
         >
-          <div class="bg-slate-900/85 backdrop-blur-sm text-white px-4 py-2 rounded-full border border-slate-600/50 shadow-2xl flex items-center gap-2">
+          <div class="bg-slate-900/85 text-ink px-4 py-2 rounded-full border border-slate-600/50 shadow-2xl flex items-center gap-2">
             <span class="text-xs font-semibold glb-kbd" v-html="t('glb.shiftZoom')"></span>
           </div>
         </div>
@@ -554,7 +554,7 @@ onUnmounted(() => {
       <!-- Loading indicator -->
       <div
         v-if="isLoading"
-        class="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-950/80 backdrop-blur-xs text-slate-300 pointer-events-none"
+        class="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-950/80 text-slate-300 pointer-events-none"
       >
         <Loader2 class="w-8 h-8 text-indigo-400 animate-spin mb-2" />
         <p class="text-xs font-medium">{{ t('glb.loading') }}</p>
@@ -577,7 +577,7 @@ onUnmounted(() => {
           style="width: 100%; height: 100%; object-fit: contain; padding: 1rem;"
         />
         <!-- Info badge -->
-        <div class="absolute bottom-3 left-3 bg-slate-900/90 border border-slate-700/80 backdrop-blur-md px-3 py-1.5 rounded-xl text-xs text-slate-300 flex items-center gap-2 shadow-lg">
+        <div class="absolute bottom-3 left-3 bg-slate-900/90 border border-slate-700/80 px-3 py-1.5 rounded-xl text-xs text-slate-300 flex items-center gap-2 shadow-lg">
           <span>{{ t('glb.highRes') }}</span>
           <span class="text-slate-500">•</span>
           <span class="text-indigo-400 font-mono text-[11px]">{{ t('glb.watertight') }}</span>
@@ -612,32 +612,32 @@ onUnmounted(() => {
       </div>
 
       <!-- Unified Parallel Controls in Bottom-Right (Eliminates extra bottom row!) -->
-      <div v-if="isModelInteractive" class="absolute bottom-3 right-3 flex items-center gap-1 bg-slate-950/90 backdrop-blur-md p-1.5 rounded-xl border border-slate-700/80 shadow-2xl z-20">
+      <div v-if="isModelInteractive" class="absolute bottom-3 right-3 flex items-center gap-1 bg-slate-950/90 p-1.5 rounded-xl border border-slate-700/80 shadow-2xl z-20">
         <!-- Zoom & Reset Controls -->
         <button
           @click="zoomIn"
-          class="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+          class="p-1.5 rounded-lg text-slate-300 hover:text-ink hover:bg-slate-800 transition cursor-pointer"
           :title="t('glb.zoomIn')"
         >
           <ZoomIn class="w-4 h-4" />
         </button>
         <button
           @click="zoomOut"
-          class="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+          class="p-1.5 rounded-lg text-slate-300 hover:text-ink hover:bg-slate-800 transition cursor-pointer"
           :title="t('glb.zoomOut')"
         >
           <ZoomOut class="w-4 h-4" />
         </button>
         <button
           @click="resetView"
-          class="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+          class="p-1.5 rounded-lg text-slate-300 hover:text-ink hover:bg-slate-800 transition cursor-pointer"
           :title="t('glb.reset')"
         >
           <RotateCcw class="w-4 h-4" />
         </button>
         <button
           @click="copyTransparentImage"
-          class="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+          class="p-1.5 rounded-lg text-slate-300 hover:text-ink hover:bg-slate-800 transition cursor-pointer"
           :title="isCopyingImage ? t('glb.copying') : t('glb.copyRender')"
           :disabled="isCopyingImage"
         >
@@ -651,7 +651,7 @@ onUnmounted(() => {
         <button
           v-if="assetData?.taskId && !assetData?.isRefined && message && !readOnly"
           @click="openRefineModal"
-          class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white font-medium text-xs shadow transition cursor-pointer"
+          class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-medium text-xs shadow transition cursor-pointer"
         >
           <Sparkles class="w-3.5 h-3.5" />
           <span>{{ t('glb.refineColor') }}</span>
@@ -660,7 +660,7 @@ onUnmounted(() => {
         <!-- Download GLB Button (Parallel with tools) -->
         <button
           @click="downloadModel"
-          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-md shadow-indigo-950/40 transition cursor-pointer"
+          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-md transition cursor-pointer"
           :title="t('glb.downloadNamed')"
         >
           <Download class="w-3.5 h-3.5" />
@@ -671,7 +671,7 @@ onUnmounted(() => {
       <!-- Gesture Helper Badge -->
       <div
         v-if="isModelInteractive"
-        class="absolute top-2.5 left-2.5 pointer-events-none text-[10px] text-slate-300 bg-slate-950/80 backdrop-blur-xs px-2.5 py-1 rounded-md border border-slate-800 z-10"
+        class="absolute top-2.5 left-2.5 pointer-events-none text-[10px] text-slate-300 bg-slate-950/80 px-2.5 py-1 rounded-md border border-slate-800 z-10"
       >
         {{ t('glb.dragHint') }}
       </div>
@@ -680,7 +680,7 @@ onUnmounted(() => {
     <!-- Custom Refine Prompt Modal -->
     <div
       v-if="isRefineModalOpen"
-      class="absolute inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-xs rounded-2xl"
+      class="absolute inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 rounded-2xl"
     >
       <div class="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-xl p-5 shadow-2xl flex flex-col">
         <h3 class="text-sm font-bold text-slate-100 mb-2 flex items-center gap-2">
@@ -719,9 +719,9 @@ onUnmounted(() => {
 <style scoped>
 /* <kbd> inside the translated "Shift + scroll" hint */
 .glb-kbd :deep(kbd) {
-  background: rgb(51 65 85);
+  background: rgb(var(--c-n-700));
   padding: 0.125rem 0.375rem;
   border-radius: 0.25rem;
-  color: rgb(165 180 252);
+  color: rgb(var(--c-blue-300));
 }
 </style>

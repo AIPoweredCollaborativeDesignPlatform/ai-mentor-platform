@@ -2,7 +2,7 @@
 import { t } from '../../i18n';
 import { computed, ref } from 'vue';
 import {
-  AlertCircle, CheckCircle2, ChevronDown, ChevronUp, Copy, CornerUpLeft, Download, Eye, EyeOff,
+  AlertCircle, Bot, CheckCircle2, ChevronDown, ChevronUp, Copy, CornerUpLeft, Download, Eye, EyeOff,
   FileText, Loader2, Lock, Palette, Plus, RefreshCw, Sparkles, X
 } from 'lucide-vue-next';
 import { useAuthStore } from '../../stores/auth';
@@ -130,10 +130,11 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
 
   <div v-else class="flex gap-2.5 group relative" :class="isMine ? 'flex-row-reverse' : ''">
     <div
-      class="w-8 h-8 rounded-xl flex items-center justify-center text-base shrink-0 select-none shadow"
-      :class="isAi ? 'bg-sky-500/20 border border-sky-400/40' : 'bg-slate-800 border border-slate-700'"
+      class="w-8 h-8 rounded-full flex items-center justify-center text-base shrink-0 select-none bg-slate-800 border border-slate-700"
     >
-      {{ msg.senderAvatar }}
+      <!-- The AI has a neutral line icon (no emoji or colour cue that could sway participants) -->
+      <Bot v-if="isAi" class="w-4 h-4 text-slate-300" />
+      <template v-else>{{ msg.senderAvatar }}</template>
     </div>
 
     <div
@@ -144,7 +145,7 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
       <div class="flex items-center gap-1.5 mb-0.5 text-[11px] text-slate-400" :class="isMine ? 'flex-row-reverse' : ''">
         <span class="font-medium text-slate-300 truncate">{{ msg.senderName }}</span>
         <span class="text-[9px] text-slate-500/70 font-mono tracking-wider">{{ formatTime(msg.timestamp) }}</span>
-        <span v-if="isAi" class="text-[10px] bg-sky-500/20 text-sky-300 border border-sky-500/30 px-1.5 py-0.2 rounded-md font-mono">AI</span>
+        <span v-if="isAi" class="text-[10px] bg-slate-800 text-slate-400 border border-slate-700 px-1.5 py-0.2 rounded">AI</span>
       </div>
 
       <!-- Frameless image/video without caption -->
@@ -172,12 +173,12 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
       <!-- Bubble -->
       <div
         v-else
-        class="px-3.5 py-2 rounded-2xl text-sm leading-relaxed shadow break-words min-w-0 w-fit max-w-full transition-all duration-200"
+        class="px-3.5 py-2 rounded-2xl text-sm leading-relaxed break-words min-w-0 w-fit max-w-full transition-all duration-200"
         :class="[
-          isMine ? 'bg-sky-600 text-white rounded-tr-xs' : '',
+          isMine ? 'bg-sky-900/40 border border-sky-800 text-slate-100 rounded-tr-xs' : '',
           !isMine && !isAi ? 'bg-slate-900 border border-slate-800 text-slate-200 rounded-tl-xs' : '',
-          isAi ? 'bg-sky-950/50 border border-sky-500/40 text-sky-100 rounded-tl-xs shadow-sky-950/30' : '',
-          mentionsMe ? 'ring-2 ring-amber-400/90 bg-amber-950/35 border-amber-500/60 shadow-amber-900/20 shadow-lg' : '',
+          isAi ? 'bg-slate-800/60 border border-slate-700 text-slate-100 rounded-tl-xs' : '',
+          mentionsMe ? 'ring-1 ring-amber-500/70 bg-amber-950/30 border-amber-700' : '',
           msg.replyTo ? 'min-w-[180px] sm:min-w-[200px]' : '',
           msg.type === 'ai_asset' ? 'w-full' : ''
         ]"
@@ -186,12 +187,12 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
           <span>{{ t('msg.mentioned') }}</span>
         </div>
 
-        <div v-if="msg.replyTo" class="mb-2 px-2.5 py-1 rounded-lg bg-black/35 border-l-2 border-sky-400 text-xs text-slate-300 select-none min-w-0 max-w-full overflow-hidden">
+        <div v-if="msg.replyTo" class="mb-2 px-2.5 py-1 rounded-lg bg-slate-800/50 border-l-2 border-sky-400 text-xs text-slate-300 select-none min-w-0 max-w-full overflow-hidden">
           <div class="font-semibold text-[10px] text-sky-300 truncate">{{ msg.replyTo.senderName }}</div>
           <div class="truncate text-[11px] opacity-80">{{ msg.replyTo.text }}</div>
         </div>
 
-        <div v-if="showsText" class="break-words max-w-none message-content" :class="isMine ? 'text-white' : 'text-slate-200'">
+        <div v-if="showsText" class="break-words max-w-none message-content" :class="isMine ? 'text-slate-100' : 'text-slate-200'">
           <div v-html="displayHtml"></div>
           <button
             v-if="isCollapsible"
@@ -329,7 +330,7 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
               >
                 <Eye class="w-3.5 h-3.5" /> {{ t('msg.preview') }}
               </button>
-              <a :href="msg.fileData.url" :download="msg.fileData.name" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition shrink-0" :title="t('msg.downloadDoc')">
+              <a :href="msg.fileData.url" :download="msg.fileData.name" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-ink transition shrink-0" :title="t('msg.downloadDoc')">
                 <Download class="w-4 h-4" />
               </a>
             </div>
@@ -372,7 +373,7 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
             class="mt-2 rounded-xl overflow-hidden shadow-lg relative border transition max-w-[210px] sm:max-w-[250px] select-none cursor-pointer group"
             :class="!isLiveBoard
               ? 'border-slate-800 bg-slate-950/70 opacity-75 grayscale-[35%] hover:border-slate-700'
-              : 'border-emerald-500/50 hover:border-emerald-400 shadow-emerald-950/30 bg-slate-900'"
+              : 'border-emerald-500/50 hover:border-emerald-400 bg-slate-900'"
             @click="emit('open-whiteboard', msg)"
           >
             <div class="relative w-full aspect-[4/3] bg-slate-950 flex items-center justify-center overflow-hidden">
@@ -436,7 +437,7 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
       <!-- Hover toolbar: a floating overlay, so showing it never moves other messages -->
       <div
         v-if="!isMeetingClosed"
-        class="absolute -top-3 z-20 flex items-center gap-0.5 px-1.5 py-0.5 rounded-full whitespace-nowrap bg-slate-900/95 border border-slate-700/80 shadow-md backdrop-blur-sm text-xs select-none transition-opacity duration-150 opacity-0 pointer-events-none group-hover/msg:opacity-100 group-hover/msg:pointer-events-auto"
+        class="absolute -top-3 z-20 flex items-center gap-0.5 px-1.5 py-0.5 rounded-full whitespace-nowrap bg-slate-900/95 border border-slate-700/80 shadow-md text-xs select-none transition-opacity duration-150 opacity-0 pointer-events-none group-hover/msg:opacity-100 group-hover/msg:pointer-events-auto"
         :class="isMine ? 'left-0' : 'right-0'"
       >
         <button
@@ -444,7 +445,7 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
           :key="emoji"
           @click.stop="roomStore.toggleMessageReaction(msg.id, emoji)"
           class="px-1.5 py-0.5 rounded-full transition active:scale-90 cursor-pointer"
-          :class="reactedByMe(emoji) ? 'bg-sky-500/30 text-sky-200' : 'text-slate-400 hover:text-white hover:bg-slate-800/60'"
+          :class="reactedByMe(emoji) ? 'bg-sky-500/30 text-sky-200' : 'text-slate-400 hover:text-ink hover:bg-slate-800/60'"
           :title="reactedByMe(emoji) ? `Remove ${emoji}` : `React ${emoji}`"
         >
           {{ emoji }}
@@ -505,12 +506,12 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
 }
 :deep(.message-content th),
 :deep(.message-content td) {
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  border: 1px solid rgb(var(--c-n-400) / 0.2);
   padding: 0.35rem 0.5rem;
   text-align: left;
 }
 :deep(.message-content th) {
-  background: rgba(15, 23, 42, 0.4);
+  background: rgb(var(--c-n-900) / 0.4);
   font-weight: 600;
 }
 </style>

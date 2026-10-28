@@ -2,7 +2,6 @@ import { ref } from 'vue';
 import {
   deleteDoc,
   doc,
-  getDoc,
   onSnapshot,
   orderBy,
   query,
@@ -14,7 +13,7 @@ import { db } from '../../firebase/config';
 import { currentLocale } from '../../i18n';
 import type { MessageItem, Participant, ParticipantStatus, RoomData, TypingUser } from '../../types';
 import { roomCollection, roomDocRef, roomRef, type RoomContext } from './context';
-import { joinStudyRoom, peekStudyRoom } from '../../services/session';
+import { createStudyRoom, joinStudyRoom, peekStudyRoom } from '../../services/session';
 
 const HEARTBEAT_MS = 10000;
 const PRESENCE_SWEEP_MS = 5000;
@@ -265,94 +264,40 @@ export function useRoomSession(ctx: RoomContext) {
 
   // ---------- Create / join ----------
   /**
-   * 4-digit PINs (1000–9999) are few enough to collide, and setDoc would overwrite the other room's data,
-   * so a PIN is only used when no room doc (not even a deleted one) exists for it. Legacy rooms have 6 digits.
+   * The server picks a random never-used 4-digit PIN and creates the room (functions/src/rooms.js).
+   * `asParticipant` (administrator / observers): the room has no researcher; the creator then joins
+   * through the waiting room like everyone else. `profileId`: condition chosen at creation (staff only).
    */
-  const pickFreePin = async () => {
+  const createRoom = async (roomName?: string, roomEmoji?: string, opts: { asParticipant?: boolean; profileId?: string } = {}) => {
     await authStore.waitForAuthReady().catch(() => {});
-    for (let attempt = 0; attempt < 20; attempt++) {
-      const pin = String(1000 + Math.floor(Math.random() * 9000));
-      const snap = await getDoc(roomRef(`room_${pin}`)).catch(() => null);
-      if (snap && !snap.exists()) return pin;
-    }
-    throw new Error('Could not find a free room PIN, please try again');
-  };
-
-  const createRoom = async (roomName?: string, roomEmoji?: string) => {
-    const pin = await pickFreePin();
-    const roomId = `room_${pin}`;
-    const selectedEmoji = roomEmoji?.trim() || '💡';
-    const displayRoomName = roomName?.trim() || `Meeting ${pin}`;
-    const hostUser: Participant = {
-      uid: authStore.uid,
+    const created = await createStudyRoom({
+      roomName: roomName?.trim() || '',
+      roomEmoji: roomEmoji?.trim() || '💡',
+      language: currentLocale.value,
+      mentorConfig: { ...mentorStore.config },
+      // Distinguishes rooms created by this redesign from the legacy site sharing the same database
+      appVersion: __APP_VERSION__,
       displayName: authStore.displayName,
       avatar: authStore.avatar,
-      status: 'approved',
-      isHost: true,
-      isOnline: true,
-      joinedAt: Date.now()
-    };
-    const createdMsg: MessageItem = {
-      id: `msg_${Date.now()}`,
-      senderUid: 'system',
-      senderName: 'System',
-      senderAvatar: '🏛️',
-      type: 'text',
-      content: `${selectedEmoji} Room "${displayRoomName}" created · PIN: ${pin}`,
-      timestamp: Date.now()
-    };
-    const newRoom: RoomData = {
-      roomId,
-      pin,
-      roomName: displayRoomName,
-      roomEmoji: selectedEmoji,
-      hostUid: authStore.uid,
-      createdAt: Date.now(),
-      roomStatus: 'active',
-      mentorConfig: { ...mentorStore.config },
-      participants: { [authStore.uid]: hostUser },
-      messages: [createdMsg]
-    };
-
-    currentRoom.value = newRoom;
-    myStatus.value = 'approved';
-
-    try {
-      await setDoc(roomRef(roomId), {
-        roomId,
-        pin,
-        roomName: displayRoomName,
-        roomEmoji: selectedEmoji,
-        hostUid: authStore.uid,
-        participantUids: [authStore.uid],
-        createdAt: Date.now(),
-        lastActive: Date.now(),
-        roomStatus: 'active',
-        mentorConfig: mentorStore.config,
-        assetsCount: 0,
-        // Distinguishes rooms created by this redesign from the legacy site sharing the same database
-        appVersion: __APP_VERSION__,
-        // Language of AI replies in this room
-        language: currentLocale.value
-      });
-      await setDoc(roomDocRef(roomId, 'participants', authStore.uid), hostUser);
-      const { id, ...msgPayload } = createdMsg;
-      await setDoc(roomDocRef(roomId, 'messages', id), msgPayload);
+      asParticipant: Boolean(opts.asParticipant),
+      profileId: opts.profileId || null
+    });
+    const { roomId, pin } = created;
+    if (!opts.asParticipant) {
+      myStatus.value = 'approved';
       upsertMyRoomIndex(roomId, {
         roomId,
         pin,
-        roomName: displayRoomName,
-        roomEmoji: selectedEmoji,
+        roomName: created.roomName,
+        roomEmoji: created.roomEmoji,
         hostUid: authStore.uid,
         role: 'host',
         createdAt: Date.now(),
         lastActive: Date.now()
       });
       startFirestoreListener(roomId);
-    } catch (err) {
-      console.warn('[Firestore] createRoom error:', err);
     }
-    return newRoom;
+    return created;
   };
 
   /**

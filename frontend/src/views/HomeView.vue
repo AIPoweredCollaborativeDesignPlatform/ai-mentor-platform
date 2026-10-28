@@ -15,7 +15,7 @@ import {
   Loader2
 } from 'lucide-vue-next';
 import { computed, onMounted } from 'vue';
-import { assignRoomProfile, listProfiles } from '../services/admin';
+import { listProfiles } from '../services/admin';
 import { MODE_LABELS, type AiProfile } from '../utils/aiProfiles';
 
 const router = useRouter();
@@ -63,12 +63,15 @@ const handleSaveProfile = () => {
   }
 };
 
-// The study administrator picks the experiment condition when creating a room (others get the default)
-const isStudyAdmin = computed(() => authStore.isAdmin);
+// Study staff (administrator and observers) pick the experiment condition when creating a room
+// (others get the default) and may create it as a participant instead of the researcher
+const isStudyAdmin = computed(() => authStore.isObserver);
 const profiles = ref<AiProfile[]>([]);
 const selectedProfileId = ref('');
+const createAsParticipant = ref(false);
 onMounted(async () => {
   await authStore.waitForAuthReady().catch(() => {});
+  await authStore.waitForRole();
   if (isStudyAdmin.value) profiles.value = await listProfiles().catch(() => []);
 });
 
@@ -76,14 +79,15 @@ const handleCreateRoom = async () => {
   handleSaveProfile();
   isLoading.value = true;
   try {
-    const newRoom = await roomStore.createRoom(roomNameInput.value, selectedRoomEmoji.value);
-    if (selectedProfileId.value) {
-      await assignRoomProfile(newRoom.roomId, selectedProfileId.value).catch(err =>
-        roomStore.pushToast('Profile not assigned', err?.message || 'Assign it from /#/admin.', 'error'));
-    }
-    router.push(`/room/${newRoom.roomId}`);
-  } catch (err) {
+    const asParticipant = isStudyAdmin.value && createAsParticipant.value;
+    const newRoom = await roomStore.createRoom(roomNameInput.value, selectedRoomEmoji.value, {
+      asParticipant,
+      profileId: (isStudyAdmin.value && selectedProfileId.value) || undefined
+    });
+    router.push(asParticipant ? `/waiting/${newRoom.roomId}?as=participant` : `/room/${newRoom.roomId}`);
+  } catch (err: any) {
     console.error(err);
+    roomStore.pushToast('Could not create the room', err?.message || 'Please try again.', 'error');
   } finally {
     isLoading.value = false;
   }
@@ -342,6 +346,10 @@ const handleGoogleSignIn = async () => {
             <option value="">Default profile</option>
             <option v-for="p in profiles" :key="p.id" :value="p.id">{{ p.name }} · {{ MODE_LABELS[p.mode].split('（')[0] }}</option>
           </select>
+          <label v-if="isStudyAdmin" class="mb-2 flex items-start gap-2 text-xs text-slate-300 cursor-pointer" title="You join with a nickname and consent and count toward the room size; the room has no researcher">
+            <input type="checkbox" v-model="createAsParticipant" class="mt-0.5" />
+            <span>Create as a participant <span class="text-slate-500">(no researcher in this room; the administrator ends it)</span></span>
+          </label>
           <button
             @click="handleCreateRoom"
             :disabled="isLoading"

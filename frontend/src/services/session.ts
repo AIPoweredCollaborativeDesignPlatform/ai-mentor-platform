@@ -35,3 +35,20 @@ export async function endStudySession(roomId: string): Promise<boolean> {
   const fn = httpsCallable<{ roomId: string }, { ended: boolean }>(functions, 'endStudySession');
   return (await fn({ roomId })).data.ended;
 }
+
+export interface CreateRoomInput {
+  roomName: string;
+  roomEmoji: string;
+  language: string;
+  mentorConfig: unknown;
+  appVersion: string;
+  displayName: string;
+  avatar: string;
+  asParticipant: boolean;
+  profileId: string | null;
+}
+
+export async function createStudyRoom(input: CreateRoomInput): Promise<{ roomId: string; pin: string; roomName: string; roomEmoji: string; hostUid: string }> {
+  const fn = httpsCallable<CreateRoomInput, { roomId: string; pin: string; roomName: string; roomEmoji: string; hostUid: string }>(functions, 'createStudyRoom');
+  return (await fn(input)).data;
+}

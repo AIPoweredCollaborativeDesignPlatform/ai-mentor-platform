@@ -35,6 +35,7 @@ npm run deploy:dry         # 只 build 驗證，不部署、不改版本
 - **角色**（`functions/src/roles.js`）：管理者＝固定帳號 bb900114@gmail.com；觀察員＝後台「系統設定」加入的 email，custom claim `role: 'observer'`（名單在 `roles/current`，僅伺服器）。瀏覽器登入後呼叫 `syncMyRole` 對齊 claim（`authStore.isAdmin／isObserver／waitForRole()`）。rules 的 `isObserver()`（含管理者）可讀所有房間、白板（含私人）、事件、上傳狀態、AI 紀錄。
   - 觀察員進房（`joinStudyRoom`）：participants 文件 `status: 'observer'`、`rooms.observerUids`；隱形、不計人數、唯讀，白板用 `LiveBoardViewer`（只聽不寫 presence）；匯出代號 O1…、事件 `role: observer`。加入頁可選「以參與者身分加入」，在該房參加過就一直是參與者。建房者在自己房間永遠是研究者 R。End／Reopen：研究者與管理者。
   - 房間文件只有成員／觀察員能讀（加入頁用 `peekStudyRoom`）；`session`、`ai`、`hostUid`、`observerUids` 只有 Functions 能寫；訪客登入 Google 後由 `claimGuestRooms`（驗證匿名 ID token）轉移 hostUid。參與者可改欄位見 rules `participantFields()`，前端新增寫入 rooms 的欄位時要一起改。
+- **建房與 PIN**（`functions/src/rooms.js`）：房間只能由 `createStudyRoom` 建立（rules 禁止瀏覽器 create）；伺服器從未使用的 4 位數 PIN 隨機挑，登記在 `roomPins/{roomId}`（僅伺服器）。房間刪除後登記保留（`onRoomDeleted` 標 deletedAt），PIN 永不重用。管理者／觀察員可在首頁選條件、勾「Create as a participant」（`hostUid: ''`、`createdBy`，房間沒有研究者，建房者走加入流程，End／Reopen 由管理者在後台房間列操作）。後台 PIN 清單：`listRoomPins`。
 - **Room store 是門面**：`stores/room.ts` 只組合 `stores/room/{session,messages,whiteboard,mentor}.ts`，元件一律透過 `useRoomStore()` 使用；`MeetingRoomView.vue` 只做編排，UI 拆在 `components/room/`，白板開關/私人公開狀態機在 `composables/useWhiteboardSession.ts`。
 - AI 訊息以 `senderUid: 'ai_mentor'`／`ai_mentor_3d`／`system` 寫回 messages（engine 會忽略這些以免自我觸發）。`stores/room/mentor.ts` 只負責前端顯示與重試，不做觸發判斷。
 - **路由為 Hash 模式**（`/#/room/room_123456`）；Room ID＝`room_${6位數PIN}`。

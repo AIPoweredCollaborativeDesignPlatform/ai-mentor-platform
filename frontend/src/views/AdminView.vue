@@ -10,9 +10,10 @@ import {
 } from '../utils/aiProfiles';
 import {
   assignRoomProfile, exportRoomNow, getDriveAuthUrl, getDriveStatus, getSystemConfig, listProfiles, listStudyRooms, loadUsage,
-  listObservers, purgeLegacyRooms, saveProfile, saveSystemConfig, setObserver, type DriveStatus, type StudyObserver, type LegacyRoom, type StudyRoom, type UsageRow
+  listObservers, listRoomPins, saveProfile, saveSystemConfig, setObserver, type DriveStatus, type StudyObserver, type RoomPins, type StudyRoom, type UsageRow
 } from '../services/admin';
 import { DEFAULT_CONSENT_TEXT } from '../constants/consent';
+import { endStudySession, reopenStudySession } from '../services/session';
 
 // Mirrors functions/src/config.js DEFAULT_SYSTEM_CONFIG for display before config/system exists
 const SYSTEM_DEFAULTS = {
@@ -173,7 +174,11 @@ const loadRooms = async () => {
     roomsLoading.value = false;
   }
 };
-watch(tab, t => t === 'rooms' && !rooms.value.length && loadRooms());
+watch(tab, t => {
+  if (t !== 'rooms') return;
+  if (!rooms.value.length) loadRooms();
+  if (!pins.value) loadPins();
+});
 
 // One confirmation, as agreed for the study protocol
 const assign = async (room: StudyRoom) => {
@@ -253,37 +258,27 @@ const saveSystem = async () => {
   }
 };
 
-// ---------- Legacy site rooms ----------
-const legacyRooms = ref<LegacyRoom[] | null>(null);
-const legacyBusy = ref(false);
-const listLegacy = async () => {
-  legacyBusy.value = true;
+// ---------- PINs (functions/src/rooms.js): deleted rooms never give their PIN back ----------
+const pins = ref<RoomPins | null>(null);
+const pinsLoading = ref(false);
+const pinView = ref<'inUse' | 'ended' | 'invalid' | 'free'>('inUse');
+const loadPins = async () => {
+  pinsLoading.value = true;
   try {
-    legacyRooms.value = (await purgeLegacyRooms(true)).rooms || [];
+    pins.value = await listRoomPins();
   } catch (e: any) {
-    roomStore.pushToast('讀取失敗', e?.message || String(e), 'error');
+    roomStore.pushToast('讀取 PIN 失敗', e?.message || String(e), 'error');
   } finally {
-    legacyBusy.value = false;
+    pinsLoading.value = false;
   }
 };
-const deleteLegacy = async () => {
-  const n = legacyRooms.value?.length || 0;
-  if (!n || !window.confirm(`永久刪除舊站的 ${n} 個房間（含訊息、白板、成員等所有子資料）？
+const PIN_TABS = [
+  { id: 'inUse', label: '使用中' },
+  { id: 'ended', label: '已結束' },
+  { id: 'invalid', label: '已失效' },
+  { id: 'free', label: '未使用' }
+] as const;
 
-此動作無法復原。`)) return;
-  legacyBusy.value = true;
-  try {
-    const res = await purgeLegacyRooms(false);
-    roomStore.pushToast('已刪除', `舊站房間 ${res.deleted} 個、使用者房間索引 ${res.indexEntries} 筆`, 'success');
-    legacyRooms.value = null;
-  } catch (e: any) {
-    roomStore.pushToast('刪除失敗', e?.message || String(e), 'error');
-  } finally {
-    legacyBusy.value = false;
-  }
-};
-
-// ---------- Google Drive export ----------
 const drive = ref<DriveStatus | null>(null);
 const loadDrive = async () => {
   drive.value = await getDriveStatus().catch(() => null);
@@ -308,6 +303,16 @@ const uploadNow = async (room: StudyRoom) => {
     roomStore.pushToast('上傳失敗', e?.message || String(e), 'error');
   } finally {
     exporting.value[room.roomId] = false;
+  }
+};
+// Rooms created "as a participant" have no researcher: the administrator ends / reopens them here
+const endOrReopen = async (room: StudyRoom, end: boolean) => {
+  if (!window.confirm(`${end ? '結束' : '重新開啟'}房間 ${room.pin}（${room.roomName || ''}）？`)) return;
+  try {
+    await (end ? endStudySession(room.roomId) : reopenStudySession(room.roomId));
+    await loadRooms();
+  } catch (e: any) {
+    roomStore.pushToast(end ? '結束失敗' : '重開失敗', e?.message || String(e), 'error');
   }
 };
 const UPLOAD_LABELS: Record<string, { text: string; cls: string }> = {
@@ -438,26 +443,42 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
             <button v-if="r.session" @click="uploadNow(r)" :disabled="exporting[r.roomId]" class="px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs disabled:opacity-40">
               {{ exporting[r.roomId] ? '上傳中…' : '上傳 Drive' }}
             </button>
+            <button v-if="r.session && r.session.phase !== 'ended'" @click="endOrReopen(r, true)" class="px-3 py-1.5 rounded-lg border border-rose-800 text-rose-200 hover:bg-rose-900/40 text-xs">End</button>
+            <button v-else-if="r.session" @click="endOrReopen(r, false)" class="px-3 py-1.5 rounded-lg border border-emerald-800 text-emerald-200 hover:bg-emerald-900/40 text-xs">Reopen</button>
             </template>
             <router-link v-if="r.session" :to="`/admin/replay/${r.roomId}`" class="px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs">重播</router-link>
           </div>
         </div>
 
-        <div v-if="isAdmin" :class="card" class="space-y-2 border-rose-900/50">
+        <div :class="card" class="space-y-2">
           <div class="flex items-center gap-2">
-            <h3 class="text-sm font-semibold text-rose-200">舊站房間</h3>
-            <span class="text-[11px] text-slate-500">ai-mentor-web.web.app 建立的房間（沒有 appVersion）</span>
-            <button @click="listLegacy" :disabled="legacyBusy" class="ml-auto px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs disabled:opacity-40">列出</button>
+            <h3 class="text-sm font-semibold">PIN 碼</h3>
+            <span class="text-[11px] text-slate-500">新房間由伺服器從「未使用」隨機挑；房間刪除後 PIN 不再使用</span>
+            <button @click="loadPins" :disabled="pinsLoading" class="ml-auto p-1.5 rounded-lg hover:bg-slate-800 text-slate-400"><RefreshCw class="w-4 h-4" :class="{ 'animate-spin': pinsLoading }" /></button>
           </div>
-          <template v-if="legacyRooms">
-            <p class="text-xs text-slate-300">共 {{ legacyRooms.length }} 個</p>
-            <div class="max-h-48 overflow-y-auto text-[11px] text-slate-400 space-y-0.5">
-              <div v-for="l in legacyRooms" :key="l.roomId">{{ l.roomId }} · {{ l.roomName || '—' }} · 最後活動 {{ fmtTime(l.lastActive || undefined) }}</div>
+          <template v-if="pins">
+            <div class="flex gap-1.5">
+              <button
+                v-for="t in PIN_TABS"
+                :key="t.id"
+                @click="pinView = t.id"
+                class="px-2.5 py-1 rounded-lg text-[11px] font-semibold"
+                :class="pinView === t.id ? 'bg-sky-600 text-white' : 'border border-slate-700 text-slate-400 hover:text-slate-200'"
+              >
+                {{ t.label }} {{ pins[t.id].length }}
+              </button>
             </div>
-            <button v-if="legacyRooms.length" @click="deleteLegacy" :disabled="legacyBusy" class="px-3 py-1.5 rounded-lg bg-rose-700 hover:bg-rose-600 text-xs font-semibold disabled:opacity-40">
-              {{ legacyBusy ? '刪除中…' : `永久刪除這 ${legacyRooms.length} 個房間` }}
-            </button>
+            <div v-if="pinView === 'free'" class="max-h-48 overflow-y-auto font-mono text-[11px] text-slate-400 leading-relaxed">{{ pins.free.join(' ') }}</div>
+            <div v-else class="max-h-60 overflow-y-auto text-[11px] text-slate-400 space-y-0.5">
+              <div v-for="p in pins[pinView]" :key="p.pin">
+                <span class="font-mono text-sky-400">{{ p.pin }}</span> · {{ p.roomName || '—' }} · 建立 {{ fmtTime(p.createdAt || undefined) }}
+                <template v-if="pinView === 'invalid'"> · {{ p.reason === 'never_created' ? '保留後未建立' : `刪除 ${fmtTime(p.deletedAt || undefined)}` }}</template>
+                <template v-else> · 最後活動 {{ fmtTime(p.lastActive || undefined) }}</template>
+              </div>
+              <div v-if="!pins[pinView].length" class="text-slate-500">無</div>
+            </div>
           </template>
+          <div v-else-if="pinsLoading" class="text-xs text-slate-500 flex items-center gap-2"><Loader2 class="w-4 h-4 animate-spin" />讀取中…</div>
         </div>
       </section>
 

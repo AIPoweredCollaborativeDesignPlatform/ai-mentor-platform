@@ -108,17 +108,24 @@ export async function exportRoomNow(roomId: string) {
   return (await fn({ roomId })).data;
 }
 
-export interface LegacyRoom {
-  roomId: string;
+export interface PinRow {
+  pin: string;
   roomName: string;
   createdAt: number | null;
   lastActive: number | null;
+  reason?: 'deleted' | 'never_created';
+  deletedAt?: number | null;
+}
+export interface RoomPins {
+  inUse: PinRow[];
+  ended: PinRow[];
+  invalid: PinRow[];
+  free: string[];
 }
 
-/** Rooms of the legacy site (no appVersion). dryRun lists them; otherwise they are deleted for good. */
-export async function purgeLegacyRooms(dryRun: boolean) {
-  const fn = httpsCallable<{ dryRun: boolean }, { dryRun: boolean; rooms?: LegacyRoom[]; deleted?: number; indexEntries?: number }>(functions, 'purgeLegacyRooms');
-  return (await fn({ dryRun })).data;
+export async function listRoomPins(): Promise<RoomPins> {
+  const fn = httpsCallable<void, RoomPins>(functions, 'listRoomPins');
+  return (await fn()).data;
 }
 
 export async function getSystemConfig(): Promise<Record<string, any>> {

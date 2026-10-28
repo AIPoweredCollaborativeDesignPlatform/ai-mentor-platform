@@ -2,7 +2,7 @@ import { Readable } from 'node:stream';
 import { initializeApp } from 'firebase-admin/app';
 import { defineSecret } from 'firebase-functions/params';
 import { HttpsError, onCall, onRequest } from 'firebase-functions/v2/https';
-import { onDocumentCreated, onDocumentWritten } from 'firebase-functions/v2/firestore';
+import { onDocumentCreated, onDocumentDeleted, onDocumentWritten } from 'firebase-functions/v2/firestore';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getSystemConfig } from './src/config.js';
@@ -15,6 +15,7 @@ import { assignProfileToRoom, ensureRoomAi, handleNewMessage, loadProfile, runCh
 import { endSession, joinRoom, maybeStartSession, reopenSession, runSessionJob, sessionTick } from './src/session.js';
 import { logBoardObjectChange, logMessageChange } from './src/events.js';
 import { authUrl, exportRoom, handleCallback, runDueExports } from './src/drive.js';
+import { createRoom, listPins, markRoomDeleted } from './src/rooms.js';
 import { claimAnonymousRooms, isAdminToken, isObserverToken, listObservers, setObserver, syncRole } from './src/roles.js';
 
 initializeApp();
@@ -149,31 +150,25 @@ export const assignRoomProfile = onCall({ maxInstances: 5 }, async request => {
   return { profileId: profile.id, profileVersion: profile.version };
 });
 
-/**
- * Removes every room of the legacy site (rooms without appVersion) with all subcollections, plus the
- * users/{uid}/rooms index entries pointing at them. dryRun lists them without deleting.
- */
-export const purgeLegacyRooms = onCall({ timeoutSeconds: 540, memory: '512MiB', maxInstances: 1 }, async request => {
-  requireAdmin(request);
-  const db = getFirestore();
-  const snap = await db.collection('rooms').select('appVersion', 'roomName', 'createdAt', 'lastActive').get();
-  const legacy = snap.docs.filter(d => !d.data().appVersion).map(d => ({
-    roomId: d.id, roomName: d.data().roomName || '', createdAt: d.data().createdAt || null, lastActive: d.data().lastActive || null
-  }));
-  if (request.data?.dryRun !== false) return { dryRun: true, rooms: legacy };
-
-  const ids = new Set(legacy.map(r => r.roomId));
-  for (const r of legacy) await db.recursiveDelete(db.doc(`rooms/${r.roomId}`));
-  let indexEntries = 0;
-  for (const user of await db.collection('users').listDocuments()) {
-    for (const entry of await user.collection('rooms').listDocuments()) {
-      if (ids.has(entry.id)) {
-        await entry.delete();
-        indexEntries++;
-      }
-    }
+// ---------- Rooms and PINs (src/rooms.js) ----------
+/** Every new room: a random never-used PIN. Administrator and observers may pick the condition or join as a participant. */
+export const createStudyRoom = onCall({ maxInstances: 10 }, async request => {
+  requireAuth(request);
+  const d = request.data || {};
+  const observer = isObserverToken(request.auth.token);
+  if ((d.profileId || d.asParticipant) && !observer) throw new HttpsError('permission-denied', 'Study staff only');
+  try {
+    return await createRoom(request.auth.uid, { ...d, asParticipant: d.asParticipant === true, profileId: d.profileId || null }, request.auth.token.email || request.auth.uid);
+  } catch (err) {
+    throw new HttpsError('internal', err?.message || String(err));
   }
-  return { dryRun: false, deleted: legacy.length, indexEntries };
+});
+
+export const onRoomDeleted = onDocumentDeleted({ document: 'rooms/{roomId}', maxInstances: 5 }, event => markRoomDeleted(event.params.roomId));
+
+export const listRoomPins = onCall({ maxInstances: 2 }, async request => {
+  if (!isObserverToken(request.auth?.token)) throw new HttpsError('permission-denied', 'Study staff only');
+  return listPins();
 });
 
 // ---------- Experiment flow (src/session.js) ----------

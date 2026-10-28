@@ -86,7 +86,9 @@ onMounted(async () => {
   const config = await getDoc(doc(db, 'config', 'system')).catch(() => null);
   consentText.value = config?.data()?.consentText || DEFAULT_CONSENT_TEXT;
   await authStore.waitForRole();
-  if (authStore.isObserver && !check.isHost) {
+  // ?as=participant: the creator of a room made "as a participant" goes straight to the form
+  if (route.query.as === 'participant') asParticipant.value = true;
+  else if (authStore.isObserver && !check.isHost) {
     view.value = 'choose';
     return;
   }

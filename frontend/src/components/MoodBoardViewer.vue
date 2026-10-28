@@ -53,36 +53,20 @@ const getImageUrl = (img: any, index: number) => {
     }
     return img.url;
   }
-  const title = (props.assetData?.title || 'Design Concept').replace(/[&#]/g, ' ');
-  const kw = (img?.title || img?.caption || props.assetData?.keywords?.[index] || 'aesthetic').replace(/[&#]/g, ' ');
-  const prompt = encodeURIComponent(`${title} ${kw} high quality industrial design concept rendering`);
-  return `https://image.pollinations.ai/prompt/${prompt}?width=600&height=450&nologo=true&seed=${seed}`;
+  // Generation failed server-side (e.g. image provider out of credit): show a neutral placeholder,
+  // never images from another source, so the research record only contains what the AI produced
+  return UNAVAILABLE_IMAGE;
 };
 
-const getCategoryFallback = (img: any) => {
-  const cat = (img?.category || '').toLowerCase();
-  const text = `${img?.title || ''} ${img?.caption || ''} ${img?.prompt || ''}`.toLowerCase();
-
-  // High-resolution authentic Unsplash imagery with exact category matching
-  if (cat.includes('material') || cat.includes('texture') || text.includes('metal') || text.includes('surface') || text.includes('texture') || text.includes('finish') || text.includes('fuselage') || text.includes('steel') || text.includes('carbon')) {
-    return 'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?auto=format&fit=crop&w=600&h=450&q=80'; // Weathered metal plates & industrial macro texture
-  }
-  if (cat.includes('activity') || cat.includes('lifestyle') || text.includes('engineer') || text.includes('nomad') || text.includes('work') || text.includes('field') || text.includes('task') || text.includes('repair') || text.includes('build')) {
-    return 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&w=600&h=450&q=80'; // Hardware engineer working at field workbench
-  }
-  if (cat.includes('persona') || cat.includes('context') || text.includes('person') || text.includes('user') || text.includes('portrait')) {
-    return 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=600&h=450&q=80'; // Professional user persona in context
-  }
-  if (cat.includes('color') || cat.includes('lighting') || text.includes('light') || text.includes('glow') || text.includes('atmosphere')) {
-    return 'https://images.unsplash.com/photo-1550684848-fac1c5b4e853?auto=format&fit=crop&w=600&h=450&q=80'; // Cinematic lighting & volumetric atmosphere
-  }
-  return 'https://images.unsplash.com/photo-1581291518857-4e27b48ff24e?auto=format&fit=crop&w=600&h=450&q=80'; // Industrial product concept rendering
-};
+const UNAVAILABLE_IMAGE = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="450" viewBox="0 0 600 450"><rect width="600" height="450" fill="#0f172a"/>'
+  + '<text x="300" y="225" fill="#64748b" font-family="system-ui,sans-serif" font-size="22" text-anchor="middle">Image unavailable</text></svg>'
+);
 
 const handleImgError = (e: Event, img: any) => {
   const target = e.target as HTMLImageElement;
   if (!target) return;
-  target.src = getCategoryFallback(img);
+  if (target.src !== UNAVAILABLE_IMAGE) target.src = UNAVAILABLE_IMAGE;
 };
 
 const getSourceUrl = (img: any) => {

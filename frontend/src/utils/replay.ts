@@ -25,6 +25,11 @@ export interface ReplayMessage {
   content: string;
   timestamp: number;
   reactions?: Record<string, string[]>;
+  actionOptions?: string[];
+  pollVotes?: Record<string, { uid: string; name: string; option: string }>;
+  assetType?: string | null;
+  assetPayload?: any;
+  fileData?: { name?: string; type?: string; url?: string; mimeType?: string } | null;
   deleted?: boolean;
 }
 
@@ -91,7 +96,12 @@ export function stateAt(events: ResearchEvent[], upto: number): ReplayState {
         type: m.type || 'text',
         content: m.content || '',
         timestamp: m.timestamp || e.at,
-        reactions: m.reactions
+        reactions: m.reactions,
+        actionOptions: m.actionOptions,
+        pollVotes: m.pollVotes,
+        assetType: m.assetType || null,
+        assetPayload: m.assetPayload,
+        fileData: m.fileData || null
       });
     } else if (e.kind === 'message_deleted') {
       const m = messages.get(d.messageId);

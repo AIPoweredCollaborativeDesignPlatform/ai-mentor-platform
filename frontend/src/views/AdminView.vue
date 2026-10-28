@@ -284,7 +284,8 @@ const UPLOAD_LABELS: Record<string, { text: string; cls: string }> = {
   uploading: { text: '上傳中', cls: 'text-sky-300' },
   done: { text: '已上傳', cls: 'text-emerald-300' },
   error: { text: '上傳失敗', cls: 'text-rose-300' },
-  needs_auth: { text: '需要重新授權', cls: 'text-amber-300' }
+  needs_auth: { text: '需要重新授權', cls: 'text-amber-300' },
+  reopened: { text: '房間已重開，結束後再上傳', cls: 'text-slate-400' }
 };
 
 const PHASE_LABELS: Record<string, string> = { waiting: '等待開場', running: '進行中', ended: '已結束' };

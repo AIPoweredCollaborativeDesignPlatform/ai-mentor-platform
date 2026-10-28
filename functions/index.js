@@ -12,7 +12,7 @@ import { generate3D, refineMeshy } from './src/mesh3d.js';
 import { logAiCall } from './src/log.js';
 import { FRIENDLY_ERRORS } from './src/mentor.js';
 import { assignProfileToRoom, ensureRoomAi, handleNewMessage, loadProfile, runCheck } from './src/engine.js';
-import { endSession, joinRoom, maybeStartSession, runSessionJob, sessionTick } from './src/session.js';
+import { endSession, joinRoom, maybeStartSession, reopenSession, runSessionJob, sessionTick } from './src/session.js';
 import { logBoardObjectChange, logMessageChange } from './src/events.js';
 import { authUrl, exportRoom, handleCallback, runDueExports } from './src/drive.js';
 
@@ -158,6 +158,21 @@ export const endStudySession = onCall({ maxInstances: 10 }, async request => {
 });
 
 // Session timing every minute, then due Drive exports (src/drive.js)
+/** Reopen an ended room: the room's researcher (host) or the study administrator. */
+export const reopenStudySession = onCall({ maxInstances: 5 }, async request => {
+  requireAuth(request);
+  const { roomId } = request.data || {};
+  if (!roomId) throw new HttpsError('invalid-argument', 'Missing roomId');
+  const room = (await getFirestore().doc(`rooms/${roomId}`).get()).data();
+  if (!room) throw new HttpsError('not-found', 'Room not found');
+  const token = request.auth.token;
+  const isResearcher = room.hostUid === request.auth.uid;
+  if (!isResearcher && !(token?.email === ADMIN_EMAIL && token?.email_verified)) {
+    throw new HttpsError('permission-denied', 'Only the researcher can reopen the session');
+  }
+  return { reopened: await reopenSession(String(roomId), isResearcher ? 'researcher' : 'admin') };
+});
+
 export const sessionClock = onSchedule(
   { schedule: 'every 1 minutes', timeoutSeconds: 540, memory: '512MiB', maxInstances: 1, secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] },
   async () => {

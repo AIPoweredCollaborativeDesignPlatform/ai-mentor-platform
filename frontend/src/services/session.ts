@@ -17,6 +17,11 @@ export async function joinStudyRoom(roomId: string, displayName: string, avatar:
   return (await fn({ roomId, displayName, avatar, consent, retry })).data;
 }
 
+export async function reopenStudySession(roomId: string): Promise<boolean> {
+  const fn = httpsCallable<{ roomId: string }, { reopened: boolean }>(functions, 'reopenStudySession');
+  return (await fn({ roomId })).data.reopened;
+}
+
 export async function endStudySession(roomId: string): Promise<boolean> {
   const fn = httpsCallable<{ roomId: string }, { ended: boolean }>(functions, 'endStudySession');
   return (await fn({ roomId })).data.ended;

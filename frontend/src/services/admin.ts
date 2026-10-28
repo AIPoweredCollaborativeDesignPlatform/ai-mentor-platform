@@ -72,7 +72,7 @@ export async function assignRoomProfile(roomId: string, profileId: string) {
 
 // ---------- Google Drive export (functions/src/drive.js) ----------
 export interface RoomExport {
-  status: 'pending' | 'uploading' | 'done' | 'error' | 'needs_auth';
+  status: 'pending' | 'uploading' | 'done' | 'error' | 'needs_auth' | 'reopened';
   dueAt?: number;
   attempts?: number;
   finishedAt?: number;

@@ -21,6 +21,7 @@ const roomAiRef = roomId => db().doc(`roomAi/${roomId}`);
 const roomRef = roomId => db().doc(`rooms/${roomId}`);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const LOCK_MS = 150_000;
+const TYPING_BEFORE_POST_MS = 2500;
 const CONTEXT_MESSAGES = 60;
 const AI_UIDS = new Set(['ai_mentor', 'ai_mentor_3d', 'system']);
 
@@ -82,7 +83,7 @@ const isMentioned = (content, profile) => {
 };
 
 // ---------- AI presence (typing doc must be refreshed: clients drop entries older than 5s) ----------
-function startPresence(roomId, kind, task) {
+export function startPresence(roomId, kind, task) {
   const uid = kind === 'mesh' ? 'ai_mentor_3d' : 'ai_mentor';
   const typingRef = roomRef(roomId).collection('typing').doc(uid);
   const write = () => typingRef.set({ uid, displayName: kind === 'mesh' ? 'AI (3D)' : 'AI', avatar: kind === 'mesh' ? '🎨' : '✨', timestamp: Date.now() }).catch(() => {});
@@ -195,7 +196,11 @@ export async function runCheck(roomId, secrets, { reason, forced = false, caller
         // The mesh is generated after the lock is released; the instant parametric preview is the fallback
         pending3D = { aiMessage, assetData, prompt: assetData?.prompt3D || assetData?.title || 'product prototype', meta: out.meta, room };
       } else {
+        // Automatic interventions also show the AI typing for a moment before the message lands
+        const stopTyping = stopPresence ? null : startPresence(roomId, 'text');
+        if (stopTyping) await sleep(TYPING_BEFORE_POST_MS);
         await postAiMessage(roomId, room, profile, { content: aiMessage, assetType, assetPayload: assetData, actionOptions, meta: out.meta }, retryMessageId);
+        await stopTyping?.();
       }
       stateUpdate.lastInterventionAt = Date.now();
       memoryUpdate.aiHistory = [...(roomAi.memory?.aiHistory || []), { at: Date.now(), type: assetType || 'message', text: String(aiMessage).slice(0, 300) }].slice(-20);

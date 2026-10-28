@@ -312,7 +312,14 @@ export async function exportRoom(roomId, oauth, { manual = false } = {}) {
 
 /** Called when a session ends: upload 10 minutes later (the room stays readable meanwhile). */
 export const queueRoomExport = (roomId, endedAt = Date.now()) =>
-  exportRef(roomId).set({ status: 'pending', dueAt: endedAt + EXPORT_DELAY_MS, queuedAt: Date.now(), attempts: 0, error: null }, { merge: true });
+  // attempts is kept, so a room that was reopened and ended again uploads into a new "_uploadN" folder
+  exportRef(roomId).set({ status: 'pending', dueAt: endedAt + EXPORT_DELAY_MS, queuedAt: Date.now(), error: null }, { merge: true });
+
+/** Reopened before its upload ran: the upload waits for the next end. */
+export async function cancelPendingExport(roomId) {
+  const snap = await exportRef(roomId).get();
+  if (snap.data()?.status === 'pending') await exportRef(roomId).update({ status: 'reopened', dueAt: null });
+}
 
 /** From the session clock: due exports, plus failed ones retried after 30 minutes (at most 5 tries). */
 export async function runDueExports(oauth, max = 3) {

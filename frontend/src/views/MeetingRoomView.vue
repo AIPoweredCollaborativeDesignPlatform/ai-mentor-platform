@@ -10,6 +10,7 @@ import { useNotificationSound } from '../composables/useNotificationSound';
 import { useWhiteboardResize, useWhiteboardSession, type WhiteboardHandle } from '../composables/useWhiteboardSession';
 import { useAiReadTracking } from '../composables/useAiReadTracking';
 import { startResearchLog, stopResearchLog } from '../services/researchLog';
+import { reopenStudySession } from '../services/session';
 
 import RoomHeader from '../components/room/RoomHeader.vue';
 import ChatMessage from '../components/room/ChatMessage.vue';
@@ -56,6 +57,19 @@ const timeLeft = computed(() => {
   const sec = Math.max(0, Math.round((endsAt - now.value) / 1000));
   return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
 });
+
+const isReopening = ref(false);
+const reopen = async () => {
+  if (!window.confirm('Reopen this session? Participants can chat and use whiteboards again; the Drive upload waits until it ends again.')) return;
+  isReopening.value = true;
+  try {
+    await reopenStudySession(roomId);
+  } catch (err: any) {
+    roomStore.pushToast('Could not reopen the session', err?.message || 'Please try again.', 'error');
+  } finally {
+    isReopening.value = false;
+  }
+};
 
 const showEndConfirm = ref(false);
 const isEnding = ref(false);
@@ -322,6 +336,14 @@ onUnmounted(() => {
           <Clock class="w-3.5 h-3.5" /> {{ timeLeft ? (timeLeft === '0:00' ? 'Time is up' : `${timeLeft} left`) : 'No time limit' }}
         </span>
         <span v-else>Session ended</span>
+        <button
+          v-if="session!.phase === 'ended'"
+          @click="reopen"
+          :disabled="isReopening"
+          class="ml-auto inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-[11px] font-semibold transition disabled:opacity-50"
+        >
+          {{ isReopening ? 'Reopening...' : 'Reopen' }}
+        </button>
         <button
           v-if="session!.phase !== 'ended'"
           @click="showEndConfirm = true"

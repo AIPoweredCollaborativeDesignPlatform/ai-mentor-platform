@@ -5,8 +5,9 @@ import { ArrowLeft, Loader2, Pause, Play } from 'lucide-vue-next';
 import { useAuthStore } from '../stores/auth';
 import BoardReplayCanvas from '../components/admin/BoardReplayCanvas.vue';
 import {
-  KIND_GROUPS, describe, fmtOffset, groupOf, indexAt, loadEvents, membersOf, stateAt, type ResearchEvent
+  KIND_GROUPS, describe, fmtOffset, groupOf, indexAt, loadEvents, membersOf, stateAt, type ReplayMessage, type ResearchEvent
 } from '../utils/replay';
+import { formatMessageText } from '../utils/chat';
 
 /** Admin-only replay of one room from its research event log (/#/admin/replay/:roomId). */
 const route = useRoute();
@@ -81,16 +82,24 @@ const groups = ref<Record<string, boolean>>(Object.fromEntries(KIND_GROUPS.map(g
 const listed = computed(() => events.value.map((e, i) => ({ e, i })).filter(({ e }) => groups.value[groupOf(e.kind)]));
 const jumpTo = (e: ResearchEvent) => (t.value = e.at);
 const listRef = ref<HTMLElement | null>(null);
+const followTimeline = ref(true);
 watch(idx, async () => {
   await nextTick();
-  listRef.value?.querySelector('[data-current="true"]')?.scrollIntoView({ block: 'nearest' });
+  // Only the timeline box scrolls (scrollIntoView would also move the page)
+  const box = listRef.value;
+  const row = box?.querySelector<HTMLElement>('[data-current="true"]');
+  if (!box || !row || !followTimeline.value) return;
+  const top = row.offsetTop; // box is position: relative
+  if (top < box.scrollTop || top + row.offsetHeight > box.scrollTop + box.clientHeight) box.scrollTop = top - box.clientHeight / 2;
 });
 
-const chatRef = ref<HTMLElement | null>(null);
-watch(() => state.value.messages.length, async () => {
-  await nextTick();
-  if (chatRef.value) chatRef.value.scrollTop = chatRef.value.scrollHeight;
-});
+// The chat panel never scrolls by itself; the researcher scrolls it
+const votersOf = (m: ReplayMessage, option: string) => Object.values(m.pollVotes || {}).filter(v => v?.option === option);
+const aliasOfUid = (uid: string) => members.value.get(uid)?.alias || '?';
+const isUrl = (u?: string) => Boolean(u && /^(https?:|data:image)/.test(u));
+const ASSET_LABELS: Record<string, string> = {
+  summary: '摘要', fact_check: '事實查核', moodboard: '情緒板', mesh_3d: '3D 模型', parametric_3d: '3D 預覽', image: '圖片', vector: '向量圖', text: '文字', contract: '文件'
+};
 
 const ROLE_CLASS: Record<string, string> = {
   participant: 'text-sky-300',
@@ -153,7 +162,7 @@ onMounted(async () => {
         <!-- Chat at t -->
         <section class="rounded-2xl border border-slate-800 bg-slate-900/70 flex flex-col h-[440px]">
           <h2 class="px-3 py-2 text-xs font-semibold text-slate-300 border-b border-slate-800">聊天（{{ state.messages.filter(m => !m.deleted).length }}）</h2>
-          <div ref="chatRef" class="flex-1 overflow-y-auto p-3 space-y-2 text-xs">
+          <div class="flex-1 overflow-y-auto p-3 space-y-2 text-xs">
             <div v-for="m in state.messages" :key="m.id" :class="m.deleted ? 'opacity-40 line-through' : ''">
               <div class="text-[10px] text-slate-500">
                 <b :class="ROLE_CLASS[m.senderUid?.startsWith('ai_mentor') ? 'ai' : m.senderUid === 'system' ? 'system' : 'participant']">
@@ -161,7 +170,53 @@ onMounted(async () => {
                 </b>
                 {{ m.senderName }} · {{ fmtOffset(m.timestamp - t0) }}
               </div>
-              <div class="whitespace-pre-wrap text-slate-200">{{ m.type === 'whiteboard_state' ? '🖼 白板卡片' : m.content }}</div>
+              <div v-if="m.type === 'whiteboard_state'" class="text-slate-300">🖼 白板卡片（{{ m.id }}）</div>
+              <div v-else-if="m.content" class="replay-md text-slate-200" v-html="formatMessageText(m.content)"></div>
+
+              <!-- Attached file -->
+              <div v-if="m.fileData && m.type === 'file'" class="mt-1">
+                <img v-if="m.fileData.type === 'image' && isUrl(m.fileData.url)" :src="m.fileData.url" class="max-h-40 rounded-lg border border-slate-700" />
+                <a v-else-if="isUrl(m.fileData.url)" :href="m.fileData.url" target="_blank" rel="noopener" class="text-sky-400 hover:underline">📎 {{ m.fileData.name || '檔案' }}</a>
+                <span v-else class="text-slate-400">📎 {{ m.fileData.name || '檔案' }}</span>
+              </div>
+
+              <!-- AI asset -->
+              <div v-if="m.assetType" class="mt-1 p-2 rounded-lg border border-amber-500/30 bg-amber-500/5 space-y-1">
+                <div class="text-[10px] font-semibold text-amber-300">{{ ASSET_LABELS[m.assetType] || m.assetType }}<template v-if="m.assetPayload?.title">：{{ m.assetPayload.title }}</template></div>
+                <div v-if="m.assetType === 'summary' && m.assetPayload?.content" class="replay-md text-slate-200 max-h-64 overflow-y-auto" v-html="formatMessageText(m.assetPayload.content)"></div>
+                <template v-else-if="m.assetType === 'fact_check'">
+                  <div class="text-slate-200">主張：{{ m.assetPayload?.claim }}</div>
+                  <div class="text-slate-200">結論：{{ m.assetPayload?.verdict }}</div>
+                  <div v-if="m.assetPayload?.details" class="text-slate-400">{{ m.assetPayload.details }}</div>
+                  <a v-for="r in m.assetPayload?.references || []" :key="r" :href="r" target="_blank" rel="noopener" class="block text-sky-400 hover:underline truncate">{{ r }}</a>
+                </template>
+                <template v-else-if="m.assetType === 'moodboard'">
+                  <div v-if="m.assetPayload?.keywords?.length" class="text-slate-400">{{ m.assetPayload.keywords.join('、') }}</div>
+                  <div class="grid grid-cols-4 gap-1">
+                    <div v-for="(img, k) in m.assetPayload?.images || []" :key="k" class="aspect-[4/3] rounded bg-slate-800 overflow-hidden" :title="img.prompt || img.title">
+                      <img v-if="isUrl(img.url)" :src="img.url" class="w-full h-full object-cover" />
+                      <span v-else class="block p-1 text-[9px] text-slate-500">未產生</span>
+                    </div>
+                  </div>
+                  <div v-if="m.assetPayload?.palette?.length" class="flex gap-1">
+                    <span v-for="c in m.assetPayload.palette" :key="c.hex" class="w-4 h-4 rounded border border-slate-700" :style="{ background: c.hex }" :title="`${c.name} ${c.hex}`"></span>
+                  </div>
+                </template>
+                <template v-else-if="m.assetType === 'mesh_3d' || m.assetType === 'parametric_3d'">
+                  <img v-if="isUrl(m.assetPayload?.posterUrl)" :src="m.assetPayload.posterUrl" class="max-h-32 rounded" />
+                  <a v-if="isUrl(m.assetPayload?.modelUrl)" :href="m.assetPayload.modelUrl" target="_blank" rel="noopener" class="text-sky-400 hover:underline">下載模型</a>
+                  <div v-if="m.assetPayload?.isRefined" class="text-slate-400">已上色（refined）</div>
+                </template>
+                <pre v-else class="text-[10px] text-slate-400 whitespace-pre-wrap max-h-40 overflow-y-auto">{{ JSON.stringify(m.assetPayload, null, 1) }}</pre>
+              </div>
+
+              <!-- Poll with voters at this moment -->
+              <div v-if="m.actionOptions?.length" class="mt-1 space-y-0.5">
+                <div v-for="opt in m.actionOptions" :key="opt" class="flex items-center gap-2 text-[11px]">
+                  <span class="px-1.5 py-0.5 rounded border border-slate-700 text-slate-200">{{ opt }}</span>
+                  <span class="text-slate-400">{{ votersOf(m, opt).length }} 票<template v-if="votersOf(m, opt).length">（{{ votersOf(m, opt).map(v => aliasOfUid(v.uid)).join(', ') }}）</template></span>
+                </div>
+              </div>
               <div v-if="m.reactions && Object.values(m.reactions).some(u => u.length)" class="text-[10px] text-slate-400">
                 <span v-for="(uids, emoji) in m.reactions" :key="emoji" v-show="uids.length" class="mr-1.5">{{ emoji }}{{ uids.length }}</span>
               </div>
@@ -193,9 +248,10 @@ onMounted(async () => {
       <section class="rounded-2xl border border-slate-800 bg-slate-900/70">
         <div class="px-3 py-2 border-b border-slate-800 flex flex-wrap items-center gap-3 text-[11px]">
           <h2 class="text-xs font-semibold text-slate-300">時間軸</h2>
+          <label class="flex items-center gap-1 text-slate-400"><input type="checkbox" v-model="followTimeline" />時間軸跟著播放</label>
           <label v-for="g in KIND_GROUPS" :key="g.id" class="flex items-center gap-1 text-slate-300"><input type="checkbox" v-model="groups[g.id]" />{{ g.label }}</label>
         </div>
-        <div ref="listRef" class="max-h-72 overflow-y-auto text-[11px] font-mono">
+        <div ref="listRef" class="relative max-h-72 overflow-y-auto text-[11px] font-mono">
           <button
             v-for="{ e, i } in listed"
             :key="e.id"
@@ -214,3 +270,11 @@ onMounted(async () => {
     </main>
   </div>
 </template>
+
+<style scoped>
+.replay-md :deep(table) { border-collapse: collapse; margin: 0.25rem 0; font-size: 10px; }
+.replay-md :deep(th), .replay-md :deep(td) { border: 1px solid #334155; padding: 2px 4px; }
+.replay-md :deep(h1), .replay-md :deep(h2), .replay-md :deep(h3) { font-weight: 600; margin-top: 0.25rem; }
+.replay-md :deep(ul) { list-style: disc; padding-left: 1rem; }
+.replay-md :deep(ol) { list-style: decimal; padding-left: 1rem; }
+</style>

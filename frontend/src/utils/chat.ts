@@ -18,6 +18,29 @@ export function formatMessageText(text: string): string {
   return DOMPurify.sanitize(styledHtml, { ADD_ATTR: ['target', 'data-link'] });
 }
 
+export interface MentionTarget {
+  name: string;
+  kind: 'me' | 'ai' | 'member';
+}
+
+const MENTION_CLASS: Record<MentionTarget['kind'], string> = {
+  me: 'mention mention-me',
+  ai: 'mention mention-ai',
+  member: 'mention mention-member'
+};
+const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Wraps "@Name" of known people (longest names first) in a coloured span; tags and attributes are left alone. */
+export function highlightMentions(html: string, targets: MentionTarget[]): string {
+  const list = targets.filter(t => t.name?.trim()).sort((a, b) => b.name.length - a.name.length);
+  if (!list.length || !html.includes('@')) return html;
+  const byName = new Map(list.map(t => [t.name.toLowerCase(), t]));
+  const re = new RegExp(`@(${list.map(t => escapeRegex(t.name)).join('|')})`, 'gi');
+  return html.split(/(<[^>]+>)/).map(part =>
+    part.startsWith('<') ? part : part.replace(re, (m, name) => `<span class="${MENTION_CLASS[byName.get(String(name).toLowerCase())?.kind || 'member']}">${m}</span>`)
+  ).join('');
+}
+
 export function isMentioning(msg: MessageItem, displayName: string, uid: string): boolean {
   if (!msg?.content || !displayName) return false;
   const content = msg.content.toLowerCase();

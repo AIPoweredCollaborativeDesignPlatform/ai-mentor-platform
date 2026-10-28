@@ -7,7 +7,8 @@ import {
 import { useAuthStore } from '../../stores/auth';
 import { useRoomStore } from '../../stores/room';
 import type { MessageItem } from '../../types';
-import { formatMessageText, formatTime, isMentioning } from '../../utils/chat';
+import { formatMessageText, formatTime, highlightMentions, isMentioning, type MentionTarget } from '../../utils/chat';
+import { useRoomAi } from '../../composables/useRoomAi';
 import ParametricViewer3D from '../ParametricViewer3D.vue';
 import ModelViewerGLB from '../ModelViewerGLB.vue';
 import MoodBoardViewer from '../MoodBoardViewer.vue';
@@ -52,8 +53,15 @@ const expanded = ref(false);
 const isCollapsible = computed(() => !isAi.value && (msg.value.content?.length || 0) > COLLAPSE_AT);
 const displayHtml = computed(() => {
   const text = isCollapsible.value && !expanded.value ? msg.value.content.slice(0, COLLAPSE_AT) + '...' : msg.value.content;
-  return formatMessageText(text);
+  return highlightMentions(formatMessageText(text), mentionTargets.value);
 });
+
+// @mentions of me, of the AI and of other members get their own colours
+const { aiEnabled, aiName } = useRoomAi();
+const mentionTargets = computed<MentionTarget[]>(() => [
+  ...roomStore.approvedParticipants.map(p => ({ name: p.displayName, kind: (p.uid === authStore.uid ? 'me' : 'member') as MentionTarget['kind'] })),
+  ...(aiEnabled.value ? [{ name: aiName.value, kind: 'ai' as const }, { name: 'Mentor', kind: 'ai' as const }] : [])
+]);
 
 // Polls
 const voters = (option: string) => Object.values(msg.value.pollVotes || {}).filter(v => v?.option === option);
@@ -335,7 +343,7 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
           <span>This 3D model has been hidden from assets</span>
         </div>
         <ParametricViewer3D v-else-if="isAsset('parametric_3d')" :assetData="msg.assetPayload" />
-        <ModelViewerGLB v-else-if="isAsset('mesh_3d')" :assetData="msg.assetPayload" :message="msg" :isResizing="isResizing" @refine="refineModel" />
+        <ModelViewerGLB v-else-if="isAsset('mesh_3d')" :assetData="msg.assetPayload" :message="msg" :isResizing="isResizing" :readOnly="isMeetingClosed" @refine="refineModel" />
 
         <MoodBoardViewer v-if="isAsset('moodboard')" :assetData="msg.assetPayload" />
 

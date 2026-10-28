@@ -23,6 +23,8 @@ const props = defineProps<{
   assetData: any;
   message?: MessageItem;
   isResizing?: boolean;
+  /** Observer, or a session that is not running: viewing only, no Refine */
+  readOnly?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -651,7 +653,7 @@ onUnmounted(() => {
 
         <!-- AI Refine Color Button -->
         <button
-          v-if="assetData?.taskId && !assetData?.isRefined && message"
+          v-if="assetData?.taskId && !assetData?.isRefined && message && !readOnly"
           @click="openRefineModal"
           class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white font-medium text-xs shadow transition cursor-pointer"
         >

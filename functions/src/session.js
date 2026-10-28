@@ -3,10 +3,10 @@ import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 import { getSystemConfig } from './config.js';
 import { createMessage, responseText } from './claude.js';
 import { buildTranscript, PROMPT_VERSION, sessionMessagePrompt } from './prompts.js';
-import { acquireLock, ensureRoomAi, fetchContext, postAiMessage, releaseLock } from './engine.js';
+import { acquireLock, ensureRoomAi, fetchContext, postAiMessage, releaseLock, startPresence } from './engine.js';
 import { writeEvent } from './events.js';
 import { logAiCall } from './log.js';
-import { queueRoomExport } from './drive.js';
+import { cancelPendingExport, queueRoomExport } from './drive.js';
 
 /**
  * Experiment flow of a room (rooms/{id}.session, written only here):
@@ -138,6 +138,31 @@ export async function endSession(roomId, endedBy) {
   return true;
 }
 
+/**
+ * Researcher reopens an ended room: it runs again (no new opening, reminders or time-up beyond what
+ * is still ahead), and the pending upload waits for the next end.
+ */
+export async function reopenSession(roomId, by) {
+  const reopened = await db().runTransaction(async tx => {
+    const snap = await tx.get(roomRef(roomId));
+    const room = snap.data();
+    if (room?.session?.phase !== 'ended') return false;
+    const { endedAt, endedBy, ...rest } = room.session;
+    tx.update(roomRef(roomId), {
+      session: { ...rest, phase: 'running', allOfflineSince: null, reopenedAt: Date.now(), reopenCount: (rest.reopenCount || 0) + 1 },
+      roomStatus: 'active'
+    });
+    return true;
+  });
+  if (!reopened) return false;
+  await cancelPendingExport(roomId);
+  await roomRef(roomId).collection('messages').add({
+    senderUid: 'system', senderName: 'System', senderAvatar: '🔓', type: 'text', content: 'The session has been reopened.', timestamp: Date.now()
+  });
+  await writeEvent(roomId, { kind: 'session_reopened', role: 'system', data: { by } });
+  return true;
+}
+
 /** Each job id is created once, so a reminder or time-up can never be posted twice. */
 async function queueJob(roomId, kind, extra = {}) {
   const id = `${roomId}__${kind}${extra.minutes ? `_${extra.minutes}` : ''}`;
@@ -248,11 +273,14 @@ export async function runSessionJob(job, secrets) {
 
   // Wait briefly for a running mentor check so the two never interleave
   let locked = false;
+  let stopTyping = null;
   for (let i = 0; !locked && i < 10; i++) {
     locked = await acquireLock(roomId);
     if (!locked) await sleep(3000);
   }
   try {
+    // The AI is shown typing while it writes the message
+    stopTyping = startPresence(roomId, 'text');
     if (kind === 'kickoff' && profile.session?.openingText?.trim()) {
       await postAiMessage(roomId, room, profile, { content: profile.session.openingText.trim(), meta: { session: 'opening_text', profileId: profile.id || null, profileVersion: profile.version ?? null } });
     }
@@ -265,6 +293,7 @@ export async function runSessionJob(job, secrets) {
       memory: { aiHistory: [...(roomAi.memory?.aiHistory || []), { at: Date.now(), type: `session_${kind}`, text: out.text.slice(0, 300) }].slice(-20) }
     }, { merge: true });
   } finally {
+    await stopTyping?.();
     if (locked) await releaseLock(roomId);
   }
 }

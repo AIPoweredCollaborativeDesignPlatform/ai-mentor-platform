@@ -75,7 +75,10 @@ export const useRoomStore = defineStore('room', () => {
     if (!authStore.uid) return;
     try {
       await updateDoc(roomDocRef(currentRoom.value.roomId, 'participants', authStore.uid), { displayName: newName, avatar: newAvatar });
-      await messages.postSystemMessage(`${oldName} updated profile to ${newName} ${newAvatar}`, '✏️');
+      // The observing researcher stays invisible: no notice in the chat
+      if (!(isHost.value && currentRoom.value.session)) {
+        await messages.postSystemMessage(`${oldName} updated profile to ${newName} ${newAvatar}`, '✏️');
+      }
     } catch (e) {
       console.error(e);
     }

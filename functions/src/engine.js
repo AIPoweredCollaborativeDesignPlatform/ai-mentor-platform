@@ -69,7 +69,8 @@ export async function fetchContext(roomId) {
   const room = roomSnap.data() || {};
   // In experiment rooms the researcher (host) is an invisible observer: the AI must not address them
   const hidden = room.session ? room.hostUid : null;
-  const participants = Object.fromEntries(partSnap.docs.filter(d => d.id !== hidden).map(d => {
+  // Observers are invisible too
+  const participants = Object.fromEntries(partSnap.docs.filter(d => d.id !== hidden && d.data().status !== 'observer').map(d => {
     const p = d.data();
     return [d.id, { uid: d.id, displayName: p.displayName, isHost: !!p.isHost, status: p.status }];
   }));

@@ -10,7 +10,7 @@ import {
 } from '../utils/aiProfiles';
 import {
   assignRoomProfile, exportRoomNow, getDriveAuthUrl, getDriveStatus, getSystemConfig, listProfiles, listStudyRooms, loadUsage,
-  purgeLegacyRooms, saveProfile, saveSystemConfig, type DriveStatus, type LegacyRoom, type StudyRoom, type UsageRow
+  listObservers, purgeLegacyRooms, saveProfile, saveSystemConfig, setObserver, type DriveStatus, type StudyObserver, type LegacyRoom, type StudyRoom, type UsageRow
 } from '../services/admin';
 import { DEFAULT_CONSENT_TEXT } from '../constants/consent';
 
@@ -36,15 +36,18 @@ const MODEL_OPTIONS = ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5
 
 const authStore = useAuthStore();
 const roomStore = useRoomStore();
-const isAdmin = computed(() => authStore.isGoogleLinked && authStore.email === 'bb900114@gmail.com');
+const isAdmin = computed(() => authStore.isAdmin);
+// Observers only see the rooms tab (status, uploads, replays), without any action buttons
+const canView = computed(() => authStore.isObserver);
 
 const tab = ref<'profiles' | 'rooms' | 'cost' | 'system'>('profiles');
-const tabs = [
+const ALL_TABS = [
   { id: 'profiles', label: 'AI 條件設定檔' },
   { id: 'rooms', label: '房間指派' },
   { id: 'cost', label: '費用估算' },
   { id: 'system', label: '系統設定' }
 ] as const;
+const tabs = computed(() => (isAdmin.value ? ALL_TABS : ALL_TABS.filter(t => t.id === 'rooms')));
 
 const profiles = ref<AiProfile[]>([]);
 const system = ref<Record<string, any>>(structuredClone(SYSTEM_DEFAULTS));
@@ -72,8 +75,36 @@ const loadAll = async () => {
 
 onMounted(async () => {
   await authStore.waitForAuthReady().catch(() => {});
-  if (isAdmin.value) await loadAll();
+  await authStore.waitForRole();
+  if (isAdmin.value) await Promise.all([loadAll(), loadObservers()]);
+  else if (canView.value) {
+    tab.value = 'rooms';
+    await loadAll();
+  }
 });
+
+// ---------- Observers ----------
+const observers = ref<StudyObserver[]>([]);
+const observerEmail = ref('');
+const observerBusy = ref(false);
+const loadObservers = async () => {
+  observers.value = await listObservers().catch(() => []);
+};
+const changeObserver = async (email: string, add: boolean) => {
+  if (!email.trim()) return;
+  if (!add && !window.confirm(`移除觀察員 ${email}？`)) return;
+  observerBusy.value = true;
+  try {
+    const res = await setObserver(email.trim(), add);
+    roomStore.pushToast(add ? '已加入觀察員' : '已移除觀察員', add && !res.applied ? `${res.email} 尚未登入過，第一次登入時生效` : res.email, 'success');
+    observerEmail.value = '';
+    await loadObservers();
+  } catch (e: any) {
+    roomStore.pushToast('操作失敗', e?.message || String(e), 'error');
+  } finally {
+    observerBusy.value = false;
+  }
+};
 
 // ---------- Profiles ----------
 const editing = ref<AiProfile | null>(null);
@@ -304,8 +335,8 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
       </button>
     </header>
 
-    <div v-if="!isAdmin" class="max-w-md mx-auto mt-24 text-center text-sm text-slate-400 px-6">
-      這個頁面只有研究管理者帳號可以使用。請先在首頁用 Google 帳號登入。
+    <div v-if="!canView" class="max-w-md mx-auto mt-24 text-center text-sm text-slate-400 px-6">
+      這個頁面只有研究管理者與觀察員帳號可以使用。請先在首頁用 Google 帳號登入。
     </div>
 
     <main v-else class="max-w-5xl mx-auto p-4 sm:p-6 space-y-5">
@@ -373,7 +404,7 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
             <div v-if="drive?.rootFolderId && drive.rootInConfiguredFolder === false" class="text-amber-300/90">「AI Mentor 研究資料」建在雲端硬碟根目錄（權限不允許直接寫進指定資料夾），請把它拖進研究資料夾；拖過去後上傳照常。</div>
             <a v-if="drive?.rootFolderId" :href="`https://drive.google.com/drive/folders/${drive.rootFolderId}`" target="_blank" rel="noopener" class="text-sky-400 hover:underline">開啟「AI Mentor 研究資料」資料夾</a>
           </div>
-          <button @click="connectDrive" class="px-3 py-1.5 rounded-lg text-xs font-semibold" :class="drive?.status === 'ok' ? 'border border-slate-700 hover:bg-slate-800' : 'bg-sky-600 hover:bg-sky-500'">
+          <button v-if="isAdmin" @click="connectDrive" class="px-3 py-1.5 rounded-lg text-xs font-semibold" :class="drive?.status === 'ok' ? 'border border-slate-700 hover:bg-slate-800' : 'bg-sky-600 hover:bg-sky-500'">
             {{ !drive ? '連接 Google Drive' : drive.status === 'ok' ? '重新連接' : '重新授權' }}
           </button>
         </div>
@@ -398,6 +429,7 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
             </div>
           </div>
           <div class="flex items-center gap-1.5">
+            <template v-if="isAdmin">
             <select v-model="pendingChoice[r.roomId]" :class="select">
               <option value="" disabled>選擇設定檔…</option>
               <option v-for="p in profiles" :key="p.id" :value="p.id">{{ p.name }} v{{ p.version }}</option>
@@ -406,11 +438,12 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
             <button v-if="r.session" @click="uploadNow(r)" :disabled="exporting[r.roomId]" class="px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs disabled:opacity-40">
               {{ exporting[r.roomId] ? '上傳中…' : '上傳 Drive' }}
             </button>
+            </template>
             <router-link v-if="r.session" :to="`/admin/replay/${r.roomId}`" class="px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs">重播</router-link>
           </div>
         </div>
 
-        <div :class="card" class="space-y-2 border-rose-900/50">
+        <div v-if="isAdmin" :class="card" class="space-y-2 border-rose-900/50">
           <div class="flex items-center gap-2">
             <h3 class="text-sm font-semibold text-rose-200">舊站房間</h3>
             <span class="text-[11px] text-slate-500">ai-mentor-web.web.app 建立的房間（沒有 appVersion）</span>
@@ -500,6 +533,20 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
             <label>生圖／張 <input type="number" step="0.001" v-model.number="system.prices.imagePerUnit" class="w-20 bg-slate-950 border border-slate-700 rounded px-2 py-1" /></label>
             <label>3D／個 <input type="number" step="0.01" v-model.number="system.prices.model3DPerUnit" class="w-20 bg-slate-950 border border-slate-700 rounded px-2 py-1" /></label>
           </div>
+        </div>
+        <div class="space-y-2 text-xs">
+          <h3 class="text-sm font-semibold">觀察員</h3>
+          <p class="text-[11px] text-slate-500">用 Google 帳號登入後，可隱形唯讀進入任何實驗房（看得到所有白板，含私人草稿）、看本頁房間狀態與重播；不能改設定檔、Drive 與同意書。也可以選擇以一般參與者身分加入。</p>
+          <div v-for="o in observers" :key="o.email" class="flex items-center gap-2">
+            <span class="font-mono text-slate-300">{{ o.email }}</span>
+            <span class="text-[11px] text-slate-500">{{ fmtTime(o.addedAt) }}</span>
+            <button @click="changeObserver(o.email, false)" :disabled="observerBusy" class="ml-auto px-2 py-1 rounded border border-slate-700 hover:bg-slate-800 text-[11px] disabled:opacity-40">移除</button>
+          </div>
+          <p v-if="!observers.length" class="text-[11px] text-slate-500">尚無觀察員</p>
+          <form @submit.prevent="changeObserver(observerEmail, true)" class="flex items-center gap-2">
+            <input v-model="observerEmail" type="email" placeholder="name@gmail.com" class="flex-1 bg-slate-950 border border-slate-700 rounded px-2 py-1.5" />
+            <button :disabled="observerBusy || !observerEmail.trim()" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-xs font-semibold disabled:opacity-40">加入</button>
+          </form>
         </div>
         <label class="block space-y-1 text-xs">
           <span class="text-sm font-semibold">研究同意書（參加者進房前必須勾選同意；建議用英文）</span>

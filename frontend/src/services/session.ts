@@ -5,16 +5,25 @@ import { functions } from '../firebase/config';
 
 export interface JoinResult {
   status: 'approved' | 'full' | 'ended' | 'not_found' | 'consent_required';
-  role?: 'researcher' | 'participant';
+  role?: 'researcher' | 'participant' | 'observer';
   returning?: boolean;
   online?: number;
   max?: number;
 }
 
-/** `retry` marks the automatic re-tries while a room is full (logged only once). */
-export async function joinStudyRoom(roomId: string, displayName: string, avatar: string, consent: boolean, retry = false): Promise<JoinResult> {
-  const fn = httpsCallable<{ roomId: string; displayName: string; avatar: string; consent: boolean; retry: boolean }, JoinResult>(functions, 'joinStudyRoom');
-  return (await fn({ roomId, displayName, avatar, consent, retry })).data;
+/**
+ * `retry` marks the automatic re-tries while a room is full (logged only once). Observers join
+ * invisibly unless `asParticipant` (then they go through the normal nickname + consent flow).
+ */
+export async function joinStudyRoom(roomId: string, displayName: string, avatar: string, consent: boolean, retry = false, asParticipant = false): Promise<JoinResult> {
+  const fn = httpsCallable<{ roomId: string; displayName: string; avatar: string; consent: boolean; retry: boolean; asParticipant: boolean }, JoinResult>(functions, 'joinStudyRoom');
+  return (await fn({ roomId, displayName, avatar, consent, retry, asParticipant })).data;
+}
+
+/** Room documents are readable by members only; join pages ask the server whether a PIN exists. */
+export async function peekStudyRoom(roomId: string): Promise<{ exists: boolean; roomName?: string; isHost?: boolean }> {
+  const fn = httpsCallable<{ roomId: string }, { exists: boolean; roomName?: string; isHost?: boolean }>(functions, 'peekStudyRoom');
+  return (await fn({ roomId })).data;
 }
 
 export async function reopenStudySession(roomId: string): Promise<boolean> {

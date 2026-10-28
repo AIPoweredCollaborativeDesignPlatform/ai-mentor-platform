@@ -26,7 +26,7 @@ export const DEFAULT_SYSTEM_CONFIG = {
   driveParentFolderId: '1MA33_gQWw-Ky7Aoy-AZfVplv3KFbfuma',
   // Shown before joining a room; each participant's agreement stores a hash of this exact text (consentTexts/{hash}).
   // Placeholder until the IRB-approved wording is entered in /#/admin.
-  consentText: 'This session is part of a research study on collaborative design. Your chat messages, whiteboard activity and interactions in this room (for example opening the whiteboard or switching away from this window) are recorded for research. Please use a nickname, not your real name. Participation is voluntary and you may leave at any time.',
+  consentText: 'This session is part of a research study on collaborative design. Your chat messages, whiteboard activity and interactions in this room (for example opening the whiteboard or switching away from this window) are recorded for research. Researchers can see all of your whiteboards, including private ones you have not shared. Please use a nickname, not your real name. Participation is voluntary and you may leave at any time.',
   // USD, editable from /#/admin for the cost estimator (prices change; verify against vendor pages)
   prices: {
     'claude-haiku-5-5': { inputPerMTok: 0.10, outputPerMTok: 0.50 },

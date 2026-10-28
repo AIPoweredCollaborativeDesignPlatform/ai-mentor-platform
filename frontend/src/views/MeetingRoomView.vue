@@ -23,6 +23,7 @@ import DocumentModal from '../components/DocumentModal.vue';
 import PdfViewerModal from '../components/PdfViewerModal.vue';
 import AlertModal from '../components/AlertModal.vue';
 import WhiteboardBoard from '../components/whiteboard/WhiteboardBoard.vue';
+import LiveBoardViewer from '../components/whiteboard/LiveBoardViewer.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -35,8 +36,11 @@ const pin = roomId.replace('room_', '');
 
 // ---------- Experiment session (functions/src/session.js) ----------
 const session = computed(() => roomStore.currentRoom?.session);
-// The host of a study room is the researcher: an invisible, read-only observer who can only End
+// The host of a study room is the researcher: an invisible, read-only observer who can End / Reopen.
+// Observers (functions/src/roles.js) watch the same way; End / Reopen also for the administrator.
 const isResearcher = computed(() => roomStore.isHost && Boolean(session.value));
+const isObserving = computed(() => isResearcher.value || (roomStore.myStatus === 'observer' && Boolean(session.value)));
+const canControlSession = computed(() => isResearcher.value || authStore.isAdmin);
 const participantCount = computed(() => roomStore.onlineParticipants.length);
 
 /** Why chat and whiteboards are locked for me right now, or null when I can take part. */
@@ -44,7 +48,7 @@ const lockReason = computed(() => {
   const s = session.value;
   if (!s) return roomStore.currentRoom?.roomStatus === 'ended' ? 'This meeting has been closed. Chat is in read-only mode.' : null;
   if (s.phase === 'ended') return 'This session has ended.';
-  if (isResearcher.value) return 'Observer view: read-only.';
+  if (isObserving.value) return 'Observer view: read-only.';
   if (s.phase === 'waiting') return `Waiting for others to join (${participantCount.value}/${s.expected})...`;
   return null;
 });
@@ -85,7 +89,7 @@ watch(() => session.value?.phase, phase => setRecording(phase !== 'ended'));
 
 // ---------- Whiteboard ----------
 const whiteboardRef = ref<WhiteboardHandle | null>(null);
-const wb = useWhiteboardSession(whiteboardRef, () => lockReason.value);
+const wb = useWhiteboardSession(whiteboardRef, () => lockReason.value, () => isObserving.value);
 const { isWhiteboardOpen } = wb;
 const { whiteboardWidth, isResizingWhiteboard, startWhiteboardResize } = useWhiteboardResize(whiteboardRef, isWhiteboardOpen);
 
@@ -96,7 +100,7 @@ const shareWhiteboardExport = (file: File) => composerRef.value?.sendFile(file);
 // Legacy rooms (no session) keep their own "closed by host" banner in the header
 const isMeetingClosed = computed(() => Boolean(lockReason.value));
 const isLegacyClosed = computed(() => !session.value && roomStore.currentRoom?.roomStatus === 'ended');
-const showSessionBar = computed(() => Boolean(session.value) && (isResearcher.value || session.value!.phase !== 'running'));
+const showSessionBar = computed(() => Boolean(session.value) && (isObserving.value || session.value!.phase !== 'running'));
 const drawerTopOffset = computed(() => (isLegacyClosed.value || showSessionBar.value ? '89px' : '56px'));
 const isSettingsOpen = ref(false);
 const isAssetsOpen = ref(false);
@@ -136,7 +140,8 @@ const visibleChatMessages = computed(() => {
     if (m.senderUid === 'system' && SAVE_NOTICES.some(s => m.content.toLowerCase().includes(s))) return false;
     if (m.type === 'whiteboard_state') {
       if (isDuplicateBoardPointer(m, all)) return false;
-      if (m.metadata?.isPrivate && !m.metadata?.wasPublished) return false;
+      // Observers see private drafts too (read-only)
+      if (m.metadata?.isPrivate && !m.metadata?.wasPublished && !isObserving.value) return false;
     }
     return true;
   });
@@ -268,9 +273,9 @@ onMounted(async () => {
   // Also re-checks when the room doc arrives: a host's status is already 'approved' and never changes
   watch(() => [roomStore.myStatus, roomStore.currentRoom?.hostUid] as const, ([status]) => {
     if (!roomStore.currentRoom) return;
-    if (roomStore.isHost || status === 'approved') {
+    if (roomStore.isHost || status === 'approved' || status === 'observer') {
       setRecording(session.value?.phase !== 'ended');
-      if (isVerifyingAccess.value) startResearchLog(roomId, authStore.uid, isResearcher.value ? 'researcher' : 'participant');
+      if (isVerifyingAccess.value) startResearchLog(roomId, authStore.uid, isResearcher.value ? 'researcher' : status === 'observer' ? 'observer' : 'participant');
       isVerifyingAccess.value = false;
       clearTimeout(accessCheckTimer);
       scrollToBottom();
@@ -283,7 +288,7 @@ onMounted(async () => {
   accessCheckTimer = setTimeout(() => {
     if (!isVerifyingAccess.value) return;
     const me = roomStore.currentRoom?.participants?.[authStore.uid];
-    if (!roomStore.isHost && me?.status !== 'approved') backToWaitingRoom();
+    if (!roomStore.isHost && me?.status !== 'approved' && me?.status !== 'observer') backToWaitingRoom();
     else isVerifyingAccess.value = false;
   }, 6000);
 });
@@ -332,7 +337,7 @@ onUnmounted(() => {
       class="h-[33px] border-b px-3 sm:px-4 text-xs flex items-center gap-3 shrink-0 z-40 relative"
       :class="session!.phase === 'ended' ? 'bg-amber-950/70 border-amber-500/30 text-amber-200' : 'bg-slate-900 border-slate-800 text-slate-300'"
     >
-      <template v-if="isResearcher">
+      <template v-if="isObserving">
         <span class="inline-flex items-center gap-1 text-violet-300 font-medium"><Eye class="w-3.5 h-3.5" /> Observer</span>
         <span class="inline-flex items-center gap-1"><Users class="w-3.5 h-3.5" /> {{ participantCount }} online<template v-if="session!.maxOnline"> / max {{ session!.maxOnline }}</template></span>
         <span v-if="session!.phase === 'waiting'" class="text-slate-400 truncate">Starts at {{ session!.expected }} participants</span>
@@ -341,7 +346,7 @@ onUnmounted(() => {
         </span>
         <span v-else>Session ended</span>
         <button
-          v-if="session!.phase === 'ended'"
+          v-if="canControlSession && session!.phase === 'ended'"
           @click="reopen"
           :disabled="isReopening"
           class="ml-auto inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-[11px] font-semibold transition disabled:opacity-50"
@@ -349,7 +354,7 @@ onUnmounted(() => {
           {{ isReopening ? 'Reopening...' : 'Reopen' }}
         </button>
         <button
-          v-if="session!.phase !== 'ended'"
+          v-if="canControlSession && session!.phase !== 'ended'"
           @click="showEndConfirm = true"
           class="ml-auto inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-700 hover:bg-rose-600 text-white text-[11px] font-semibold transition"
         >
@@ -428,8 +433,16 @@ onUnmounted(() => {
         :class="{ 'transition-none': isResizingWhiteboard }"
         :style="whiteboardWidth ? { width: `${whiteboardWidth}px` } : { width: '68%' }"
       >
+        <LiveBoardViewer
+          v-if="wb.activeBoardId.value && isObserving"
+          ref="whiteboardRef"
+          :key="`live_${wb.whiteboardSessionKey.value}`"
+          :roomId="roomId"
+          :boardId="wb.activeBoardId.value"
+          @close="wb.closeWhiteboard"
+        />
         <WhiteboardBoard
-          v-if="wb.activeBoardId.value"
+          v-else-if="wb.activeBoardId.value"
           ref="whiteboardRef"
           :key="wb.whiteboardSessionKey.value"
           :roomId="roomId"

@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
-import { ref } from 'vue';
-import { auth, db } from '../firebase/config';
-import { updateDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { computed, ref } from 'vue';
+import { httpsCallable } from 'firebase/functions';
+import { auth, functions } from '../firebase/config';
 import {
   signInAnonymously,
   signInWithPopup,
@@ -39,6 +39,27 @@ export const useAuthStore = defineStore('auth', () => {
   const email = ref(localStorage.getItem('ai_mentor_email') || '');
   const isGoogleLinked = ref(localStorage.getItem('ai_mentor_google_linked') === 'true');
   const firebaseUser = ref<User | null>(null);
+
+  // Study roles (functions/src/roles.js): the administrator is a fixed account, observers carry the
+  // custom claim role: 'observer'. Rules enforce access; these only shape the UI.
+  const ADMIN_EMAIL = 'bb900114@gmail.com';
+  const roleClaim = ref<string | null>(null);
+  const isAdmin = computed(() => isGoogleLinked.value && email.value === ADMIN_EMAIL);
+  const isObserver = computed(() => isAdmin.value || roleClaim.value === 'observer');
+
+  // Pages that depend on the role (join choice, admin) await this; it never blocks sign-in itself
+  let rolePromise: Promise<void> = Promise.resolve();
+  const waitForRole = () => rolePromise;
+  const refreshRole = (user: User) => (rolePromise = loadRole(user));
+  const loadRole = async (user: User) => {
+    try {
+      const { data } = await httpsCallable<void, { role: string | null; changed: boolean }>(functions, 'syncMyRole')();
+      const token = await user.getIdTokenResult(data.changed);
+      roleClaim.value = (token.claims.role as string) || null;
+    } catch (e) {
+      console.warn('[Auth] Role check failed:', e);
+    }
+  };
   const isAuthReady = ref(!auth);
   let authReadyResolve: ((user: User | null) => void) | null = null;
   const authReadyPromise = new Promise<User | null>((resolve) => {
@@ -79,6 +100,7 @@ export const useAuthStore = defineStore('auth', () => {
         localStorage.setItem('ai_mentor_uid', user.uid);
         if (user.isAnonymous) {
           isGoogleLinked.value = false;
+          roleClaim.value = null;
           localStorage.removeItem('ai_mentor_google_linked');
         } else {
           // Real Google account
@@ -88,6 +110,7 @@ export const useAuthStore = defineStore('auth', () => {
           localStorage.setItem('ai_mentor_google_linked', 'true');
           localStorage.setItem('ai_mentor_email', email.value);
           localStorage.setItem('ai_mentor_name', displayName.value);
+          refreshRole(user);
         }
       } else if (localStorage.getItem('ai_mentor_google_linked') !== 'true') {
         // First-time guest visit: sign in anonymously so Firestore security rules pass immediately
@@ -138,6 +161,8 @@ export const useAuthStore = defineStore('auth', () => {
     const previousAnonUid = (auth.currentUser && auth.currentUser.isAnonymous)
       ? auth.currentUser.uid
       : null;
+    // Proves ownership of the guest account to the server, which moves its rooms after sign-in
+    const anonIdToken = previousAnonUid ? await auth.currentUser!.getIdToken().catch(() => null) : null;
 
     let user: User | null = null;
     const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
@@ -207,20 +232,17 @@ export const useAuthStore = defineStore('auth', () => {
         console.warn('[Auth] Error migrating localStorage rooms:', err);
       }
 
-      // 2. Migrate Firestore rooms where host was previousAnonUid
-      if (db) {
+      // 2. Rooms hosted by the guest account move to the Google account (server-side: rules no longer let browsers change hostUid)
+      if (anonIdToken) {
         try {
-          const roomsQuery = query(collection(db, 'rooms'), where('hostUid', '==', previousAnonUid));
-          const snap = await getDocs(roomsQuery);
-          for (const docSnap of snap.docs) {
-            await updateDoc(docSnap.ref, { hostUid: user.uid });
-          }
+          await httpsCallable<{ anonIdToken: string }, { moved: number }>(functions, 'claimGuestRooms')({ anonIdToken });
         } catch (err) {
-          console.warn('[Auth] Error migrating Firestore rooms:', err);
+          console.warn('[Auth] Error moving guest rooms:', err);
         }
       }
     }
 
+    await refreshRole(user);
     return { success: true, user, previousAnonUid };
   };
 
@@ -235,6 +257,7 @@ export const useAuthStore = defineStore('auth', () => {
     }
     isGoogleLinked.value = false;
     email.value = '';
+    roleClaim.value = null;
     localStorage.removeItem('ai_mentor_google_linked');
     localStorage.removeItem('ai_mentor_email');
     // Re-init anonymous guest
@@ -250,6 +273,9 @@ export const useAuthStore = defineStore('auth', () => {
     avatar,
     email,
     isGoogleLinked,
+    isAdmin,
+    isObserver,
+    waitForRole,
     firebaseUser,
     updateProfile,
     upgradeWithGoogle,

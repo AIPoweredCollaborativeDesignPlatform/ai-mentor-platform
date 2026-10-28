@@ -7,7 +7,7 @@ import { db } from '../firebase/config';
  * whenever the page is hidden, so logging never slows the UI. Admin-read only (firestore.rules).
  */
 
-export type ResearchRole = 'participant' | 'researcher';
+export type ResearchRole = 'participant' | 'researcher' | 'observer';
 
 interface PendingEvent {
   at: number;

@@ -16,11 +16,17 @@ service cloud.firestore {
         get(/databases/$(database)/documents/rooms/$(roomId)/participants/$(request.auth.uid)).data.status == "approved";
     }
 
-    // Study administrator (bootstrap account; observers are added in a later phase)
+    // Study administrator (bootstrap account, matches functions/src/roles.js)
     function isAdmin() {
       return isAuthenticated()
         && request.auth.token.email == 'bb900114@gmail.com'
         && request.auth.token.email_verified == true;
+    }
+
+    // Observers (custom claim set by functions/src/roles.js) and the administrator: read-only access
+    // to every study room, board, event log, upload status and AI log
+    function isObserver() {
+      return isAdmin() || (isAuthenticated() && request.auth.token.role == 'observer');
     }
 
     // System-wide AI settings (models, 3D engine). API keys are NOT stored here; they live in Cloud Functions secrets.
@@ -31,32 +37,34 @@ service cloud.firestore {
 
     // Experiment condition profiles (AI name, persona, mode, timing, modules) and their version history
     match /aiProfiles/{profileId} {
-      allow read, write: if isAdmin();
+      allow read: if isObserver();
+      allow write: if isAdmin();
       match /versions/{version} {
-        allow read, write: if isAdmin();
+        allow read: if isObserver();
+        allow write: if isAdmin();
       }
     }
 
     // Per-room frozen profile, trigger state and long-term AI memory: written only by Cloud Functions
     match /roomAi/{roomId} {
-      allow read: if isAdmin();
+      allow read: if isObserver();
       allow write: if false;
     }
 
     // Research log of every AI decision: written only by Cloud Functions
     match /aiLogs/{logId} {
-      allow read: if isAdmin();
+      allow read: if isObserver();
       allow write: if false;
     }
 
     // Google Drive export status (functions/src/drive.js); the OAuth token itself is in privateConfig,
     // which has no rule and is therefore unreachable from browsers
     match /driveStatus/{docId} {
-      allow read: if isAdmin();
+      allow read: if isObserver();
       allow write: if false;
     }
     match /roomExports/{roomId} {
-      allow read: if isAdmin();
+      allow read: if isObserver();
       allow write: if false;
     }
 
@@ -67,22 +75,50 @@ service cloud.firestore {
       }
     }
 
+
     match /rooms/{roomId} {
-      allow create: if isAuthenticated() && !('session' in request.resource.data);
-      allow read: if isAuthenticated();
-      // The experiment flow (session) is written only by Cloud Functions (functions/src/session.js)
-      allow update: if isAuthenticated() &&
-        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['session']);
+      // Fields every approved participant may change (activity, AI abort, whiteboard bookkeeping)
+      function participantFields() {
+        return ['lastActive', 'lastMessage', 'assetsCount', 'whiteboardMemories', 'aiAbortAt', 'aiActiveTask',
+          'whiteboardActive', 'whiteboardHostUid', 'whiteboardHostName', 'whiteboardState', 'whiteboardThumbnail', 'updatedAt'];
+      }
+      // ...and the room's host additionally (session, ai, hostUid and observerUids are written only by Cloud Functions)
+      function hostFields() {
+        return participantFields().concat(['roomName', 'roomEmoji', 'mentorConfig', 'roomStatus', 'deletedAt', 'language']);
+      }
+      function changedKeys() {
+        return request.resource.data.diff(resource.data).affectedKeys();
+      }
+
+      allow create: if isAuthenticated() && request.resource.data.hostUid == request.auth.uid &&
+        !request.resource.data.keys().hasAny(['session', 'ai', 'observerUids']);
+      // A missing doc is readable so the browser can pick a free PIN; join pages use peekStudyRoom
+      allow read: if resource == null || isObserver() || resource.data.hostUid == request.auth.uid ||
+        request.auth.uid in resource.data.get('participantUids', []);
+      allow update: if isAuthenticated() && (
+        (resource.data.hostUid == request.auth.uid && changedKeys().hasOnly(hostFields())) ||
+        (isApprovedParticipant(roomId) && changedKeys().hasOnly(participantFields())) ||
+        // Leaving a room for good: remove only yourself from participantUids
+        (changedKeys().hasOnly(['participantUids']) &&
+          request.resource.data.participantUids.toSet() == resource.data.get('participantUids', []).toSet().difference([request.auth.uid].toSet()))
+      );
       allow delete: if isRoomHost(roomId);
 
+      function myStatus() {
+        return get(/databases/$(database)/documents/rooms/$(roomId)/participants/$(request.auth.uid)).data.status;
+      }
+      function isMember() {
+        return isApprovedParticipant(roomId) || isRoomHost(roomId);
+      }
+
       match /participants/{participantId} {
-        // Participants are approved by the joinStudyRoom function; a browser may only create the
-        // host's own record or a pending request (legacy site flow)
+        // Participants and observers are added by the joinStudyRoom function; a browser may only create
+        // the host's own record or a pending request (legacy site flow)
         allow create: if isAuthenticated() && request.auth.uid == participantId &&
           (isRoomHost(roomId) || request.resource.data.status == 'pending');
 
-        allow read: if isAuthenticated() && 
-          (isRoomHost(roomId) || request.auth.uid == participantId || isApprovedParticipant(roomId));
+        allow read: if isAuthenticated() &&
+          (isRoomHost(roomId) || request.auth.uid == participantId || isApprovedParticipant(roomId) || isObserver());
 
         // Own record: presence, name, avatar; never self-approval or the consent record
         allow update: if isRoomHost(roomId) || (isAuthenticated() && request.auth.uid == participantId &&
@@ -91,37 +127,39 @@ service cloud.firestore {
         allow delete: if isRoomHost(roomId) || (isAuthenticated() && request.auth.uid == participantId);
       }
 
+      // Typing indicators: own document, or clearing the AI's after aborting it
       match /typing/{typingId} {
-        allow read: if isAuthenticated();
-        allow create, update, delete: if isAuthenticated();
+        allow read: if isMember() || isObserver();
+        allow create, update, delete: if isMember() && (typingId == request.auth.uid || typingId == 'ai_mentor');
       }
 
+      // Legacy whiteboard cursors (old site)
       match /cursors/{cursorId} {
-        allow read, write: if isAuthenticated();
+        allow read, write: if isMember();
       }
 
       // Whiteboard v2: objects and presence of the board whose chat card is messages/{boardId}.
-      // Public boards are open to every member; private boards only to their creator.
+      // Public boards are open to every member; private boards only to their creator. Observers read all.
       function canUseBoard(boardId) {
         let card = get(/databases/$(database)/documents/rooms/$(roomId)/messages/$(boardId)).data;
-        return (isApprovedParticipant(roomId) || isRoomHost(roomId)) &&
+        return isMember() &&
           (card.metadata.isPrivate == false || card.metadata.creatorUid == request.auth.uid);
       }
 
       match /boards/{boardId}/{document=**} {
-        allow read: if canUseBoard(boardId) || isAdmin();
+        allow read: if isObserver() || canUseBoard(boardId);
         allow write: if canUseBoard(boardId);
       }
 
-      // Research event log: browsers append their own events; only the study administrator reads
+      // Research event log: browsers append their own events (observers included); observers read
       match /events/{eventId} {
-        allow create: if (isApprovedParticipant(roomId) || isRoomHost(roomId)) &&
+        allow create: if (isMember() || (isObserver() && myStatus() == 'observer')) &&
           request.resource.data.uid == request.auth.uid && request.resource.data.source == 'client';
-        allow read: if isAdmin();
+        allow read: if isObserver();
       }
 
       match /messages/{messageId} {
-        allow read: if isApprovedParticipant(roomId) || isRoomHost(roomId);
+        allow read: if isMember() || isObserver();
         // Participants post as themselves (or 'system'/'ai_mentor' notices); the researcher (host)
         // is a read-only observer and may only post system notices.
         allow create: if (isRoomHost(roomId) && request.resource.data.senderUid == 'system') ||
@@ -129,13 +167,13 @@ service cloud.firestore {
           (request.resource.data.senderUid == request.auth.uid ||
            request.resource.data.senderUid == 'system' ||
            request.resource.data.senderUid == 'ai_mentor'));
-        allow update: if isRoomHost(roomId) || 
+        allow update: if isRoomHost(roomId) ||
           (isAuthenticated() && resource.data.senderUid == request.auth.uid) ||
           (isApprovedParticipant(roomId) && (
             resource.data.type == 'whiteboard_state' ||
             request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions', 'pollVotes', 'actionOptions'])
           ));
-        allow delete: if isRoomHost(roomId) || 
+        allow delete: if isRoomHost(roomId) ||
           (isAuthenticated() && resource.data.senderUid == request.auth.uid);
       }
     }

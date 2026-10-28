@@ -24,7 +24,7 @@ npm run deploy:dry         # 只 build 驗證，不部署、不改版本
 - 存檔點：git tag `savepoint-0`（改版前的原始碼基準）；當時線上版的實際檔案備份在 `../_savepoints/savepoint-0/live-site/`。
 
 - 沒有 lint、沒有任何自動化測試。驗證方式＝`npm run build` 零錯誤＋用 2~3 個瀏覽器（含無痕）實測入會審核、AI 回覆、白板分享／關閉／踢出。
-- Firebase 專案：`ai-mentor-web`；新站 https://ai-mentor-design.web.app（本 repo 部署目標）；舊站 https://ai-mentor-web.web.app（v5.8.0，不動）
+- Firebase 專案：`ai-mentor-web`；本 repo 同時部署到 https://ai-mentor-design.web.app 與 https://ai-mentor-web.web.app（P5 起舊站 v5.8.0 被覆蓋，firebase.json `hosting` 為兩個 site 的陣列）
 
 ## 架構重點
 
@@ -32,7 +32,9 @@ npm run deploy:dry         # 只 build 驗證，不部署、不改版本
   - `onRoomMessage`（messages 觸發）→ `src/engine.js` 的 `handleNewMessage`：每房一個決策者，計數存 `roomAi/{roomId}.state`；@mention 立即回覆，否則在停頓／達最多則數／停滯時檢查；非 proactive 或冷卻中的檢查以「影子判斷」只寫研究紀錄。Claude 呼叫在 `src/mentor.js`、`src/claude.js`，提示詞在 `src/prompts.js`（`PROMPT_VERSION`），呼叫紀錄 `src/log.js`。
   - 其他 callable：`mentorRespond`（重試）、`assignRoomProfile`、`whiteboardVision`、`generateSvg`／`sketchToSvg`、`generateModel3D`／`refineModel3D`（`src/mesh3d.js`，結果存 Storage）、`proxyGlb`（Hosting rewrite `/api/proxy`，繞過 GLB CORS）。
 - **實驗條件設定檔**（`src/profiles.js`）：`aiProfiles/{id}` 由 `/#/admin`（`views/AdminView.vue`、`services/admin.ts`）編輯並版本化；指派時凍結快照到 `roomAi/{roomId}.profile`，之後修改不影響該房。`mode` = `none | reactive | proactive`；`none` 時前端完全隱藏 AI。`roomAi/*` 僅伺服器/管理者可讀，參與者只看 `rooms/{id}.ai`（`publicAiView`）。系統設定在 `src/config.js`。
-- 新網站 Hosting site 為 `ai-mentor-design`（firebase.json `hosting.site`），與舊站 `ai-mentor-web` 共用同一 Firebase 專案的 Firestore／Storage／Functions，改 rules 或 functions 會同時影響舊站。
+- **角色**（`functions/src/roles.js`）：管理者＝固定帳號 bb900114@gmail.com；觀察員＝後台「系統設定」加入的 email，custom claim `role: 'observer'`（名單在 `roles/current`，僅伺服器）。瀏覽器登入後呼叫 `syncMyRole` 對齊 claim（`authStore.isAdmin／isObserver／waitForRole()`）。rules 的 `isObserver()`（含管理者）可讀所有房間、白板（含私人）、事件、上傳狀態、AI 紀錄。
+  - 觀察員進房（`joinStudyRoom`）：participants 文件 `status: 'observer'`、`rooms.observerUids`；隱形、不計人數、唯讀，白板用 `LiveBoardViewer`（只聽不寫 presence）；匯出代號 O1…、事件 `role: observer`。加入頁可選「以參與者身分加入」，在該房參加過就一直是參與者。建房者在自己房間永遠是研究者 R。End／Reopen：研究者與管理者。
+  - 房間文件只有成員／觀察員能讀（加入頁用 `peekStudyRoom`）；`session`、`ai`、`hostUid`、`observerUids` 只有 Functions 能寫；訪客登入 Google 後由 `claimGuestRooms`（驗證匿名 ID token）轉移 hostUid。參與者可改欄位見 rules `participantFields()`，前端新增寫入 rooms 的欄位時要一起改。
 - **Room store 是門面**：`stores/room.ts` 只組合 `stores/room/{session,messages,whiteboard,mentor}.ts`，元件一律透過 `useRoomStore()` 使用；`MeetingRoomView.vue` 只做編排，UI 拆在 `components/room/`，白板開關/私人公開狀態機在 `composables/useWhiteboardSession.ts`。
 - AI 訊息以 `senderUid: 'ai_mentor'`／`ai_mentor_3d`／`system` 寫回 messages（engine 會忽略這些以免自我觸發）。`stores/room/mentor.ts` 只負責前端顯示與重試，不做觸發判斷。
 - **路由為 Hash 模式**（`/#/room/room_123456`）；Room ID＝`room_${6位數PIN}`。
@@ -50,7 +52,7 @@ npm run deploy:dry         # 只 build 驗證，不部署、不改版本
 4. `STICKY_NOTE_CONST_SIZE`（180）只能當初始尺寸，不能放進 `Math.max` 當下限。
 5. Fabric v7 `enlivenObjects` 後圖片非同步載入，要等 `load` 再 `requestRenderAll()`。
 6. `whiteboardState` 存在 room doc 內，受 Firestore 1 MiB 上限限制。
-7. 修改 `firestore.rules` 時注意：rooms 目前任何登入者可 update（P5 收緊）；HANDOVER_LOG §12 的金鑰外洩問題已因 AI 移到 Functions 而解除。
+7. 修改 `firestore.rules` 時注意：rooms 的 update 依欄位白名單（`participantFields()`／`hostFields()`）；前端寫入新的 room 欄位前要先加進白名單，否則會 permission-denied。HANDOVER_LOG §12 的金鑰外洩問題已因 AI 移到 Functions 而解除。
 8. `onRoomMessage` 會等待停頓／停滯（timeout 540s、concurrency 80），改 engine 時要保持 `lockUntil` 鎖與冪等，避免同房重複回覆。
 
 ## 專案慣例

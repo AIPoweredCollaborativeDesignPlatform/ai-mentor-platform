@@ -14,7 +14,7 @@ import { db } from '../../firebase/config';
 import { currentLocale } from '../../i18n';
 import type { MessageItem, Participant, ParticipantStatus, RoomData, TypingUser } from '../../types';
 import { roomCollection, roomDocRef, roomRef, type RoomContext } from './context';
-import { joinStudyRoom } from '../../services/session';
+import { joinStudyRoom, peekStudyRoom } from '../../services/session';
 
 const HEARTBEAT_MS = 10000;
 const PRESENCE_SWEEP_MS = 5000;
@@ -71,22 +71,15 @@ export function useRoomSession(ctx: RoomContext) {
     currentRoom.value = null;
   };
 
-  const checkRoomExists = async (pin: string): Promise<{ exists: boolean; roomName?: string }> => {
-    // Without a ready auth token the rules return permission-denied, which looks like "room not found"
+  const checkRoomExists = async (pin: string): Promise<{ exists: boolean; roomName?: string; isHost?: boolean }> => {
+    // Without a ready auth token the call is rejected, which would look like "room not found"
     await authStore.waitForAuthReady().catch(() => {});
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        const snap = await getDoc(roomRef(`room_${pin}`));
-        if (snap.exists()) {
-          const data = snap.data() as RoomData;
-          return (data as any).deletedAt ? { exists: false } : { exists: true, roomName: data.roomName };
-        }
-        // Missing doc: retry once quickly in case the token handshake was still in flight
-        if (attempt >= 2) break;
-        await sleep(300);
+        return await peekStudyRoom(`room_${pin}`);
       } catch (e: any) {
         console.warn(`checkRoomExists attempt ${attempt} failed:`, e?.code || e);
-        if (attempt < 3) await sleep(attempt * 350);
+        if (attempt < 3) await sleep(attempt * 500);
       }
     }
     return { exists: false };
@@ -160,8 +153,8 @@ export function useRoomSession(ctx: RoomContext) {
         snapshot.docChanges().forEach(change => {
           if (change.type === 'removed') return;
           const p = change.doc.data() as Participant;
-          // The researcher (host) is invisible to everyone in the room
-          if (p.uid === authStore.uid || p.status === 'pending' || p.uid === currentRoom.value?.hostUid) return;
+          // The researcher (host) and observers are invisible to everyone in the room
+          if (p.uid === authStore.uid || p.status === 'pending' || p.status === 'observer' || p.uid === currentRoom.value?.hostUid) return;
           const old = oldParts[p.uid];
           if (old) {
             if (!old.isOnline && p.isOnline) pushToast('Participant Joined', `${p.displayName} is back online`, 'info');
@@ -366,12 +359,12 @@ export function useRoomSession(ctx: RoomContext) {
    * Join through the server (functions/src/session.js): it checks consent and the online limit and
    * approves directly. Returning members always get back in. The researcher (host) joins the same way.
    */
-  const joinRoom = async (pin: string, displayName: string, avatar: string, consent: boolean, retry = false) => {
+  const joinRoom = async (pin: string, displayName: string, avatar: string, consent: boolean, retry = false, asParticipant = false) => {
     await authStore.waitForAuthReady().catch(() => {});
     const roomId = `room_${pin}`;
-    const result = await joinStudyRoom(roomId, displayName, avatar, consent, retry);
+    const result = await joinStudyRoom(roomId, displayName, avatar, consent, retry, asParticipant);
     if (result.status === 'approved') {
-      myStatus.value = 'approved';
+      myStatus.value = result.role === 'observer' ? 'observer' : 'approved';
       upsertMyRoomIndex(roomId, {
         roomId,
         pin,
@@ -419,30 +412,6 @@ export function useRoomSession(ctx: RoomContext) {
     await updateDoc(roomRef(currentRoom.value!.roomId), { mentorConfig: mentorStore.config }).catch(console.warn);
   };
 
-  const transferHostOwnership = async (oldUid: string, newUid: string) => {
-    if (!currentRoom.value) return;
-    const roomId = currentRoom.value.roomId;
-    const newHost: Participant = {
-      uid: newUid,
-      displayName: authStore.displayName,
-      avatar: authStore.avatar,
-      status: 'approved',
-      isHost: true,
-      isOnline: true,
-      joinedAt: Date.now()
-    };
-    currentRoom.value.hostUid = newUid;
-    currentRoom.value.participants[newUid] = newHost;
-    delete currentRoom.value.participants[oldUid];
-    try {
-      await updateDoc(roomRef(roomId), { hostUid: newUid });
-      await setDoc(roomDocRef(roomId, 'participants', newUid), newHost);
-      await deleteDoc(roomDocRef(roomId, 'participants', oldUid)).catch(() => {});
-    } catch (e) {
-      console.warn('[Host Transfer] failed:', e);
-    }
-  };
-
   // ---------- Self ----------
   // Goes offline but stays a member of the room
   const leaveRoom = async () => {
@@ -475,7 +444,6 @@ export function useRoomSession(ctx: RoomContext) {
     muteParticipant,
     kickParticipant,
     syncMentorConfig,
-    transferHostOwnership,
     leaveRoom,
     updateParticipantWhiteboard,
     upsertMyRoomIndex

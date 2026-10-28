@@ -64,7 +64,7 @@ const handleSaveProfile = () => {
 };
 
 // The study administrator picks the experiment condition when creating a room (others get the default)
-const isStudyAdmin = computed(() => authStore.isGoogleLinked && authStore.email === 'bb900114@gmail.com');
+const isStudyAdmin = computed(() => authStore.isAdmin);
 const profiles = ref<AiProfile[]>([]);
 const selectedProfileId = ref('');
 onMounted(async () => {

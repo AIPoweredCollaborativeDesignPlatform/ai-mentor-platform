@@ -14,7 +14,8 @@ import { formatMessageText } from '../utils/chat';
 const route = useRoute();
 const authStore = useAuthStore();
 const roomId = route.params.roomId as string;
-const isAdmin = computed(() => authStore.isGoogleLinked && authStore.email === 'bb900114@gmail.com');
+// Administrator and observers (firestore.rules isObserver())
+const isAdmin = computed(() => authStore.isObserver);
 
 const events = ref<ResearchEvent[]>([]);
 const loading = ref(true);
@@ -31,7 +32,7 @@ const who = (e: { uid: string | null; role: string }) => {
   return m ? m.alias : e.role === 'unknown' ? '—' : e.role;
 };
 
-// Option: leave the observing researcher's own actions out of the timeline
+// Option: leave the researcher's and observers' own actions out of the timeline
 const hideObserver = ref(true);
 const idx = computed(() => indexAt(events.value, t.value));
 const state = computed(() => stateAt(events.value, idx.value));
@@ -107,7 +108,7 @@ onUnmounted(() => clearInterval(timer));
 // ---------- Event list ----------
 const groups = ref<Record<string, boolean>>(Object.fromEntries(KIND_GROUPS.map(g => [g.id, g.id !== 'board'])));
 const listed = computed(() => events.value.map((e, i) => ({ e, i }))
-  .filter(({ e }) => groups.value[groupOf(e.kind)] && !(hideObserver.value && e.role === 'researcher')));
+  .filter(({ e }) => groups.value[groupOf(e.kind)] && !(hideObserver.value && (e.role === 'researcher' || e.role === 'observer'))));
 const jumpTo = (e: ResearchEvent) => (t.value = e.at);
 const listRef = ref<HTMLElement | null>(null);
 const followTimeline = ref(true);
@@ -137,6 +138,7 @@ const ASSET_LABELS: Record<string, string> = {
 const ROLE_CLASS: Record<string, string> = {
   participant: 'text-sky-300',
   researcher: 'text-violet-300',
+  observer: 'text-violet-300',
   ai: 'text-amber-300',
   system: 'text-slate-400',
   unknown: 'text-slate-500'
@@ -144,6 +146,7 @@ const ROLE_CLASS: Record<string, string> = {
 
 onMounted(async () => {
   await authStore.waitForAuthReady().catch(() => {});
+  await authStore.waitForRole();
   if (!isAdmin.value) {
     loading.value = false;
     return;
@@ -172,7 +175,7 @@ onMounted(async () => {
       </div>
     </header>
 
-    <div v-if="!isAdmin && !loading" class="text-center text-sm text-slate-400 mt-24">需要研究管理者帳號。</div>
+    <div v-if="!isAdmin && !loading" class="text-center text-sm text-slate-400 mt-24">需要研究管理者或觀察員帳號。</div>
     <div v-else-if="loading" class="flex items-center justify-center gap-2 text-xs text-slate-400 mt-24"><Loader2 class="w-4 h-4 animate-spin" />讀取事件…</div>
     <div v-else-if="error" class="text-center text-sm text-rose-300 mt-24">{{ error }}</div>
     <div v-else-if="!events.length" class="text-center text-sm text-slate-400 mt-24">這個房間沒有事件紀錄（P4a 之前建立的房間不會有）。</div>

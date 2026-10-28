@@ -20,7 +20,12 @@ const newBoardId = () => `wb_${Date.now().toString(36)}_${Math.random().toString
  *  - public boards are collaborative for everyone; closing a board never closes it for anyone else
  *  - when a creator makes a board private, everyone else viewing it is ejected
  */
-export function useWhiteboardSession(whiteboardRef: Ref<WhiteboardHandle | null>, lockReason: () => string | null = () => null) {
+export function useWhiteboardSession(
+  whiteboardRef: Ref<WhiteboardHandle | null>,
+  lockReason: () => string | null = () => null,
+  /** Researcher or observer: any board opens read-only (LiveBoardViewer), private drafts included */
+  observing: () => boolean = () => false
+) {
   const authStore = useAuthStore();
   const roomStore = useRoomStore();
 
@@ -67,7 +72,12 @@ export function useWhiteboardSession(whiteboardRef: Ref<WhiteboardHandle | null>
   };
 
   const openWhiteboardAsset = async (msg: MessageItem) => {
-    if (msg.type !== 'whiteboard_state' || blockedByLock()) return;
+    if (msg.type !== 'whiteboard_state') return;
+    if (observing()) {
+      if (activeBoardId.value !== msg.id || !isWhiteboardOpen.value) open(msg.id);
+      return;
+    }
+    if (blockedByLock()) return;
     if (msg.metadata?.isPrivate && !isOwnBoard(msg, authStore.uid)) {
       roomStore.pushToast('Access Restricted', 'This whiteboard is set to private by its creator.', 'warning');
       return;
@@ -82,7 +92,7 @@ export function useWhiteboardSession(whiteboardRef: Ref<WhiteboardHandle | null>
 
   // Session ended (or not yet running) while a board is open → close it
   watch(lockReason, reason => {
-    if (reason && isWhiteboardOpen.value) {
+    if (reason && isWhiteboardOpen.value && !observing()) {
       whiteboardRef.value?.flush?.();
       closeWhiteboard();
     }
@@ -91,14 +101,16 @@ export function useWhiteboardSession(whiteboardRef: Ref<WhiteboardHandle | null>
   // Made private by its creator while I am viewing it → leave
   watch(() => findMessage(activeBoardId.value)?.metadata?.isPrivate, isPrivate => {
     const msg = findMessage(activeBoardId.value);
-    if (isPrivate && msg && !isOwnBoard(msg, authStore.uid) && isWhiteboardOpen.value) {
+    if (isPrivate && msg && !isOwnBoard(msg, authStore.uid) && isWhiteboardOpen.value && !observing()) {
       closeWhiteboard();
       roomStore.pushToast('Board Made Private', 'The creator made this whiteboard private.', 'info');
     }
   });
 
   // Mirror which public board I am on, so others can see viewer avatars on it
+  // (observers stay invisible: never mirrored)
   watch([isWhiteboardOpen, activeBoardId, () => findMessage(activeBoardId.value)?.metadata?.isPrivate], ([isOpen, id, isPrivate]) => {
+    if (observing()) return;
     roomStore.updateParticipantWhiteboard(isOpen && id && isPrivate === false ? id : null);
   }, { immediate: true });
 

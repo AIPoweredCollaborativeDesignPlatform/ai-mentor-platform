@@ -40,7 +40,7 @@ const consentHash = text => createHash('sha256').update(text || '').digest('hex'
  * Join without host approval. New participants must accept the consent text and fit under the
  * room's simultaneous-online limit; people who were already in the room always get back in.
  */
-export async function joinRoom({ roomId, uid, displayName, avatar, consent, retry = false }) {
+export async function joinRoom({ roomId, uid, displayName, avatar, consent, retry = false, observer = false, asParticipant = false }) {
   const sys = await getSystemConfig();
   const hash = consentHash(sys.consentText);
   const now = Date.now();
@@ -56,10 +56,17 @@ export async function joinRoom({ roomId, uid, displayName, avatar, consent, retr
       tx.set(partRef, { uid, status: 'approved', isHost: true, isOnline: true, lastSeen: now }, { merge: true });
       return { status: 'approved', role: 'researcher' };
     }
-    if (room.session?.phase === 'ended') return { status: 'ended' };
 
     const mine = await tx.get(partRef);
     const returning = mine.exists && mine.data().status === 'approved' && Boolean(mine.data().consent);
+    // Observers (and the administrator in rooms they did not create) watch invisibly unless they chose
+    // to join as a participant; once someone took part in a room they stay a participant there
+    if (observer && !asParticipant && !returning) {
+      tx.set(partRef, { uid, displayName: 'Observer', avatar: '👁️', status: 'observer', isHost: false, isOnline: true, lastSeen: now }, { merge: true });
+      tx.update(roomRef(roomId), { observerUids: FieldValue.arrayUnion(uid) });
+      return { status: 'approved', role: 'observer' };
+    }
+    if (room.session?.phase === 'ended') return { status: 'ended' };
     if (!returning) {
       if (!consent) return { status: 'consent_required' };
       const max = room.session?.maxOnline || 0;

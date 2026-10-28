@@ -13,24 +13,31 @@ const MAX_STRING = 20_000;
 // the object document itself is already below Firestore's 1 MiB limit
 const BOARD_MAX_STRING = 900_000;
 
-// Host uid and whether the room belongs to this site, cached per instance (hosts rarely change)
+// Host, observers and whether the room belongs to this site, cached per instance. A uid the cache
+// does not know yet (someone who just joined) refreshes it, at most every few seconds.
 const roomCache = new Map();
 const CACHE_MS = 5 * 60_000;
+const REFRESH_MS = 3_000;
 
-export async function roomInfo(roomId) {
+export async function roomInfo(roomId, uid = null) {
   const hit = roomCache.get(roomId);
-  if (hit && Date.now() - hit.at < CACHE_MS) return hit;
+  const known = hit && (!uid || AI_UIDS.has(uid) || uid === 'system' || hit.members.has(uid));
+  if (hit && Date.now() - hit.at < CACHE_MS && (known || Date.now() - hit.at < REFRESH_MS)) return hit;
   const room = (await getFirestore().doc(`rooms/${roomId}`).get()).data() || {};
-  const info = { at: Date.now(), hostUid: room.hostUid || null, tracked: Boolean(room.appVersion) };
+  const observers = new Set(room.observerUids || []);
+  const members = new Set([room.hostUid, ...observers, ...(room.participantUids || [])].filter(Boolean));
+  const info = { at: Date.now(), hostUid: room.hostUid || null, observers, members, tracked: Boolean(room.appVersion) };
   roomCache.set(roomId, info);
   return info;
 }
 
-export const roleOf = (hostUid, uid) =>
+/** Someone who joined a room as a participant stays one even if they later become an observer. */
+export const roleOf = (info, uid) =>
   !uid ? 'unknown'
     : AI_UIDS.has(uid) ? 'ai'
     : uid === 'system' ? 'system'
-    : uid === hostUid ? 'researcher'
+    : uid === info.hostUid ? 'researcher'
+    : info.observers?.has(uid) ? 'observer'
     : 'participant';
 
 /** Replaces very long strings (data URLs, big SVGs) so an event stays far below the 1 MiB doc limit. */
@@ -55,14 +62,14 @@ async function sessionEnded(roomId) {
 
 export async function writeEvent(roomId, { kind, uid = null, role, data = {}, at = Date.now(), maxString = MAX_STRING }) {
   try {
-    const info = role ? null : await roomInfo(roomId);
+    const info = role ? null : await roomInfo(roomId, uid);
     await getFirestore().collection(`rooms/${roomId}/events`).add({
       at,
       serverAt: FieldValue.serverTimestamp(),
       source: 'server',
       kind,
       uid,
-      role: role || roleOf(info.hostUid, uid),
+      role: role || roleOf(info, uid),
       data: compact(data, 0, maxString)
     });
   } catch (err) {
@@ -86,7 +93,7 @@ export async function logMessageChange(roomId, messageId, before, after) {
   await writeEvent(roomId, {
     kind: `message_${type}`,
     uid,
-    role: uid ? roleOf(info.hostUid, uid) : 'unknown',
+    role: uid ? roleOf(info, uid) : 'unknown',
     at: type === 'created' ? doc.timestamp || Date.now() : Date.now(),
     data: {
       messageId,
@@ -106,7 +113,7 @@ export async function logBoardObjectChange(roomId, boardId, objectId, before, af
   await writeEvent(roomId, {
     kind: `board_object_${type}`,
     uid,
-    role: uid ? roleOf(info.hostUid, uid) : 'unknown',
+    role: uid ? roleOf(info, uid) : 'unknown',
     at: after?.updatedAt || Date.now(),
     data: { boardId, objectId, z: after?.z ?? null, fabric: after?.fabric ?? null },
     maxString: BOARD_MAX_STRING

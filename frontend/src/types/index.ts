@@ -1,4 +1,4 @@
-export type ParticipantStatus = 'pending' | 'approved' | 'rejected' | 'kicked' | 'left' | 'cancelled';
+export type ParticipantStatus = 'pending' | 'approved' | 'rejected' | 'kicked' | 'left' | 'cancelled' | 'observer';
 
 export interface Participant {
   uid: string;

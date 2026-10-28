@@ -15,6 +15,7 @@ import { assignProfileToRoom, ensureRoomAi, handleNewMessage, loadProfile, runCh
 import { endSession, joinRoom, maybeStartSession, reopenSession, runSessionJob, sessionTick } from './src/session.js';
 import { logBoardObjectChange, logMessageChange } from './src/events.js';
 import { authUrl, exportRoom, handleCallback, runDueExports } from './src/drive.js';
+import { claimAnonymousRooms, isAdminToken, isObserverToken, listObservers, setObserver, syncRole } from './src/roles.js';
 
 initializeApp();
 
@@ -90,11 +91,51 @@ export const mentorRespond = onCall(
 );
 
 // ---------- Study administration ----------
-const ADMIN_EMAIL = 'bb900114@gmail.com'; // matches isAdmin() in firestore.rules
 const requireAdmin = request => {
-  const token = request.auth?.token;
-  if (!(token?.email === ADMIN_EMAIL && token?.email_verified)) throw new HttpsError('permission-denied', 'Study administrator only');
+  if (!isAdminToken(request.auth?.token)) throw new HttpsError('permission-denied', 'Study administrator only');
 };
+
+// ---------- Roles (src/roles.js) ----------
+/** Brings the caller's observer claim in line with the list; the browser refreshes its token when changed. */
+export const syncMyRole = onCall({ maxInstances: 10 }, async request => {
+  requireAuth(request);
+  return syncRole(request.auth.uid, request.auth.token);
+});
+
+export const listStudyObservers = onCall({ maxInstances: 2 }, async request => {
+  requireAdmin(request);
+  return { observers: await listObservers() };
+});
+
+export const setStudyObserver = onCall({ maxInstances: 2 }, async request => {
+  requireAdmin(request);
+  const { email, add } = request.data || {};
+  try {
+    return await setObserver(email, add !== false, request.auth.token.email);
+  } catch (err) {
+    throw new HttpsError('invalid-argument', err?.message || String(err));
+  }
+});
+
+/** After a guest signs in with Google: moves rooms the guest account hosted to the Google account. */
+export const claimGuestRooms = onCall({ maxInstances: 10 }, async request => {
+  requireAuth(request);
+  try {
+    return await claimAnonymousRooms(request.auth.uid, request.data?.anonIdToken);
+  } catch (err) {
+    throw new HttpsError('permission-denied', err?.message || String(err));
+  }
+});
+
+/** Whether a room exists and its name, for the join pages (room documents are readable by members only). */
+export const peekStudyRoom = onCall({ maxInstances: 20 }, async request => {
+  requireAuth(request);
+  const roomId = String(request.data?.roomId || '');
+  if (!/^room_\d{4,6}$/.test(roomId)) return { exists: false };
+  const room = (await getFirestore().doc(`rooms/${roomId}`).get()).data();
+  if (!room || room.deletedAt) return { exists: false };
+  return { exists: true, roomName: room.roomName || '', isHost: room.hostUid === request.auth.uid };
+});
 
 /** Assigns (or re-assigns) a condition profile to a room; the room keeps a frozen snapshot. */
 export const assignRoomProfile = onCall({ maxInstances: 5 }, async request => {
@@ -138,9 +179,12 @@ export const purgeLegacyRooms = onCall({ timeoutSeconds: 540, memory: '512MiB', 
 // ---------- Experiment flow (src/session.js) ----------
 export const joinStudyRoom = onCall({ maxInstances: 20 }, async request => {
   requireAuth(request);
-  const { roomId, displayName, avatar, consent, retry } = request.data || {};
+  const { roomId, displayName, avatar, consent, retry, asParticipant } = request.data || {};
   if (!roomId) throw new HttpsError('invalid-argument', 'Missing roomId');
-  return joinRoom({ roomId: String(roomId), uid: request.auth.uid, displayName, avatar, consent: consent === true, retry: retry === true });
+  return joinRoom({
+    roomId: String(roomId), uid: request.auth.uid, displayName, avatar, consent: consent === true, retry: retry === true,
+    observer: isObserverToken(request.auth.token), asParticipant: asParticipant === true
+  });
 });
 
 /** End button: the room's researcher (host) or the study administrator. */
@@ -151,7 +195,7 @@ export const endStudySession = onCall({ maxInstances: 10 }, async request => {
   const room = (await getFirestore().doc(`rooms/${roomId}`).get()).data();
   if (!room) throw new HttpsError('not-found', 'Room not found');
   const token = request.auth.token;
-  if (room.hostUid !== request.auth.uid && !(token?.email === ADMIN_EMAIL && token?.email_verified)) {
+  if (room.hostUid !== request.auth.uid && !isAdminToken(token)) {
     throw new HttpsError('permission-denied', 'Only the researcher can end the session');
   }
   return { ended: await endSession(roomId, room.hostUid === request.auth.uid ? 'researcher' : 'admin') };
@@ -167,7 +211,7 @@ export const reopenStudySession = onCall({ maxInstances: 5 }, async request => {
   if (!room) throw new HttpsError('not-found', 'Room not found');
   const token = request.auth.token;
   const isResearcher = room.hostUid === request.auth.uid;
-  if (!isResearcher && !(token?.email === ADMIN_EMAIL && token?.email_verified)) {
+  if (!isResearcher && !isAdminToken(token)) {
     throw new HttpsError('permission-denied', 'Only the researcher can reopen the session');
   }
   return { reopened: await reopenSession(String(roomId), isResearcher ? 'researcher' : 'admin') };

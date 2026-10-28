@@ -12,7 +12,7 @@ export interface ResearchEvent {
   at: number;
   kind: string;
   uid: string | null;
-  role: 'participant' | 'researcher' | 'ai' | 'system' | 'unknown';
+  role: 'participant' | 'researcher' | 'observer' | 'ai' | 'system' | 'unknown';
   source: 'server' | 'client';
   data: Record<string, any>;
 }
@@ -68,13 +68,14 @@ export async function loadEvents(roomId: string): Promise<ResearchEvent[]> {
 const ownName = (e: ResearchEvent) =>
   e.kind === 'message_created' && e.data?.message?.senderUid === e.uid ? e.data.message.senderName || '' : '';
 
-/** Participants get P01, P02… in order of joining; the researcher is R. */
+/** Participants get P01, P02… in order of joining; the researcher is R, observers O1, O2…. */
 export function membersOf(events: ResearchEvent[]): Map<string, Member> {
   const members = new Map<string, Member>();
   let n = 0;
+  let o = 0;
   const add = (uid: string | null, role: string, nickname = '') => {
-    if (!uid || members.has(uid) || (role !== 'participant' && role !== 'researcher')) return;
-    const alias = role === 'researcher' ? 'R' : `P${String(++n).padStart(2, '0')}`;
+    if (!uid || members.has(uid) || (role !== 'participant' && role !== 'researcher' && role !== 'observer')) return;
+    const alias = role === 'researcher' ? 'R' : role === 'observer' ? `O${++o}` : `P${String(++n).padStart(2, '0')}`;
     members.set(uid, { uid, alias, nickname });
   };
   for (const e of events) {

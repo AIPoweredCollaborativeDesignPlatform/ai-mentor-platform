@@ -108,8 +108,7 @@ const handleSaveRoomInfo = async () => {
 };
 
 
-// Fixed study-admin account until observer roles exist (P5); matches isAdmin() in firestore.rules
-const isStudyAdmin = computed(() => authStore.isGoogleLinked && authStore.email === 'bb900114@gmail.com');
+const isStudyAdmin = computed(() => authStore.isAdmin);
 
 const isGoogleSigningIn = ref(false);
 
@@ -117,15 +116,8 @@ const handleGoogleSignIn = async () => {
   if (isGoogleSigningIn.value) return;
   isGoogleSigningIn.value = true;
   try {
-    const res = await authStore.upgradeWithGoogle();
-    if (res?.previousAnonUid && roomStore.currentRoom) {
-      await roomStore.transferHostOwnership(res.previousAnonUid, authStore.uid);
-    } else if (roomStore.currentRoom && db) {
-      await updateDoc(doc(db, 'rooms', roomStore.currentRoom.roomId), {
-        hostUid: authStore.uid
-      });
-      roomStore.currentRoom.hostUid = authStore.uid;
-    }
+    // Signing in replaces the anonymous uid; the server moves rooms the guest hosted (claimGuestRooms)
+    await authStore.upgradeWithGoogle();
     roomStore.pushToast('Signed In', `Signed in as ${authStore.displayName}`, 'success');
   } catch (err: any) {
     if (err?.code !== 'auth/popup-closed-by-user' && err?.code !== 'auth/cancelled-popup-request') {

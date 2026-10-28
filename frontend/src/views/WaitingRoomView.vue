@@ -2,7 +2,7 @@
 import { onMounted, onUnmounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { doc, getDoc } from 'firebase/firestore';
-import { ArrowLeft, Loader2, LogIn, ShieldAlert, Users } from 'lucide-vue-next';
+import { ArrowLeft, Eye, Loader2, LogIn, ShieldAlert, UserPlus, Users } from 'lucide-vue-next';
 import { db } from '../firebase/config';
 import { DEFAULT_CONSENT_TEXT } from '../constants/consent';
 import { useAuthStore } from '../stores/auth';
@@ -12,6 +12,8 @@ import { useRoomStore } from '../stores/room';
  * Entry to a study room (functions/src/session.js): nickname + consent, then the server approves
  * directly. Returning members and the researcher are let in without the form. When the room is
  * full the request is retried every few seconds, so a free seat is taken automatically.
+ * Observers (and the administrator, outside rooms they created) first choose: watch invisibly, or
+ * join as a participant (nickname + consent, counted like everyone else).
  */
 const route = useRoute();
 const router = useRouter();
@@ -21,13 +23,14 @@ const roomStore = useRoomStore();
 const roomId = route.params.roomId as string;
 const pin = roomId.replace('room_', '');
 
-type View = 'checking' | 'not_found' | 'form' | 'joining' | 'full' | 'ended' | 'error';
+type View = 'checking' | 'choose' | 'not_found' | 'form' | 'joining' | 'full' | 'ended' | 'error';
 const view = ref<View>('checking');
 const roomName = ref('');
 const consentText = ref('');
 const agreed = ref(false);
 const errorText = ref('');
 const fullInfo = ref({ online: 0, max: 0 });
+const asParticipant = ref(false);
 
 const ADJECTIVES = ['Curious', 'Clever', 'Creative', 'Swift', 'Cosmic', 'Bold', 'Bright', 'Calm'];
 const NOUNS = ['Rocket', 'Falcon', 'Owl', 'Fox', 'Panda', 'Otter', 'Eagle', 'Dolphin'];
@@ -46,7 +49,7 @@ const enterRoom = () => router.replace(`/room/${roomId}`);
 const attempt = async (consent: boolean, retry = false) => {
   clearTimeout(retryTimer);
   try {
-    const result = await roomStore.joinRoom(pin, nickname.value.trim() || 'Participant', avatar.value, consent, retry);
+    const result = await roomStore.joinRoom(pin, nickname.value.trim() || 'Participant', avatar.value, consent, retry, asParticipant.value);
     if (result.status === 'approved') {
       if (result.role === 'participant' && !result.returning) authStore.updateProfile(nickname.value.trim(), avatar.value);
       enterRoom();
@@ -82,9 +85,20 @@ onMounted(async () => {
   roomName.value = check.roomName || `Meeting ${pin}`;
   const config = await getDoc(doc(db, 'config', 'system')).catch(() => null);
   consentText.value = config?.data()?.consentText || DEFAULT_CONSENT_TEXT;
+  await authStore.waitForRole();
+  if (authStore.isObserver && !check.isHost) {
+    view.value = 'choose';
+    return;
+  }
   // Researcher and returning members go straight in; everyone else gets the form
   await attempt(false);
 });
+
+const choose = (participant: boolean) => {
+  asParticipant.value = participant;
+  view.value = 'checking';
+  attempt(false);
+};
 
 onUnmounted(() => clearTimeout(retryTimer));
 </script>
@@ -113,6 +127,33 @@ onUnmounted(() => clearTimeout(retryTimer));
         <router-link to="/" class="px-5 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold transition inline-flex items-center gap-2 shadow">
           <ArrowLeft class="w-4 h-4" /> Back to Home
         </router-link>
+      </div>
+
+      <!-- Observer: watch invisibly or take part -->
+      <div v-else-if="view === 'choose'" class="space-y-4">
+        <div class="text-center">
+          <h2 class="text-xl font-bold text-white mb-1">"{{ roomName }}"</h2>
+          <p class="text-xs text-slate-400">Room <span class="font-mono text-sky-400">{{ pin }}</span></p>
+        </div>
+        <button @click="choose(false)" class="w-full text-left p-4 rounded-xl border border-violet-500/40 bg-violet-500/10 hover:bg-violet-500/20 transition flex gap-3">
+          <Eye class="w-5 h-5 text-violet-300 shrink-0 mt-0.5" />
+          <span>
+            <span class="block text-sm font-semibold text-white">Observe</span>
+            <span class="block text-xs text-slate-400 mt-0.5">Invisible and read-only. You are not counted and can open every whiteboard.</span>
+          </span>
+        </button>
+        <button @click="choose(true)" class="w-full text-left p-4 rounded-xl border border-slate-700 bg-slate-950/60 hover:border-sky-500/60 transition flex gap-3">
+          <UserPlus class="w-5 h-5 text-sky-300 shrink-0 mt-0.5" />
+          <span>
+            <span class="block text-sm font-semibold text-white">Join as a participant</span>
+            <span class="block text-xs text-slate-400 mt-0.5">Nickname and consent like everyone else; you count toward the room size. You stay a participant in this room.</span>
+          </span>
+        </button>
+        <div class="text-center">
+          <router-link to="/" class="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 transition">
+            <ArrowLeft class="w-3.5 h-3.5" /> Cancel
+          </router-link>
+        </div>
       </div>
 
       <!-- Room full: retried automatically -->

@@ -155,3 +155,21 @@ export async function loadUsage(sinceMs: number, max = 2000): Promise<UsageRow[]
     };
   });
 }
+
+// ---------- Observers (functions/src/roles.js) ----------
+export interface StudyObserver {
+  email: string;
+  addedAt: number;
+  addedBy: string;
+}
+
+export async function listObservers(): Promise<StudyObserver[]> {
+  const fn = httpsCallable<void, { observers: StudyObserver[] }>(functions, 'listStudyObservers');
+  return (await fn()).data.observers;
+}
+
+/** `applied` is false when the account has not signed in yet; the role is then set on their first sign-in. */
+export async function setObserver(email: string, add: boolean) {
+  const fn = httpsCallable<{ email: string; add: boolean }, { email: string; applied: boolean }>(functions, 'setStudyObserver');
+  return (await fn({ email, add })).data;
+}

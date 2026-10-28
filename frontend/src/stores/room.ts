@@ -60,7 +60,7 @@ export const useRoomStore = defineStore('room', () => {
 
   // The server ends the session (status, notice, event log); the room stays open read-only
   const endMeetingForAll = async () => {
-    if (!currentRoom.value || !isHost.value) return;
+    if (!currentRoom.value || !(isHost.value || authStore.isAdmin)) return;
     try {
       await endStudySession(currentRoom.value.roomId);
     } catch (err: any) {
@@ -76,7 +76,7 @@ export const useRoomStore = defineStore('room', () => {
     try {
       await updateDoc(roomDocRef(currentRoom.value.roomId, 'participants', authStore.uid), { displayName: newName, avatar: newAvatar });
       // The observing researcher stays invisible: no notice in the chat
-      if (!(isHost.value && currentRoom.value.session)) {
+      if (!((isHost.value || myStatus.value === 'observer') && currentRoom.value.session)) {
         await messages.postSystemMessage(`${oldName} updated profile to ${newName} ${newAvatar}`, '✏️');
       }
     } catch (e) {
@@ -127,7 +127,6 @@ export const useRoomStore = defineStore('room', () => {
     stopListening: session.stopListening,
     createRoom: session.createRoom,
     joinRoom: session.joinRoom,
-    transferHostOwnership: session.transferHostOwnership,
     setMyTyping: session.setMyTyping,
     approveParticipant: session.approveParticipant,
     rejectParticipant: session.rejectParticipant,

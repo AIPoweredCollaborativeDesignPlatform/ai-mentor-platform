@@ -29,11 +29,8 @@ const signInWithGoogle = async () => {
   if (isSigningIn.value) return;
   isSigningIn.value = true;
   try {
-    const res = await authStore.upgradeWithGoogle();
-    // Signing in replaces the anonymous uid; carry host ownership over to the new uid
-    if (res?.previousAnonUid && roomStore.currentRoom) {
-      await roomStore.transferHostOwnership(res.previousAnonUid, authStore.uid);
-    }
+    // Signing in replaces the anonymous uid; the server moves rooms the guest hosted (claimGuestRooms)
+    await authStore.upgradeWithGoogle();
     roomStore.pushToast('Signed In', `Signed in as ${authStore.displayName}`, 'success');
   } catch (err: any) {
     if (err?.code !== 'auth/popup-closed-by-user' && err?.code !== 'auth/cancelled-popup-request') {

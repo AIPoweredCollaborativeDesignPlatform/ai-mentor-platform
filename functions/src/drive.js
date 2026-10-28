@@ -193,11 +193,16 @@ export async function buildRoomExport(roomId) {
   const room = roomSnap.data() || {};
   const roomAi = roomAiSnap.data() || {};
 
-  // P01… in order of joining; the researcher (host) is R. Nicknames are kept next to the alias.
+  // P01… in order of joining; the researcher (host) is R, observers O1, O2…. Nicknames are kept next to the alias.
   const participants = partSnap.docs.map(d => ({ uid: d.id, ...d.data() }));
   const alias = new Map([[room.hostUid, 'R']]);
-  participants.filter(p => p.uid !== room.hostUid).sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0))
+  const observerUids = room.observerUids || [];
+  const isObserver = p => p.status === 'observer' || (observerUids.includes(p.uid) && !p.consent);
+  observerUids.filter(uid => uid !== room.hostUid && participants.some(p => p.uid === uid && isObserver(p)))
+    .forEach((uid, i) => alias.set(uid, `O${i + 1}`));
+  participants.filter(p => p.uid !== room.hostUid && !isObserver(p)).sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0))
     .forEach((p, i) => alias.set(p.uid, `P${String(i + 1).padStart(2, '0')}`));
+  const roleName = p => (p.uid === room.hostUid ? 'researcher' : isObserver(p) ? 'observer' : 'participant');
   const aliasOf = uid => alias.get(uid) || (uid?.startsWith('ai_mentor') ? 'AI' : uid === 'system' ? 'SYSTEM' : null);
 
   const consentHashes = [...new Set(participants.map(p => p.consent?.textHash).filter(Boolean))];
@@ -210,7 +215,7 @@ export async function buildRoomExport(roomId) {
     content: '﻿' + [
       ['alias', 'uid', 'nickname', 'role', 'joinedAt', 'consentAgreedAt', 'consentTextHash'].join(','),
       ...participants.sort((a, b) => (aliasOf(a.uid) || '').localeCompare(aliasOf(b.uid) || '')).map(p => [
-        aliasOf(p.uid), p.uid, p.displayName, p.uid === room.hostUid ? 'researcher' : 'participant',
+        aliasOf(p.uid), p.uid, p.displayName, roleName(p),
         p.joinedAt ? new Date(p.joinedAt).toISOString() : '', p.consent?.agreedAt ? new Date(p.consent.agreedAt).toISOString() : '', p.consent?.textHash || ''
       ].map(csvCell).join(','))
     ].join('\n') + '\n'

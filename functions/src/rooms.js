@@ -65,7 +65,7 @@ export async function createRoom(uid, { roomName, roomEmoji, language, mentorCon
     participantUids: asParticipant ? [] : [uid],
     createdAt: now, lastActive: now, roomStatus: 'active',
     mentorConfig: mentorConfig || null, assetsCount: 0,
-    appVersion: String(appVersion || ''), language: language || 'zh'
+    appVersion: String(appVersion || ''), language: language || 'zh-TW'
   });
   if (!asParticipant) {
     batch.set(roomDoc.collection('participants').doc(uid), {

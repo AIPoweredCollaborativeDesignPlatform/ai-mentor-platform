@@ -93,7 +93,7 @@ const signInWithGoogle = async () => {
       </div>
 
       <div class="flex justify-end gap-2">
-        <button @click="emit('close')" class="px-4 py-2 rounded-xl text-xs text-slate-400 hover:text-white transition">Cancel</button>
+        <button @click="emit('close')" class="px-4 py-2 rounded-xl text-xs text-slate-400 hover:text-white transition">{{ t('common.cancel') }}</button>
         <button @click="save" class="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-xl text-xs font-semibold shadow transition">{{ t('profile.save') }}</button>
       </div>
     </div>

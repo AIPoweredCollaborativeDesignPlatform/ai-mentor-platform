@@ -50,7 +50,7 @@ const pillButton = 'inline-flex items-center gap-1 text-[11px] px-2 py-1.5 round
     <Lock class="w-3.5 h-3.5 text-amber-400 shrink-0" />
     <span class="truncate">{{ t('header.closedByHost') }}</span>
     <button v-if="roomStore.isHost" @click="emit('toggle-settings')" class="underline font-semibold hover:text-white ml-1 cursor-pointer shrink-0">
-      Reopen
+      {{ t('common.reopen') }}
     </button>
   </div>
 
@@ -79,7 +79,7 @@ const pillButton = 'inline-flex items-center gap-1 text-[11px] px-2 py-1.5 round
             {{ pin }}
           </span>
           <span v-if="isMeetingClosed" class="text-[9px] sm:text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 rounded-full font-medium shrink-0">
-            Archived
+            {{ t('header.archived') }}
           </span>
         </div>
         <div class="text-[10px] sm:text-[11px] text-slate-400 flex items-center gap-1.5 sm:gap-2">
@@ -99,7 +99,7 @@ const pillButton = 'inline-flex items-center gap-1 text-[11px] px-2 py-1.5 round
         :title="t('header.offline')"
       >
         <WifiOff class="w-3 h-3 text-rose-400" />
-        <span class="hidden xs:inline">Offline</span>
+        <span class="hidden xs:inline">{{ t('common.offline') }}</span>
       </div>
 
       <!-- AI status capsule -->

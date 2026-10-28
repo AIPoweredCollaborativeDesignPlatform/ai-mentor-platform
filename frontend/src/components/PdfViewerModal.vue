@@ -54,7 +54,7 @@ const handleDownload = () => {
             :title="t('pdf.download')"
           >
             <Download class="w-3.5 h-3.5" />
-            <span class="hidden sm:inline">Download</span>
+            <span class="hidden sm:inline">{{ t('common.download') }}</span>
           </button>
           <a
             :href="pdfUrl"

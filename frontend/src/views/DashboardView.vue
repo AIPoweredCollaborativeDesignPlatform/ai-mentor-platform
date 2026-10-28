@@ -127,8 +127,8 @@ const loadDashboardData = async () => {
     if (lastMsg) {
       const sender = lastMsg.senderUid === 'ai_mentor' ? 'AI' : lastMsg.senderName || 'User';
       let content = lastMsg.content || '';
-      if (lastMsg.type === 'file') content = '📎 Attachment';
-      else if (lastMsg.type === 'ai_asset') content = '✨ AI Asset Generated';
+      if (lastMsg.type === 'file') content = t('dash.attachmentPreview');
+      else if (lastMsg.type === 'ai_asset') content = t('dash.aiAssetPreview');
       previewText = `${sender}: ${content}`;
       if (previewText.length > 50) previewText = previewText.substring(0, 50) + '...';
     }
@@ -315,8 +315,8 @@ const loadDashboardData = async () => {
             const latest = recentMsgs[0];
             const sender = latest.senderUid === 'ai_mentor' ? 'AI' : latest.senderName || 'User';
             let content = latest.content || '';
-            if (latest.type === 'file') content = '📎 Attachment';
-            else if (latest.type === 'ai_asset') content = '✨ AI Asset Generated';
+            if (latest.type === 'file') content = t('dash.attachmentPreview');
+            else if (latest.type === 'ai_asset') content = t('dash.aiAssetPreview');
             previewText = `${sender}: ${content}`;
             if (previewText.length > 50) previewText = previewText.substring(0, 50) + '...';
           }

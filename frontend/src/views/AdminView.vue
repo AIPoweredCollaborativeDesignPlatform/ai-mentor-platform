@@ -447,8 +447,8 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
             <button v-if="r.session" @click="uploadNow(r)" :disabled="exporting[r.roomId]" class="px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs disabled:opacity-40">
               {{ exporting[r.roomId] ? t('adm.uploading') : t('adm.uploadDrive') }}
             </button>
-            <button v-if="r.session && r.session.phase !== 'ended'" @click="endOrReopen(r, true)" class="px-3 py-1.5 rounded-lg border border-rose-800 text-rose-200 hover:bg-rose-900/40 text-xs">End</button>
-            <button v-else-if="r.session" @click="endOrReopen(r, false)" class="px-3 py-1.5 rounded-lg border border-emerald-800 text-emerald-200 hover:bg-emerald-900/40 text-xs">Reopen</button>
+            <button v-if="r.session && r.session.phase !== 'ended'" @click="endOrReopen(r, true)" class="px-3 py-1.5 rounded-lg border border-rose-800 text-rose-200 hover:bg-rose-900/40 text-xs">{{ t('common.end') }}</button>
+            <button v-else-if="r.session" @click="endOrReopen(r, false)" class="px-3 py-1.5 rounded-lg border border-emerald-800 text-emerald-200 hover:bg-emerald-900/40 text-xs">{{ t('common.reopen') }}</button>
             </template>
             <router-link v-if="r.session" :to="`/admin/replay/${r.roomId}`" class="px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs">{{ t('adm.replay') }}</router-link>
           </div>

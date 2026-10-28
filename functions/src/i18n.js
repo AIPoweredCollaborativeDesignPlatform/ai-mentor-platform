@@ -25,6 +25,15 @@ const STRINGS = {
   roomCreated: { 'zh-TW': '{emoji} 已建立房間「{name}」· PIN：{pin}', en: '{emoji} Room "{name}" created · PIN: {pin}' },
   system: { 'zh-TW': '系統', en: 'System' },
   refinedMessage: { 'zh-TW': '✨ 已為「{title}」加上彩色 PBR 材質與細節。', en: '✨ Refined "{title}" with color PBR textures and details.' },
+  aiAsset: { 'zh-TW': '✨ AI 產生了新素材', en: '✨ AI Asset Generated' },
+  aiErrorPrefix: { 'zh-TW': '⚠️ {name}：{message}', en: '⚠️ {name}: {message}' },
+  'aiError.KEY_INVALID': { 'zh-TW': 'AI 服務金鑰設定有誤，請聯絡研究人員。', en: 'The AI service key is not configured correctly. Please contact the study administrator.' },
+  'aiError.QUOTA_EXCEEDED': { 'zh-TW': 'AI 服務目前流量受限，請稍後再試。', en: 'The AI service is rate-limited right now. Please retry in a moment.' },
+  'aiError.HIGH_DEMAND': { 'zh-TW': 'AI 服務目前使用量過高，請再試一次。', en: 'The AI service is overloaded right now (high demand). Please retry.' },
+  'aiError.NETWORK': { 'zh-TW': '無法連線到 AI 服務，請再試一次。', en: 'Could not reach the AI service. Please retry.' },
+  'aiError.BAD_REQUEST': { 'zh-TW': 'AI 請求被拒絕，請再試一次或換個說法。', en: 'The AI request was rejected. Please retry or rephrase.' },
+  'aiError.PARSE_ERROR': { 'zh-TW': 'AI 回傳的格式不正確，請再試一次。', en: 'The AI returned an unexpected format. Please retry.' },
+  'aiError.UNKNOWN': { 'zh-TW': 'AI 請求失敗，請再試一次。', en: 'The AI request failed. Please retry.' },
   refinedTitle: { 'zh-TW': '{title}（彩色／PBR）', en: '{title} (Colored / PBR)' }
 };
 

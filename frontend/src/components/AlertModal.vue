@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '../i18n';
 import { AlertTriangle, Info, CheckCircle } from 'lucide-vue-next';
 
 defineProps<{
@@ -36,7 +37,7 @@ const emit = defineEmits<{
         @click="emit('confirm')"
         class="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold transition border border-slate-700"
       >
-        Confirm
+        {{ t('common.confirm') }}
       </button>
     </div>
   </div>

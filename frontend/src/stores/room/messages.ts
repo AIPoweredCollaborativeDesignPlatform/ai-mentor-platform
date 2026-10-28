@@ -98,7 +98,7 @@ export function useRoomMessages(ctx: RoomContext, setMyTyping: (typing: boolean)
     if (!currentRoom.value) return Promise.resolve();
     return addDoc(roomCollection(currentRoom.value.roomId, 'messages'), {
       senderUid: 'system',
-      senderName: 'System',
+      senderName: t('common.system'),
       senderAvatar,
       type: 'text',
       content,

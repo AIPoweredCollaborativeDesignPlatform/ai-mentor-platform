@@ -17,6 +17,9 @@ const selectedItem = ref<{
   isHero?: boolean;
 } | null>(null);
 
+// Built-in categories are stored in English; AI-written categories are already in the room language
+const categoryLabel = (c: string) => (c === 'Hero Concept' ? t('mood.hero') : c === 'Reference' ? t('mood.reference') : c);
+
 const copyColor = (hex: string) => {
   navigator.clipboard.writeText(hex);
   copiedHex.value = hex;
@@ -160,7 +163,7 @@ const closePreview = () => {
               v-else-if="img?.category"
               class="bg-black/75 backdrop-blur-xs text-amber-300 px-1.5 py-0.5 rounded text-[8px] font-semibold border border-amber-500/30 shadow-xs truncate"
             >
-              {{ img.category }}
+              {{ categoryLabel(img.category) }}
             </span>
             <span v-else></span>
 
@@ -254,7 +257,7 @@ const closePreview = () => {
                 v-else-if="selectedItem.category"
                 class="bg-amber-950 text-amber-300 px-2 py-0.5 rounded text-xs font-semibold border border-amber-500/40 shrink-0"
               >
-                {{ selectedItem.category }}
+                {{ categoryLabel(selectedItem.category) }}
               </span>
               <h3 class="text-sm font-semibold text-slate-100 truncate">{{ selectedItem.title }}</h3>
             </div>

@@ -100,7 +100,7 @@ export const useRoomStore = defineStore('room', () => {
       if (changed) {
         await messages.sendCustomMessage({
           senderUid: 'system',
-          senderName: 'System',
+          senderName: t('common.system'),
           content: t('room.detailsUpdated', { emoji: cleanEmoji, name: cleanName })
         }).catch(() => {});
       }

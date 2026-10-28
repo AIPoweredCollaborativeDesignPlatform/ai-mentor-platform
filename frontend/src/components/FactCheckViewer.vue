@@ -62,7 +62,7 @@ const formatRefDisplay = (ref: string) => {
           class="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-200 transition-transform duration-200 shrink-0"
           :class="{ 'rotate-90': isReferencesOpen }"
         />
-        <span>References & Standards ({{ assetData.references.length }})</span>
+        <span>{{ t('fact.referencesCount', { n: assetData.references.length }) }}</span>
       </button>
 
       <ul v-show="isReferencesOpen" class="space-y-1.5 mt-2 pl-1">

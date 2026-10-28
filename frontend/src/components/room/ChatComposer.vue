@@ -299,7 +299,7 @@ defineExpose({ setReply, sendFile });
             <Loader2 class="w-4 h-4 animate-spin text-sky-400" />
           </div>
           <div class="min-w-0">
-            <p class="font-semibold text-sky-200 truncate">{{ aiName }} is responding{{ roomStore.currentRoom.aiActiveTask.callerName ? ` to ${roomStore.currentRoom.aiActiveTask.callerName}` : '' }}...</p>
+            <p class="font-semibold text-sky-200 truncate">{{ roomStore.currentRoom.aiActiveTask.callerName ? t('composer.aiRespondingTo', { name: aiName, caller: roomStore.currentRoom.aiActiveTask.callerName }) : t('composer.aiResponding', { name: aiName }) }}</p>
             <p class="text-slate-400 text-[11px] truncate">{{ roomStore.currentRoom.aiActiveTask.type }}: "{{ roomStore.currentRoom.aiActiveTask.prompt }}"</p>
           </div>
         </div>
@@ -309,14 +309,14 @@ defineExpose({ setReply, sendFile });
           class="ml-2 px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 hover:text-white text-[11px] font-medium transition cursor-pointer flex items-center gap-1 shrink-0"
           :title="t('composer.stopAi')"
         >
-          <X class="w-3 h-3" /> Stop
+          <X class="w-3 h-3" /> {{ t('common.stop') }}
         </button>
       </div>
 
       <div v-if="replyingTo" class="flex items-center justify-between p-2 rounded-xl bg-slate-950/90 border border-slate-700/80 text-xs text-slate-300">
         <div class="flex items-center gap-2 min-w-0">
           <CornerUpLeft class="w-3.5 h-3.5 text-sky-400 shrink-0" />
-          <span class="text-sky-300 font-medium shrink-0">Replying to {{ replyingTo.senderName }}:</span>
+          <span class="text-sky-300 font-medium shrink-0">{{ t('composer.replyingTo', { name: replyingTo.senderName }) }}</span>
           <span class="truncate opacity-80">{{ replyingTo.content.slice(0, 75) }}</span>
         </div>
         <button @click="replyingTo = null" class="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition shrink-0 cursor-pointer" :title="t('composer.cancelReply')">
@@ -399,7 +399,7 @@ defineExpose({ setReply, sendFile });
                 <div class="font-medium truncate flex items-center gap-1.5">
                   <span>{{ cand.name }}</span>
                   <span v-if="cand.isAi" class="text-[9px] px-1 py-0.2 rounded bg-sky-500/20 text-sky-300 font-bold">AI</span>
-                  <span v-else-if="cand.subtitle === 'Host'" class="text-[9px] px-1 py-0.2 rounded bg-indigo-500/20 text-indigo-300 font-medium">Host</span>
+                  <span v-else-if="cand.subtitle === 'Host'" class="text-[9px] px-1 py-0.2 rounded bg-indigo-500/20 text-indigo-300 font-medium">{{ t('composer.hostTag') }}</span>
                 </div>
                 <div class="text-[10px] text-slate-400 font-mono">{{ cand.handle }}</div>
               </div>
@@ -441,7 +441,7 @@ defineExpose({ setReply, sendFile });
           <Loader2 v-else-if="mentionsMentor && roomStore.isAnalyzing" class="w-4 h-4 animate-spin text-sky-200" />
           <template v-else>
             <Send class="w-4 h-4" />
-            <span class="hidden sm:inline">Send</span>
+            <span class="hidden sm:inline">{{ t('common.send') }}</span>
           </template>
         </button>
       </div>

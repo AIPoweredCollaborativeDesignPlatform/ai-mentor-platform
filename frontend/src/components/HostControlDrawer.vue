@@ -175,7 +175,7 @@ const handleReopenMeeting = async () => {
       });
       await addDoc(collection(db, 'rooms', roomStore.currentRoom.roomId, 'messages'), {
         senderUid: 'system',
-        senderName: 'System',
+        senderName: t('common.system'),
         senderAvatar: '🔓',
         type: 'text',
         content: t('drawer.reopenedNotice'),

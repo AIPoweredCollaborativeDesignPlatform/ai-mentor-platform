@@ -512,13 +512,13 @@ onUnmounted(() => {
           v-if="assetData?.isRefined"
           class="text-[10px] bg-emerald-500/20 text-emerald-300 font-mono px-2 py-0.5 rounded-full border border-emerald-500/30 flex items-center gap-1 shrink-0"
         >
-          <Palette class="w-2.5 h-2.5" /> PBR Colored
+          <Palette class="w-2.5 h-2.5" /> {{ t('glb.pbrBadge') }}
         </span>
         <span
           v-else
           class="text-[10px] bg-indigo-500/20 text-indigo-300 font-mono px-2 py-0.5 rounded-full border border-indigo-500/30 flex items-center gap-1 shrink-0"
         >
-          <Sparkles class="w-2.5 h-2.5" /> Meshy 3D Mesh
+          <Sparkles class="w-2.5 h-2.5" /> {{ t('glb.meshBadge') }}
         </span>
       </div>
       <span class="text-xs text-slate-400 font-medium hidden sm:block shrink-0">
@@ -684,7 +684,7 @@ onUnmounted(() => {
     >
       <div class="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-xl p-5 shadow-2xl flex flex-col">
         <h3 class="text-sm font-bold text-slate-100 mb-2 flex items-center gap-2">
-          <Palette class="w-4 h-4 text-indigo-400" /> Refine Textures & Style
+          <Palette class="w-4 h-4 text-indigo-400" /> {{ t('glb.refineHeading') }}
         </h3>
         <p class="text-[11px] text-slate-400 mb-4">
           {{ t('glb.refineHint') }}
@@ -701,7 +701,7 @@ onUnmounted(() => {
             @click="isRefineModalOpen = false"
             class="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition cursor-pointer"
           >
-            Cancel
+            {{ t('common.cancel') }}
           </button>
           <button
             @click="submitRefine"

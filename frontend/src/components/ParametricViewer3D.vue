@@ -620,7 +620,7 @@ onUnmounted(() => {
           :class="{ 'bg-sky-950 border-sky-500 text-sky-300': autoRotate }"
         >
           <RotateCw class="w-3.5 h-3.5" />
-          Rotation
+          {{ t('p3d.rotation') }}
         </button>
         <button
           @click="resetView"

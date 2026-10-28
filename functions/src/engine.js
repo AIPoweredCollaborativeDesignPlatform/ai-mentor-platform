@@ -1,5 +1,5 @@
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
-import { roomLanguage } from './i18n.js';
+import { roomLanguage, str } from './i18n.js';
 import { analyze, updateMemory } from './mentor.js';
 import { generate3D } from './mesh3d.js';
 import { getSystemConfig } from './config.js';
@@ -132,7 +132,7 @@ export async function postAiMessage(roomId, room, profile, { content, assetType 
   }
   await roomRef(roomId).update({
     lastActive: Date.now(),
-    lastMessage: { content: assetType ? '✨ AI Asset Generated' : String(content).slice(0, 100), senderName: fields.senderName, senderUid: 'ai_mentor', timestamp: Date.now() },
+    lastMessage: { content: assetType ? str('aiAsset', language) : String(content).slice(0, 100), senderName: fields.senderName, senderUid: 'ai_mentor', timestamp: Date.now() },
     ...(assetType ? { assetsCount: FieldValue.increment(1) } : {})
   }).catch(() => {});
 }
@@ -193,7 +193,12 @@ export async function runCheck(roomId, secrets, { reason, forced = false, caller
     if (aborted) {
       await logAiCall({ kind: 'trigger_skip', roomId, reason, detail: 'aborted_by_user' });
     } else if (out.error) {
-      if (visible && forced) await postAiMessage(roomId, room, profile, { content: `⚠️ AI Mentor: ${out.error.message}` }, retryMessageId);
+      if (visible && forced) {
+        const lang = room.language;
+        const name = profile.displayName?.[roomLanguage(lang)] || profile.displayName?.en || 'AI Mentor';
+        const message = str(`aiError.${out.error.category || 'UNKNOWN'}`, lang);
+        await postAiMessage(roomId, room, profile, { content: str('aiErrorPrefix', lang, { name, message }) }, retryMessageId);
+      }
     } else if (visible && out.result.shouldIntervene && out.result.aiMessage) {
       const { aiMessage, assetType, assetData, actionOptions } = out.result;
       if (assetType === 'parametric_3d') {

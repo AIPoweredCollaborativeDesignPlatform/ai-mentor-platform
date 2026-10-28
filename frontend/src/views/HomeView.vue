@@ -77,8 +77,9 @@ const handleCreateRoom = async () => {
 const handleJoinRoom = async () => {
   handleSaveProfile();
   const pin = pinInput.value.trim();
-  if (pin.length !== 6) {
-    errorMsg.value = 'Please enter a valid 6-digit room PIN';
+  // New rooms have 4 digits; older rooms keep their 6-digit PINs
+  if (!/^(\d{4}|\d{6})$/.test(pin)) {
+    errorMsg.value = 'Please enter a valid 4-digit room PIN';
     return;
   }
   errorMsg.value = '';
@@ -329,7 +330,7 @@ const handleGoogleSignIn = async () => {
               </div>
               <h3 class="font-bold text-sm mb-0.5">Create Meeting</h3>
               <p class="text-[11px] text-sky-100 opacity-90">
-                You'll be the host with a 6-digit PIN
+                You'll be the host with a 4-digit PIN
               </p>
             </div>
             <div class="mt-3 flex items-center gap-1 text-xs font-semibold text-white group-hover:translate-x-1 transition">
@@ -346,13 +347,13 @@ const handleGoogleSignIn = async () => {
             </div>
             <h3 class="font-bold text-sm text-slate-100 mb-0.5">Join Meeting</h3>
             <p class="text-[11px] text-slate-400 mb-2">
-              Enter 6-digit PIN to request access
+              Enter the 4-digit PIN to request access
             </p>
             <input
               v-model="pinInput"
               type="text"
               maxlength="6"
-              placeholder="e.g. 849201"
+              placeholder="e.g. 4920"
               class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-center text-lg sm:text-base tracking-widest font-mono text-white placeholder-slate-600 focus:outline-none focus:border-sky-500 min-h-[44px]"
             />
             <p v-if="errorMsg" class="text-[11px] text-rose-400 mt-1">{{ errorMsg }}</p>

@@ -269,8 +269,22 @@ export function useRoomSession(ctx: RoomContext) {
   };
 
   // ---------- Create / join ----------
+  /**
+   * 4-digit PINs (1000–9999) are few enough to collide, and setDoc would overwrite the other room's data,
+   * so a PIN is only used when no room doc (not even a deleted one) exists for it. Legacy rooms have 6 digits.
+   */
+  const pickFreePin = async () => {
+    await authStore.waitForAuthReady().catch(() => {});
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const pin = String(1000 + Math.floor(Math.random() * 9000));
+      const snap = await getDoc(roomRef(`room_${pin}`)).catch(() => null);
+      if (snap && !snap.exists()) return pin;
+    }
+    throw new Error('Could not find a free room PIN, please try again');
+  };
+
   const createRoom = async (roomName?: string, roomEmoji?: string) => {
-    const pin = Math.floor(100000 + Math.random() * 900000).toString();
+    const pin = await pickFreePin();
     const roomId = `room_${pin}`;
     const selectedEmoji = roomEmoji?.trim() || '💡';
     const displayRoomName = roomName?.trim() || `Meeting ${pin}`;

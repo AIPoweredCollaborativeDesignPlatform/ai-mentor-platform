@@ -367,7 +367,10 @@ function setupCanvas() {
   resizeObserver = new ResizeObserver(() => {
     const r = containerRef.value?.getBoundingClientRect();
     if (!r || !canvas) return;
+    if (r.width === canvas.width && r.height === canvas.height) return;
     canvas.setDimensions({ width: r.width, height: r.height });
+    // Resizing clears the bitmap; render now (before paint) instead of next frame to avoid a blank flash
+    canvas.renderAll();
     sizeOverlay();
     drawOverlay();
   });

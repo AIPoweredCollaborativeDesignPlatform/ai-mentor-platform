@@ -85,7 +85,11 @@ export interface DriveStatus {
   status: 'ok' | 'needs_auth';
   connectedAt?: number;
   connectedBy?: string;
+  /** Google account whose Drive receives the data */
+  driveAccount?: string | null;
   rootFolderId?: string;
+  /** false: the app folder sits in My Drive and should be moved into the study folder by hand */
+  rootInConfiguredFolder?: boolean;
   error?: string | null;
 }
 

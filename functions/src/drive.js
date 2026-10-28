@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { getFirestore } from 'firebase-admin/firestore';
+import { getSystemConfig } from './config.js';
 
 /**
  * Research data export to the study administrator's Google Drive (P4b).
@@ -29,6 +30,7 @@ class NeedsAuthError extends Error {}
 
 /** Consent URL for the admin; `state` is single-use and expires after 10 minutes. */
 export async function authUrl(clientId, email) {
+  const sys = await getSystemConfig();
   const state = randomBytes(24).toString('hex');
   await db().doc(`oauthStates/${state}`).set({ createdAt: Date.now(), email });
   const params = new URLSearchParams({
@@ -39,7 +41,8 @@ export async function authUrl(clientId, email) {
     access_type: 'offline',
     prompt: 'consent', // always returns a refresh token, also when reconnecting
     include_granted_scopes: 'true',
-    state
+    state,
+    ...(sys.driveAccount ? { login_hint: sys.driveAccount } : {})
   });
   return `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
 }
@@ -62,8 +65,10 @@ export async function handleCallback({ code, state, error }, { clientId, clientS
 
   const previous = (await privateRef().get()).data() || {};
   await privateRef().set({ refreshToken: tokens.refresh_token, connectedAt: Date.now(), connectedBy: stateSnap.data().email, rootFolderId: previous.rootFolderId || null });
+  // A different account cannot reach the previous account's folder: ensureRootFolder then makes a new one
+  const about = await driveFetch(tokens.access_token, 'https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)').catch(() => null);
   const rootFolderId = await ensureRootFolder(tokens.access_token);
-  await statusRef().set({ status: 'ok', connectedAt: Date.now(), connectedBy: stateSnap.data().email, rootFolderId, error: null });
+  await statusRef().set({ status: 'ok', connectedAt: Date.now(), connectedBy: stateSnap.data().email, driveAccount: about?.user?.emailAddress || null, rootFolderId, error: null });
 
   // Re-queue everything that waited for authorization
   const waiting = await db().collection('roomExports').where('status', '==', 'needs_auth').get();
@@ -122,9 +127,21 @@ async function ensureRootFolder(token) {
     const existing = await driveFetch(token, `https://www.googleapis.com/drive/v3/files/${cfg.rootFolderId}?fields=id,trashed`).catch(() => null);
     if (existing?.id && !existing.trashed) return cfg.rootFolderId;
   }
-  const folder = await createFolder(token, ROOT_FOLDER_NAME);
+  // Inside the configured study folder if Drive allows it, otherwise in My Drive (to be moved by hand)
+  const { driveParentFolderId } = await getSystemConfig();
+  let folder = null;
+  let inParent = false;
+  if (driveParentFolderId) {
+    folder = await createFolder(token, ROOT_FOLDER_NAME, driveParentFolderId).catch(err => {
+      if (err instanceof NeedsAuthError) throw err;
+      console.warn('[drive] cannot create inside the configured folder, using My Drive:', err?.message || err);
+      return null;
+    });
+    inParent = Boolean(folder);
+  }
+  folder ||= await createFolder(token, ROOT_FOLDER_NAME);
   await privateRef().set({ rootFolderId: folder.id }, { merge: true });
-  await statusRef().set({ rootFolderId: folder.id }, { merge: true });
+  await statusRef().set({ rootFolderId: folder.id, rootInConfiguredFolder: inParent }, { merge: true });
   return folder.id;
 }
 

@@ -22,6 +22,7 @@ const SYSTEM_DEFAULTS = {
   engine3D: 'meshy',
   defaultProfileId: null as string | null,
   consentText: DEFAULT_CONSENT_TEXT,
+  driveAccount: '0800guava@gmail.com',
   prices: {
     'claude-haiku-5-5': { inputPerMTok: 0.1, outputPerMTok: 0.5 },
     'claude-sonnet-5-5': { inputPerMTok: 2, outputPerMTok: 10 },
@@ -366,7 +367,9 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
             <div class="text-sm font-semibold">Google Drive 研究資料</div>
             <div v-if="!drive" class="text-slate-400">尚未連接。房間結束 10 分鐘後的自動上傳會先排隊，連接後自動補傳。</div>
             <div v-else-if="drive.status === 'needs_auth'" class="text-amber-300">需要重新授權：{{ drive.error }}</div>
-            <div v-else class="text-emerald-300">已連接（{{ drive.connectedBy }}，{{ fmtTime(drive.connectedAt) }}）</div>
+            <div v-else class="text-emerald-300">已連接 Drive 帳號 {{ drive.driveAccount || '（未知）' }}（{{ fmtTime(drive.connectedAt) }}）</div>
+            <div v-if="drive?.status === 'ok' && drive.driveAccount && system.driveAccount && drive.driveAccount !== system.driveAccount" class="text-amber-300">注意：預定的 Drive 帳號是 {{ system.driveAccount }}，請按「重新連接」改選該帳號。</div>
+            <div v-if="drive?.rootFolderId && drive.rootInConfiguredFolder === false" class="text-amber-300/90">「AI Mentor 研究資料」建在雲端硬碟根目錄（權限不允許直接寫進指定資料夾），請把它拖進研究資料夾；拖過去後上傳照常。</div>
             <a v-if="drive?.rootFolderId" :href="`https://drive.google.com/drive/folders/${drive.rootFolderId}`" target="_blank" rel="noopener" class="text-sky-400 hover:underline">開啟「AI Mentor 研究資料」資料夾</a>
           </div>
           <button @click="connectDrive" class="px-3 py-1.5 rounded-lg text-xs font-semibold" :class="drive?.status === 'ok' ? 'border border-slate-700 hover:bg-slate-800' : 'bg-sky-600 hover:bg-sky-500'">

@@ -407,42 +407,46 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
         </template>
       </div>
 
-      <!-- Reactions / reply / copy toolbar -->
-      <div
-        v-if="!isMeetingClosed"
-        class="mt-1 flex items-center select-none z-10 transition-all duration-150"
-        :class="[
-          isMine ? 'justify-end' : 'justify-start',
-          hasReactions ? 'opacity-100' : 'opacity-0 group-hover/msg:opacity-100 pointer-events-none group-hover/msg:pointer-events-auto'
-        ]"
-      >
-        <div class="flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-slate-900/95 border border-slate-700/80 shadow-md backdrop-blur-sm text-xs transition-all duration-150">
+      <!-- Existing reactions stay in the flow; their size never changes on hover -->
+      <div v-if="hasReactions" class="mt-1 flex flex-wrap items-center gap-1 select-none" :class="isMine ? 'justify-end' : 'justify-start'">
+        <template v-for="emoji in REACTIONS" :key="emoji">
           <button
-            v-for="emoji in REACTIONS"
-            :key="emoji"
-            @click.stop="roomStore.toggleMessageReaction(msg.id, emoji)"
-            class="flex items-center gap-1 px-1.5 py-0.5 rounded-full transition transform active:scale-90 cursor-pointer text-xs"
-            :class="reactedByMe(emoji)
-              ? 'bg-sky-500/30 border border-sky-400/90 text-sky-200 ring-2 ring-sky-400/80 shadow-xs font-semibold scale-105'
-              : (reactionUids(emoji).length
-                ? 'bg-slate-800/80 text-slate-300 border border-slate-700/80 hover:bg-slate-700'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800/60 hidden group-hover/msg:inline-flex')"
+            v-if="reactionUids(emoji).length"
+            @click.stop="!isMeetingClosed && roomStore.toggleMessageReaction(msg.id, emoji)"
+            :disabled="isMeetingClosed"
+            class="flex items-center gap-1 px-1.5 py-0.5 rounded-full border text-xs transition active:scale-90 cursor-pointer disabled:cursor-default"
+            :class="reactedByMe(emoji) ? 'bg-sky-500/30 border-sky-400/90 text-sky-200' : 'bg-slate-800/80 text-slate-300 border-slate-700/80 hover:bg-slate-700'"
             :title="reactedByMe(emoji) ? `Remove ${emoji}` : `React ${emoji}`"
           >
-            <span class="text-xs">{{ emoji }}</span>
-            <span v-if="reactionUids(emoji).length" class="text-[10px] font-bold" :class="reactedByMe(emoji) ? 'text-sky-300' : 'text-slate-400'">
-              {{ reactionUids(emoji).length }}
-            </span>
+            <span>{{ emoji }}</span>
+            <span class="text-[10px] font-bold" :class="reactedByMe(emoji) ? 'text-sky-300' : 'text-slate-400'">{{ reactionUids(emoji).length }}</span>
           </button>
+        </template>
+      </div>
 
-          <div class="hidden group-hover/msg:block h-3.5 w-px bg-slate-700/80 mx-0.5"></div>
-          <button @click.stop="emit('reply', msg)" class="hidden group-hover/msg:inline-flex p-1 rounded-full text-slate-400 hover:text-sky-300 hover:bg-slate-800 transition cursor-pointer" title="Reply">
-            <CornerUpLeft class="w-3.5 h-3.5" />
-          </button>
-          <button @click.stop="copyContent" class="hidden group-hover/msg:inline-flex p-1 rounded-full text-slate-400 hover:text-emerald-300 hover:bg-slate-800 transition cursor-pointer" title="Copy message">
-            <Copy class="w-3.5 h-3.5" />
-          </button>
-        </div>
+      <!-- Hover toolbar: a floating overlay, so showing it never moves other messages -->
+      <div
+        v-if="!isMeetingClosed"
+        class="absolute -top-3 z-20 flex items-center gap-0.5 px-1.5 py-0.5 rounded-full whitespace-nowrap bg-slate-900/95 border border-slate-700/80 shadow-md backdrop-blur-sm text-xs select-none transition-opacity duration-150 opacity-0 pointer-events-none group-hover/msg:opacity-100 group-hover/msg:pointer-events-auto"
+        :class="isMine ? 'left-0' : 'right-0'"
+      >
+        <button
+          v-for="emoji in REACTIONS"
+          :key="emoji"
+          @click.stop="roomStore.toggleMessageReaction(msg.id, emoji)"
+          class="px-1.5 py-0.5 rounded-full transition active:scale-90 cursor-pointer"
+          :class="reactedByMe(emoji) ? 'bg-sky-500/30 text-sky-200' : 'text-slate-400 hover:text-white hover:bg-slate-800/60'"
+          :title="reactedByMe(emoji) ? `Remove ${emoji}` : `React ${emoji}`"
+        >
+          {{ emoji }}
+        </button>
+        <div class="h-3.5 w-px bg-slate-700/80 mx-0.5"></div>
+        <button @click.stop="emit('reply', msg)" class="p-1 rounded-full text-slate-400 hover:text-sky-300 hover:bg-slate-800 transition cursor-pointer" title="Reply">
+          <CornerUpLeft class="w-3.5 h-3.5" />
+        </button>
+        <button @click.stop="copyContent" class="p-1 rounded-full text-slate-400 hover:text-emerald-300 hover:bg-slate-800 transition cursor-pointer" title="Copy message">
+          <Copy class="w-3.5 h-3.5" />
+        </button>
       </div>
 
       <div v-if="isRetryableAiFailure" class="flex items-center gap-2 mt-1.5">

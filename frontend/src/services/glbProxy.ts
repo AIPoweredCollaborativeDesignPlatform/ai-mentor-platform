@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 /**
  * GLB Proxy Service — Firebase Storage Re-hosting + Blob URL Fallback
  *
@@ -67,7 +68,7 @@ export async function reHostGlbToFirebaseStorage(
   }
 
   try {
-    if (onProgress) onProgress('Fetching 3D model data...');
+    if (onProgress) onProgress(t('glb.fetching'));
 
     // ─── Step 1: Fetch the GLB binary ─────────────────────────────────────────
     // Use JS fetch (not WebGL fetch) — browser CORS for fetch() is separate from
@@ -131,7 +132,7 @@ export async function reHostGlbToFirebaseStorage(
     if (!arrayBuffer || arrayBuffer.byteLength === 0) {
       return {
         success: false,
-        error: `Unable to fetch 3D model. The file may have expired or is blocked. \n[Details: ${proxyErrors.join(', ')}]`
+        error: `${t('glb.fetchFailed')} \n[Details: ${proxyErrors.join(', ')}]`
       };
     }
 
@@ -144,7 +145,7 @@ export async function reHostGlbToFirebaseStorage(
     // ─── Step 3: Upload to Firebase Storage if available (permanent) ──────────
     if (storage && taskId) {
       try {
-        if (onProgress) onProgress('Uploading to cloud storage (permanent preservation)...');
+        if (onProgress) onProgress(t('glb.uploading'));
         const path = `models/${taskId}.glb`;
         const fileRef = storageRef(storage, path);
 
@@ -175,7 +176,7 @@ export async function reHostGlbToFirebaseStorage(
     console.error('[GLB Proxy] Error:', err);
     return {
       success: false,
-      error: err.message || 'Processing 3D model encountered an error。'
+      error: err.message || t('glb.processFailed')
     };
   }
 }

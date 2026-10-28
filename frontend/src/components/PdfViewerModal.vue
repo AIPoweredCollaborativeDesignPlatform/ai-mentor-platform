@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '../i18n';
 import { X, Download, FileText, ExternalLink } from 'lucide-vue-next';
 
 const props = defineProps<{
@@ -40,9 +41,9 @@ const handleDownload = () => {
           </div>
           <div class="min-w-0">
             <h3 class="text-sm font-semibold text-white truncate max-w-sm sm:max-w-md">
-              {{ title || 'PDF Document' }}
+              {{ title || t('pdf.document') }}
             </h3>
-            <p class="text-[10px] text-slate-400">PDF In-App Viewer</p>
+            <p class="text-[10px] text-slate-400">{{ t('pdf.viewer') }}</p>
           </div>
         </div>
 
@@ -50,7 +51,7 @@ const handleDownload = () => {
           <button
             @click="handleDownload"
             class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium transition"
-            title="Download PDF"
+            :title="t('pdf.download')"
           >
             <Download class="w-3.5 h-3.5" />
             <span class="hidden sm:inline">Download</span>
@@ -59,7 +60,7 @@ const handleDownload = () => {
             :href="pdfUrl"
             target="_blank"
             class="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
-            title="Open in new tab"
+            :title="t('pdf.newTab')"
           >
             <ExternalLink class="w-4 h-4" />
           </a>
@@ -77,7 +78,7 @@ const handleDownload = () => {
         <iframe
           :src="pdfUrl"
           class="w-full h-full rounded-xl border border-slate-800 bg-white"
-          title="PDF Viewer"
+          :title="t('pdf.frame')"
         ></iframe>
       </div>
     </div>

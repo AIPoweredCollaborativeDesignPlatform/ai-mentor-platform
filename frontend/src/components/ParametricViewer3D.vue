@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '../i18n';
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import * as THREE from 'three';
 import {
@@ -485,10 +486,10 @@ const copyTransparentImage = async () => {
           await navigator.clipboard.write([
             new ClipboardItem({ 'image/png': blob })
           ]);
-          roomStore.pushToast('Image Copied', 'Tightly cropped 3D preview copied to clipboard', 'success');
+          roomStore.pushToast(t('glb.imageCopiedTitle'), t('glb.imageCopiedText'), 'success');
         } catch (err) {
           console.error('Clipboard write error:', err);
-          roomStore.pushToast('Copy Failed', 'Clipboard access denied or unsupported', 'error');
+          roomStore.pushToast(t('glb.copyFailedTitle'), t('glb.copyFailedText'), 'error');
         }
       }
       isCopyingImage.value = false;
@@ -562,7 +563,7 @@ onUnmounted(() => {
       <div class="flex items-center gap-2">
         <Box class="w-5 h-5 text-sky-400" />
         <h4 class="font-semibold text-slate-100 text-sm tracking-wide">
-          {{ assetData?.title || 'Parametric 3D Prototype' }}
+          {{ assetData?.title || t('param.title') }}
         </h4>
         <span class="text-[10px] bg-sky-500/20 text-sky-300 font-mono px-2 py-0.5 rounded-full border border-sky-500/30">
           Three.js
@@ -572,7 +573,7 @@ onUnmounted(() => {
           class="inline-flex items-center gap-1 text-[10px] bg-emerald-500/20 text-emerald-300 font-medium px-2 py-0.5 rounded-full border border-emerald-500/30 animate-pulse"
         >
           <Activity class="w-3 h-3 text-emerald-400" />
-          Physics Simulation
+          {{ t('param.physics') }}
         </span>
       </div>
 
@@ -582,7 +583,7 @@ onUnmounted(() => {
           <button
             @click="isPlaying = !isPlaying"
             class="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-200 transition cursor-pointer"
-            :title="isPlaying ? 'Pause Motion' : 'Play Motion'"
+            :title="isPlaying ? t('param.pause') : t('param.play')"
           >
             <Pause v-if="isPlaying" class="w-3.5 h-3.5 text-amber-400" />
             <Play v-else class="w-3.5 h-3.5 text-emerald-400 fill-emerald-400" />
@@ -592,7 +593,7 @@ onUnmounted(() => {
           <button
             @click="cycleSpeed"
             class="flex items-center gap-1 px-2 py-1 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 font-mono text-[11px] transition cursor-pointer"
-            title="Adjust animationPlaySpeed"
+            :title="t('param.speed')"
           >
             <FastForward class="w-3 h-3 text-sky-400" />
             <span>{{ playbackSpeed }}x</span>
@@ -601,7 +602,7 @@ onUnmounted(() => {
           <button
             @click="resetAnimation"
             class="p-1 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition cursor-pointer"
-            title="Reset motion to start position"
+            :title="t('param.resetMotion')"
           >
             <RotateCcw class="w-3.5 h-3.5" />
           </button>
@@ -628,17 +629,17 @@ onUnmounted(() => {
           @click="resetView"
           class="px-2.5 py-1 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-300 transition cursor-pointer"
         >
-          Reset Camera
+          {{ t('param.resetCamera') }}
         </button>
         <button
           @click="copyTransparentImage"
           class="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-300 transition cursor-pointer"
-          :title="isCopyingImage ? 'Copying...' : 'Copy Transparent Render to Clipboard'"
+          :title="isCopyingImage ? t('glb.copying') : t('param.copyRender')"
           :disabled="isCopyingImage"
         >
           <Loader2 v-if="isCopyingImage" class="w-3.5 h-3.5 animate-spin text-sky-400" />
           <Copy v-else class="w-3.5 h-3.5 text-sky-400" />
-          <span>Copy Image</span>
+          <span>{{ t('param.copyImage') }}</span>
         </button>
       </div>
     </div>
@@ -652,7 +653,7 @@ onUnmounted(() => {
 
       <!-- Subtle Hint Badge -->
       <div class="absolute bottom-3 left-3 px-2 py-1 rounded-lg bg-slate-950/80 border border-slate-800 text-[10px] text-slate-400 select-none pointer-events-none">
-        <span class="hidden sm:inline">Shift + Wheel zoom · </span>Single-finger rotate · Two-finger zoom
+        <span class="hidden sm:inline">{{ t('param.wheelHint') }}</span>{{ t('param.touchHint') }}
       </div>
 
       <!-- Floating Zoom Controls -->
@@ -660,21 +661,21 @@ onUnmounted(() => {
         <button
           @click="zoomIn"
           class="p-1.5 rounded-lg bg-slate-900/80 hover:bg-slate-800 border border-slate-700 text-slate-200 shadow transition cursor-pointer"
-          title="Zoom In (+)"
+          :title="t('glb.zoomIn')"
         >
           <ZoomIn class="w-4 h-4" />
         </button>
         <button
           @click="zoomOut"
           class="p-1.5 rounded-lg bg-slate-900/80 hover:bg-slate-800 border border-slate-700 text-slate-200 shadow transition cursor-pointer"
-          title="Zoom Out (-)"
+          :title="t('glb.zoomOut')"
         >
           <ZoomOut class="w-4 h-4" />
         </button>
         <button
           @click="fitCameraToObject"
           class="p-1.5 rounded-lg bg-slate-900/80 hover:bg-slate-800 border border-slate-700 text-slate-200 shadow transition cursor-pointer"
-          title="Center and fit view (Center & Fit)"
+          :title="t('param.fit')"
         >
           <Focus class="w-4 h-4" />
         </button>

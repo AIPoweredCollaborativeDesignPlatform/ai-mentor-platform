@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '../../i18n';
 import { computed } from 'vue';
 import { X } from 'lucide-vue-next';
 import { useRoomStore } from '../../stores/room';
@@ -22,7 +23,7 @@ const stopButton = 'ml-2 px-2 py-0.5 rounded-lg bg-rose-500/20 hover:bg-rose-500
     <span class="flex gap-1 items-center ml-0.5">
       <span v-for="d in [0, 150, 300]" :key="d" class="w-1.5 h-1.5 rounded-full bg-sky-400 animate-bounce" :style="{ animationDelay: `${d}ms` }"></span>
     </span>
-    <button @click="roomStore.abortCurrentAiGeneration()" :class="stopButton" title="Interrupt AI Generation">
+    <button @click="roomStore.abortCurrentAiGeneration()" :class="stopButton" :title="t('status.interruptAi')">
       <X class="w-3 h-3" /> Stop
     </button>
   </div>
@@ -37,11 +38,11 @@ const stopButton = 'ml-2 px-2 py-0.5 rounded-lg bg-rose-500/20 hover:bg-rose-500
 
   <div v-if="aiEnabled && roomStore.isGenerating3D" :class="[bubble, 'bg-indigo-900/60 border border-indigo-500/50 text-indigo-200 shadow-xl']">
     <span class="text-base leading-none animate-pulse">🎨</span>
-    <span class="font-medium text-indigo-100">{{ roomStore.generating3DStatus || 'Generating 3D Model...' }}</span>
+    <span class="font-medium text-indigo-100">{{ roomStore.generating3DStatus || t('status.generating3D') }}</span>
     <span class="flex gap-1 items-center ml-0.5">
       <span v-for="d in [0, 150, 300]" :key="d" class="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" :style="{ animationDelay: `${d}ms` }"></span>
     </span>
-    <button @click="roomStore.abortCurrentAiGeneration()" :class="stopButton" title="Cancel 3D Generation">
+    <button @click="roomStore.abortCurrentAiGeneration()" :class="stopButton" :title="t('status.cancel3D')">
       <X class="w-3 h-3" /> Stop
     </button>
   </div>

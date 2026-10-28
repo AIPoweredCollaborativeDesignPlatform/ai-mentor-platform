@@ -1,4 +1,5 @@
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
+import { roomLanguage } from './i18n.js';
 import { analyze, updateMemory } from './mentor.js';
 import { generate3D } from './mesh3d.js';
 import { getSystemConfig } from './config.js';
@@ -43,7 +44,9 @@ export async function assignProfileToRoom(roomId, profile, assignedBy) {
   const session = !phase || phase === 'waiting'
     ? { session: { phase: 'waiting', expected: flow.expectedParticipants || 1, maxOnline: flow.maxParticipants || 0, taskMinutes: flow.taskMinutes || 0, createdAt: room.session?.createdAt || Date.now() } }
     : {};
-  await roomRef(roomId).set({ ai: publicAiView(profile), ...session }, { merge: true });
+  // The room language follows the profile until the session has started
+  const language = !phase || phase === 'waiting' ? { language: roomLanguage(profile.language) } : {};
+  await roomRef(roomId).set({ ai: publicAiView(profile), ...session, ...language }, { merge: true });
   await logAiCall({ kind: 'profile_assigned', roomId, profileId: profile.id || null, profileVersion: profile.version ?? 0, mode: profile.mode, assignedBy: assignedBy || 'system' });
 }
 

@@ -1,6 +1,6 @@
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../firebase/config';
-import { currentLocale } from '../i18n';
+import { currentLocale, t, type MessageKey } from '../i18n';
 import { useRoomStore } from '../stores/room';
 import type { MentorConfig } from '../types';
 
@@ -61,20 +61,22 @@ export async function summarizeWhiteboardVisualSnapshot(imageDataUrl: string, as
   }
 }
 
-const SVG_ERROR_TEXT: Record<SvgGenerationError['category'], [string, string]> = {
-  KEY_INVALID: ['AI service not configured', 'Please ask the study administrator to check the AI service key.'],
-  QUOTA_EXCEEDED: ['AI service busy', 'The AI service is rate-limited. Please retry in a moment.'],
-  HIGH_DEMAND: ['AI service overloaded', 'The AI service is under heavy load. Please retry in a few seconds.'],
-  PARSE_ERROR: ['SVG Format Error', 'The AI output could not be parsed as SVG. Try a more specific prompt (e.g. "flat blue star icon").'],
-  NETWORK: ['Network Connection Error', 'Unable to reach the AI service. Please check your connection.'],
-  BAD_REQUEST: ['Request rejected', 'The AI rejected this request. Please try a different prompt.'],
-  UNKNOWN: ['AI Vector Generation Failed', 'Please try again.']
+const SVG_ERROR_TEXT: Record<SvgGenerationError['category'], [MessageKey, MessageKey]> = {
+  KEY_INVALID: ['svg.keyInvalidTitle', 'svg.keyInvalidText'],
+  QUOTA_EXCEEDED: ['svg.quotaTitle', 'svg.quotaText'],
+  HIGH_DEMAND: ['svg.overloadTitle', 'svg.overloadText'],
+  PARSE_ERROR: ['svg.parseTitle', 'svg.parseText'],
+  NETWORK: ['svg.networkTitle', 'svg.networkText'],
+  BAD_REQUEST: ['svg.rejectedTitle', 'svg.rejectedText'],
+  UNKNOWN: ['svg.unknownTitle', 'common.tryAgain']
 };
 
 // Whiteboard expects this structured error shape (see CollaborativeWhiteboard error toasts)
 function toSvgError(err: any, model: string): SvgGenerationError {
   const category: SvgGenerationError['category'] = err?.details?.category || (err?.code === 'functions/unavailable' ? 'NETWORK' : 'UNKNOWN');
-  const [title, suggestion] = SVG_ERROR_TEXT[category] || SVG_ERROR_TEXT.UNKNOWN;
+  const [titleKey, suggestionKey] = SVG_ERROR_TEXT[category] || SVG_ERROR_TEXT.UNKNOWN;
+  const title = t(titleKey);
+  const suggestion = t(suggestionKey);
   const message = err?.message || String(err);
   return { isAiError: true, category, title, suggestion, attempts: [{ model, error: message }], rawMessage: message };
 }

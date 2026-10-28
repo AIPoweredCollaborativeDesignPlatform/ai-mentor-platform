@@ -11,6 +11,7 @@ export const DEFAULT_PROFILE = {
   description: 'Fallback used when no profile has been assigned.',
   version: 0,
   mode: 'proactive', // 'none' | 'reactive' | 'proactive'
+  language: 'zh-TW', // room language: participant UI, AI replies and system messages (src/i18n.js)
   shadowAssessment: true,
   displayName: { 'zh-TW': 'AI 導師', en: 'AI Mentor' },
   persona: 'A calm, neutral design mentor who supports the team\'s own decisions, keeps track of what was agreed, and speaks briefly.',
@@ -36,6 +37,7 @@ export const DEFAULT_PROFILE = {
   session: {
     expectedParticipants: 3,
     maxParticipants: 3, // simultaneous online participants (the researcher is not counted)
+    // Both may be a plain string (older profiles) or { 'zh-TW', en }; the room language picks one
     openingText: '', // posted verbatim by the AI at the start
     taskDescription: '', // the design task; the AI opens the topic from it and keeps it in mind
     taskMinutes: 30, // 0 = no time limit (no reminders, no time-up message)

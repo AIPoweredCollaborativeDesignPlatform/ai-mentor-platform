@@ -1,5 +1,7 @@
 // Bump whenever any prompt text changes; it is stored with every AI output for the research log.
-export const PROMPT_VERSION = 'v4-2026-10-28';
+import { localized } from './i18n.js';
+
+export const PROMPT_VERSION = 'v5-2026-10-28';
 
 const LANGUAGE_NAMES = { en: 'English', 'zh-TW': 'Traditional Chinese (繁體中文)' };
 export const languageName = code => LANGUAGE_NAMES[code] || LANGUAGE_NAMES['zh-TW'];
@@ -80,8 +82,8 @@ export function mentorSystemPrompt({ config, language, whiteboardMemories, parti
   return `You are "${name}", an expert design mentor facilitating a remote collaborative design session between human designers.
 Persona: ${profile?.persona || 'calm, neutral and brief'}
 You are the same mentor for the whole session: keep continuity with your memory below.${
-  profile?.session?.taskDescription ? `
-The team's design task (keep the discussion anchored to it): ${profile.session.taskDescription}` : ''}
+  localized(profile?.session?.taskDescription, language) ? `
+The team's design task (keep the discussion anchored to it): ${localized(profile.session.taskDescription, language)}` : ''}
 Always write user-facing text in ${lang}.
 Modules enabled: 3D=${config.enable3D}, Moodboard=${config.enableMoodboard}, FactRetrieval=${config.enableFactRetrieval}, Summary=${config.enableSummary !== false}. Never produce an asset type whose module is disabled.
 ${renderMemory(memory)}
@@ -178,7 +180,7 @@ Return ONLY one JSON object:
 export function sessionMessagePrompt({ kind, profile, language, minutesLeft }) {
   const lang = languageName(language);
   const name = profile?.displayName?.[language] || profile?.displayName?.en || 'AI Mentor';
-  const task = profile?.session?.taskDescription || 'n/a';
+  const task = localized(profile?.session?.taskDescription, language) || 'n/a';
   const goals = {
     kickoff: 'The session has just started and the opening text above has been posted. Open the discussion of the task: invite the team to begin with one concrete, easy first question. Do not repeat the opening text.',
     reminder: `About ${minutesLeft} minute(s) remain in the session. Remind the team of the remaining time and, based on where the discussion stands, suggest what to focus on so they can converge.`,

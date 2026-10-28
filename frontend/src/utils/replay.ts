@@ -1,3 +1,4 @@
+import { t as tr, type MessageKey } from '../i18n';
 import { collection, getDocs, orderBy, query } from 'firebase/firestore';
 import { db } from '../firebase/config';
 
@@ -147,12 +148,12 @@ export function indexAt(events: ResearchEvent[], t: number) {
   return ans;
 }
 
-export const KIND_GROUPS: { id: string; label: string; match: (k: string) => boolean }[] = [
-  { id: 'chat', label: '聊天', match: k => k.startsWith('message_') },
-  { id: 'board', label: '白板物件', match: k => k.startsWith('board_object_') },
-  { id: 'whiteboard_ui', label: '白板開關／工具', match: k => k.startsWith('whiteboard_') },
-  { id: 'attention', label: '注意力（分頁／視窗／閱讀 AI）', match: k => ['tab_hidden', 'tab_visible', 'window_blur', 'window_focus', 'ai_message_viewed', 'page_hide'].includes(k) },
-  { id: 'session', label: '流程（加入／開場／提醒／結束）', match: k => k.startsWith('session_') || k.startsWith('participant_') || k.startsWith('join_') || k.startsWith('room_') }
+export const KIND_GROUPS: { id: string; label: MessageKey; match: (k: string) => boolean }[] = [
+  { id: 'chat', label: 'rp.groupChat', match: k => k.startsWith('message_') },
+  { id: 'board', label: 'rp.groupBoard', match: k => k.startsWith('board_object_') },
+  { id: 'whiteboard_ui', label: 'rp.groupWbUi', match: k => k.startsWith('whiteboard_') },
+  { id: 'attention', label: 'rp.groupAttention', match: k => ['tab_hidden', 'tab_visible', 'window_blur', 'window_focus', 'ai_message_viewed', 'page_hide'].includes(k) },
+  { id: 'session', label: 'rp.groupSession', match: k => k.startsWith('session_') || k.startsWith('participant_') || k.startsWith('join_') || k.startsWith('room_') }
 ];
 
 export const groupOf = (kind: string) => KIND_GROUPS.find(g => g.match(kind))?.id || 'session';
@@ -166,24 +167,24 @@ export const fmtOffset = (ms: number) => {
 export function describe(e: ResearchEvent): string {
   const d = e.data || {};
   switch (e.kind) {
-    case 'message_created': return `${d.messageType === 'whiteboard_state' ? '白板卡片' : '訊息'}：${String(d.message?.content || '').slice(0, 80)}`;
-    case 'message_updated': return `訊息更新（${(d.changedKeys || []).join(', ')}）`;
-    case 'message_deleted': return '訊息刪除';
-    case 'board_object_created': return `新增 ${d.fabric?.type || '物件'}（${d.boardId}）`;
-    case 'board_object_updated': return `修改 ${d.fabric?.type || '物件'}（${d.boardId}）`;
-    case 'board_object_deleted': return `刪除物件（${d.boardId}）`;
-    case 'whiteboard_open': return `開啟白板 ${d.boardId}${d.isNew ? '（新）' : ''}`;
-    case 'whiteboard_close': return `關閉白板 ${d.boardId}`;
-    case 'whiteboard_tool': return `換工具：${d.previous} → ${d.tool}`;
-    case 'ai_message_viewed': return `閱讀 AI 訊息 ${(d.dwellMs / 1000).toFixed(1)} 秒`;
-    case 'participant_joined': return `加入（${d.displayName}）`;
-    case 'participant_rejoined': return '重新加入';
-    case 'join_blocked_full': return `房間已滿被擋（${d.online}/${d.max}）`;
-    case 'session_started': return `開場（${(d.participants || []).length} 人）`;
-    case 'session_time_up': return '時間到';
-    case 'session_ended': return `結束（${d.endedBy}）`;
-    case 'room_enter': return '進入房間';
-    case 'room_leave': return '離開房間';
+    case 'message_created': return tr('rp.msgCreated', { type: tr(d.messageType === 'whiteboard_state' ? 'rp.boardCard' : 'rp.message'), content: String(d.message?.content || '').slice(0, 80) });
+    case 'message_updated': return tr('rp.msgUpdated', { keys: (d.changedKeys || []).join(', ') });
+    case 'message_deleted': return tr('rp.msgDeleted');
+    case 'board_object_created': return tr('rp.objCreated', { type: d.fabric?.type || tr('rp.object'), board: d.boardId });
+    case 'board_object_updated': return tr('rp.objUpdated', { type: d.fabric?.type || tr('rp.object'), board: d.boardId });
+    case 'board_object_deleted': return tr('rp.objDeleted', { board: d.boardId });
+    case 'whiteboard_open': return tr('rp.wbOpen', { board: d.boardId, isNew: d.isNew ? tr('rp.new') : '' });
+    case 'whiteboard_close': return tr('rp.wbClose', { board: d.boardId });
+    case 'whiteboard_tool': return tr('rp.wbTool', { from: d.previous, to: d.tool });
+    case 'ai_message_viewed': return tr('rp.aiViewed', { seconds: (d.dwellMs / 1000).toFixed(1) });
+    case 'participant_joined': return tr('rp.joined', { name: d.displayName });
+    case 'participant_rejoined': return tr('rp.rejoined');
+    case 'join_blocked_full': return tr('rp.full', { online: d.online, max: d.max });
+    case 'session_started': return tr('rp.started', { count: (d.participants || []).length });
+    case 'session_time_up': return tr('rp.timeUp');
+    case 'session_ended': return tr('rp.ended', { by: d.endedBy });
+    case 'room_enter': return tr('rp.enter');
+    case 'room_leave': return tr('rp.leave');
     default: return e.kind;
   }
 }

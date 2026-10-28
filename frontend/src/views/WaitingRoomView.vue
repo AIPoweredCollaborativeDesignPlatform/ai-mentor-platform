@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { doc, getDoc } from 'firebase/firestore';
 import { ArrowLeft, Eye, Loader2, LogIn, ShieldAlert, UserPlus, Users } from 'lucide-vue-next';
-import { db } from '../firebase/config';
-import { DEFAULT_CONSENT_TEXT } from '../constants/consent';
+import { DEFAULT_CONSENT_TEXT, DEFAULT_CONSENT_TEXT_ZH } from '../constants/consent';
+import { setRoomLocale, t } from '../i18n';
 import { useAuthStore } from '../stores/auth';
 import { useRoomStore } from '../stores/room';
 
@@ -65,7 +64,7 @@ const attempt = async (consent: boolean, retry = false) => {
       view.value = 'not_found';
     }
   } catch (err: any) {
-    errorText.value = err?.message || 'Could not join the room.';
+    errorText.value = err?.message || t('join.couldNotJoin');
     view.value = 'error';
   }
 };
@@ -82,9 +81,10 @@ onMounted(async () => {
     view.value = 'not_found';
     return;
   }
-  roomName.value = check.roomName || `Meeting ${pin}`;
-  const config = await getDoc(doc(db, 'config', 'system')).catch(() => null);
-  consentText.value = config?.data()?.consentText || DEFAULT_CONSENT_TEXT;
+  // From here on the page speaks the room language, like the room itself and its consent text
+  setRoomLocale(check.language);
+  roomName.value = check.roomName || t('join.meetingName', { pin });
+  consentText.value = check.consentText || (check.language === 'en' ? DEFAULT_CONSENT_TEXT : DEFAULT_CONSENT_TEXT_ZH);
   await authStore.waitForRole();
   // ?as=participant: the creator of a room made "as a participant" goes straight to the form
   if (route.query.as === 'participant') asParticipant.value = true;
@@ -102,14 +102,18 @@ const choose = (participant: boolean) => {
   attempt(false);
 };
 
-onUnmounted(() => clearTimeout(retryTimer));
+onUnmounted(() => {
+  clearTimeout(retryTimer);
+  // The room view sets it again from the room document
+  setRoomLocale(null);
+});
 </script>
 
 <template>
   <div class="min-h-[100dvh] flex items-center justify-center p-4 bg-slate-950 overflow-y-auto">
     <div v-if="view === 'checking' || view === 'joining'" class="text-center">
       <div class="w-10 h-10 border-2 border-sky-500 border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
-      <p class="text-xs text-slate-400">{{ view === 'joining' ? 'Joining...' : 'Checking the room...' }}</p>
+      <p class="text-xs text-slate-400">{{ view === 'joining' ? t('join.joining') : t('join.checking') }}</p>
     </div>
 
     <div v-else class="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-2xl">
@@ -119,15 +123,15 @@ onUnmounted(() => clearTimeout(retryTimer));
           <ShieldAlert class="w-7 h-7" />
         </div>
         <h2 class="text-lg font-bold text-white mb-2">
-          {{ view === 'ended' ? 'This session has ended' : view === 'error' ? 'Could not join' : 'Room not found' }}
+          {{ view === 'ended' ? t('join.endedTitle') : view === 'error' ? t('join.errorTitle') : t('join.notFoundTitle') }}
         </h2>
         <p class="text-sm text-slate-400 mb-6 leading-relaxed">
-          <template v-if="view === 'ended'">Thank you. This room is closed to new participants.</template>
+          <template v-if="view === 'ended'">{{ t('join.endedText') }}</template>
           <template v-else-if="view === 'error'">{{ errorText }}</template>
-          <template v-else>Room <span class="font-mono text-rose-400 font-semibold">{{ pin }}</span> does not exist. Please check the PIN.</template>
+          <template v-else>{{ t('join.notFoundText', { pin }) }}</template>
         </p>
         <router-link to="/" class="px-5 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold transition inline-flex items-center gap-2 shadow">
-          <ArrowLeft class="w-4 h-4" /> Back to Home
+          <ArrowLeft class="w-4 h-4" /> {{ t('join.backHome') }}
         </router-link>
       </div>
 
@@ -135,25 +139,25 @@ onUnmounted(() => clearTimeout(retryTimer));
       <div v-else-if="view === 'choose'" class="space-y-4">
         <div class="text-center">
           <h2 class="text-xl font-bold text-white mb-1">"{{ roomName }}"</h2>
-          <p class="text-xs text-slate-400">Room <span class="font-mono text-sky-400">{{ pin }}</span></p>
+          <p class="text-xs text-slate-400">{{ t('join.room') }} <span class="font-mono text-sky-400">{{ pin }}</span></p>
         </div>
         <button @click="choose(false)" class="w-full text-left p-4 rounded-xl border border-violet-500/40 bg-violet-500/10 hover:bg-violet-500/20 transition flex gap-3">
           <Eye class="w-5 h-5 text-violet-300 shrink-0 mt-0.5" />
           <span>
-            <span class="block text-sm font-semibold text-white">Observe</span>
-            <span class="block text-xs text-slate-400 mt-0.5">Invisible and read-only. You are not counted and can open every whiteboard.</span>
+            <span class="block text-sm font-semibold text-white">{{ t('join.observe') }}</span>
+            <span class="block text-xs text-slate-400 mt-0.5">{{ t('join.observeHint') }}</span>
           </span>
         </button>
         <button @click="choose(true)" class="w-full text-left p-4 rounded-xl border border-slate-700 bg-slate-950/60 hover:border-sky-500/60 transition flex gap-3">
           <UserPlus class="w-5 h-5 text-sky-300 shrink-0 mt-0.5" />
           <span>
-            <span class="block text-sm font-semibold text-white">Join as a participant</span>
-            <span class="block text-xs text-slate-400 mt-0.5">Nickname and consent like everyone else; you count toward the room size. You stay a participant in this room.</span>
+            <span class="block text-sm font-semibold text-white">{{ t('join.asParticipant') }}</span>
+            <span class="block text-xs text-slate-400 mt-0.5">{{ t('join.asParticipantHint') }}</span>
           </span>
         </button>
         <div class="text-center">
           <router-link to="/" class="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 transition">
-            <ArrowLeft class="w-3.5 h-3.5" /> Cancel
+            <ArrowLeft class="w-3.5 h-3.5" /> {{ t('common.cancel') }}
           </router-link>
         </div>
       </div>
@@ -163,16 +167,16 @@ onUnmounted(() => clearTimeout(retryTimer));
         <div class="w-14 h-14 mx-auto mb-4 rounded-full bg-amber-500/15 border border-amber-500/40 flex items-center justify-center text-amber-300">
           <Users class="w-7 h-7" />
         </div>
-        <h2 class="text-lg font-bold text-white mb-2">Room is full</h2>
+        <h2 class="text-lg font-bold text-white mb-2">{{ t('join.fullTitle') }}</h2>
         <p class="text-sm text-slate-400 mb-2 leading-relaxed">
-          {{ fullInfo.online }} / {{ fullInfo.max }} participants are in this room.
+          {{ t('join.fullText', { online: fullInfo.online, max: fullInfo.max }) }}
         </p>
         <p class="text-xs text-slate-500 mb-6 inline-flex items-center gap-1.5">
-          <Loader2 class="w-3.5 h-3.5 animate-spin" /> You will join automatically when a seat opens.
+          <Loader2 class="w-3.5 h-3.5 animate-spin" /> {{ t('join.fullWait') }}
         </p>
         <div>
           <router-link to="/" class="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 transition">
-            <ArrowLeft class="w-3.5 h-3.5" /> Go back
+            <ArrowLeft class="w-3.5 h-3.5" /> {{ t('join.goBack') }}
           </router-link>
         </div>
       </div>
@@ -180,12 +184,12 @@ onUnmounted(() => clearTimeout(retryTimer));
       <!-- Nickname + consent -->
       <form v-else @submit.prevent="submit" class="space-y-5">
         <div class="text-center">
-          <h2 class="text-xl font-bold text-white mb-1">Join "{{ roomName }}"</h2>
-          <p class="text-xs text-slate-400">Room <span class="font-mono text-sky-400">{{ pin }}</span></p>
+          <h2 class="text-xl font-bold text-white mb-1">{{ t('join.title', { name: roomName }) }}</h2>
+          <p class="text-xs text-slate-400">{{ t('join.room') }} <span class="font-mono text-sky-400">{{ pin }}</span></p>
         </div>
 
         <div class="space-y-2">
-          <label class="text-[11px] font-medium text-slate-400" for="nickname">Nickname (please do not use your real name)</label>
+          <label class="text-[11px] font-medium text-slate-400" for="nickname">{{ t('join.nickname') }}</label>
           <div class="flex items-center gap-2">
             <span class="text-2xl p-1 bg-slate-800 rounded-lg border border-slate-700 shrink-0">{{ avatar }}</span>
             <input
@@ -210,13 +214,13 @@ onUnmounted(() => clearTimeout(retryTimer));
         </div>
 
         <div class="space-y-2">
-          <div class="text-[11px] font-medium text-slate-400">Research consent</div>
+          <div class="text-[11px] font-medium text-slate-400">{{ t('join.consent') }}</div>
           <div class="max-h-48 overflow-y-auto whitespace-pre-line text-xs leading-relaxed text-slate-300 bg-slate-950/70 border border-slate-800 rounded-xl p-3">
-            {{ consentText || 'Loading...' }}
+            {{ consentText || t('common.loading') }}
           </div>
           <label class="flex items-start gap-2 text-xs text-slate-200 cursor-pointer">
             <input type="checkbox" v-model="agreed" class="mt-0.5" />
-            <span>I have read the information above and agree to take part.</span>
+            <span>{{ t('join.agree') }}</span>
           </label>
         </div>
 
@@ -225,11 +229,11 @@ onUnmounted(() => clearTimeout(retryTimer));
           :disabled="!agreed || !nickname.trim()"
           class="w-full py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-semibold transition inline-flex items-center justify-center gap-2 shadow disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          <LogIn class="w-4 h-4" /> Join
+          <LogIn class="w-4 h-4" /> {{ t('join.join') }}
         </button>
         <div class="text-center">
           <router-link to="/" class="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 transition">
-            <ArrowLeft class="w-3.5 h-3.5" /> Cancel
+            <ArrowLeft class="w-3.5 h-3.5" /> {{ t('common.cancel') }}
           </router-link>
         </div>
       </form>

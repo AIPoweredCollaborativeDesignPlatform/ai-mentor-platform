@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '../../i18n';
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue';
 import * as fabric from 'fabric';
 import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
@@ -37,7 +38,7 @@ const { aiModules, aiName } = useRoomAi();
 const board = computed(() => roomStore.currentRoom?.messages.find(m => m.id === props.boardId));
 const isMine = computed(() => !board.value || isOwnBoard(board.value, authStore.uid));
 const isPrivate = computed(() => board.value?.metadata?.isPrivate ?? true);
-const creatorName = computed(() => board.value?.metadata?.creatorName || board.value?.senderName || authStore.displayName || 'My');
+const creatorName = computed(() => board.value?.metadata?.creatorName || board.value?.senderName || authStore.displayName || t('wb.my'));
 const showWhiteboardAi = computed(() => aiModules.value.enableWhiteboardAi);
 
 // ---------- tools ----------
@@ -288,7 +289,7 @@ async function addObjects(list: BoardObject[], { select = true } = {}) {
 async function deleteObjects(list: BoardObject[]) {
   if (!canvas || !list.length) return;
   if (list.some(o => (topOf(o) as BoardObject).locked)) {
-    showToast('Unlock it first to delete');
+    showToast(t('wb.unlockFirst'));
     list = list.filter(o => !(topOf(o) as BoardObject).locked);
     if (!list.length) return;
   }
@@ -966,7 +967,7 @@ const deleteSelection = () => deleteObjects(selection.value);
 // ---------- images ----------
 async function insertImageFile(file: File, at?: fabric.Point) {
   if (!file.type.startsWith('image/')) return;
-  showToast('Uploading image...');
+  showToast(t('wb.uploadingImage'));
   try {
     await ensureBoard();
     const blob = await downscaleImage(file);
@@ -976,10 +977,10 @@ async function insertImageFile(file: File, at?: fabric.Point) {
     const url = await getDownloadURL(snap.ref);
     const img = await createImage(url, at || viewportCenter(), 480, nextZ());
     await addObjects([img]);
-    showToast('Image added');
+    showToast(t('wb.imageAdded'));
   } catch (e) {
     console.error('[whiteboard] image upload failed', e);
-    showToast('Image upload failed');
+    showToast(t('wb.imageFailed'));
   }
 }
 const onFilePicked = (e: Event) => {
@@ -1030,7 +1031,7 @@ async function generateSvg() {
     ai.prompt = '';
     ai.open = false;
   } catch (e: any) {
-    ai.error = e?.title || e?.message || 'Generation failed';
+    ai.error = e?.title || e?.message || t('wb.generationFailed');
   } finally {
     ai.busy = false;
   }
@@ -1040,7 +1041,7 @@ async function sketchToSvg() {
   const list = selection.value.filter(o => !(o instanceof fabric.Textbox));
   if (!list.length || ai.busy || !canvas) return;
   ai.busy = true;
-  showToast(`${aiName.value} is redrawing your sketch...`);
+  showToast(t('wb.redrawing', { name: aiName.value }));
   try {
     canvas.discardActiveObject();
     const png = await renderObjects(list, { maxW: 1024, maxH: 1024, format: 'png', background: '#ffffff' });
@@ -1059,9 +1060,9 @@ async function sketchToSvg() {
     canvas.setActiveObject(img);
     canvas.requestRenderAll();
     await persist([img], list.map(o => o.id));
-    showToast('Sketch converted to SVG');
+    showToast(t('wb.sketchConverted'));
   } catch (e: any) {
-    showToast(e?.title || 'Sketch conversion failed');
+    showToast(e?.title || t('wb.sketchFailed'));
   } finally {
     ai.busy = false;
   }
@@ -1073,21 +1074,21 @@ async function shareToChat() {
   await ensureBoard();
   const thumb = await renderThumbnail(canvas.getObjects()).catch(() => '');
   await roomStore.setBoardPrivacy(props.boardId, false, thumb);
-  showToast('Shared to chat — everyone can now edit this board');
+  showToast(t('wb.sharedToast'));
 }
 async function makePrivate() {
-  if (!window.confirm('Make this whiteboard private? Others will be removed from it and its card will be greyed out.')) return;
+  if (!window.confirm(t('wb.makePrivateConfirm'))) return;
   await roomStore.setBoardPrivacy(props.boardId, true);
-  showToast('Board is now private');
+  showToast(t('wb.nowPrivate'));
 }
 async function sendAsImage() {
-  if (!canvas?.getObjects().length) return showToast('The board is empty');
+  if (!canvas?.getObjects().length) return showToast(t('wb.empty'));
   const url = await renderSnapshot(canvas.getObjects());
   const blob = await (await fetch(url)).blob();
   emit('share', new File([blob], `whiteboard_${Date.now()}.png`, { type: 'image/png' }));
 }
 async function downloadPng() {
-  if (!canvas?.getObjects().length) return showToast('The board is empty');
+  if (!canvas?.getObjects().length) return showToast(t('wb.empty'));
   const a = document.createElement('a');
   a.href = await renderSnapshot(canvas.getObjects());
   a.download = `whiteboard_${Date.now()}.png`;
@@ -1240,10 +1241,10 @@ async function load() {
     if (objects.size) zoomToFit();
   }, applyRemote, err => {
     isLoading.value = false;
-    loadError.value = (err as any)?.code === 'permission-denied' ? 'You no longer have access to this whiteboard.' : 'Could not load the whiteboard.';
+    loadError.value = (err as any)?.code === 'permission-denied' ? t('wb.noAccess') : t('wb.loadFailed');
     console.warn('[whiteboard] listener error', err);
   });
-  sync.startPresence({ uid: authStore.uid, name: authStore.displayName || 'Participant', color: colorFor(authStore.uid) }, list => (others.value = list));
+  sync.startPresence({ uid: authStore.uid, name: authStore.displayName || t('common.participant'), color: colorFor(authStore.uid) }, list => (others.value = list));
   heartbeat = setInterval(() => sync?.updatePresence({}), 5000);
 }
 
@@ -1286,29 +1287,29 @@ const handleCloseRequest = async () => {
 
 defineExpose({ flush: writeThumbnail, handleCloseRequest });
 
-const tools: { id: Tool; icon: any; label: string; key: string }[] = [
-  { id: 'select', icon: MousePointer2, label: 'Select', key: 'V' },
-  { id: 'hand', icon: Hand, label: 'Pan', key: 'H' },
-  { id: 'pen', icon: PenLine, label: 'Pen', key: 'P' },
-  { id: 'eraser', icon: Eraser, label: 'Eraser', key: 'E' },
-  { id: 'sticky', icon: StickyIcon, label: 'Sticky note', key: 'N' },
-  { id: 'text', icon: Type, label: 'Text', key: 'T' },
-  { id: 'rect', icon: Square, label: 'Rectangle', key: 'R' },
-  { id: 'ellipse', icon: Circle, label: 'Ellipse', key: 'O' },
-  { id: 'arrow', icon: MoveUpRight, label: 'Arrow (drag between objects to connect them)', key: 'A' }
-];
+const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(() => [
+  { id: 'select', icon: MousePointer2, label: t('wb.toolSelect'), key: 'V' },
+  { id: 'hand', icon: Hand, label: t('wb.toolPan'), key: 'H' },
+  { id: 'pen', icon: PenLine, label: t('wb.toolPen'), key: 'P' },
+  { id: 'eraser', icon: Eraser, label: t('wb.toolEraser'), key: 'E' },
+  { id: 'sticky', icon: StickyIcon, label: t('wb.toolSticky'), key: 'N' },
+  { id: 'text', icon: Type, label: t('wb.toolText'), key: 'T' },
+  { id: 'rect', icon: Square, label: t('wb.toolRect'), key: 'R' },
+  { id: 'ellipse', icon: Circle, label: t('wb.toolEllipse'), key: 'O' },
+  { id: 'arrow', icon: MoveUpRight, label: t('wb.toolArrow'), key: 'A' }
+]);
 </script>
 
 <template>
   <div class="h-full w-full flex flex-col bg-slate-900 text-slate-100 select-none">
     <!-- Header -->
     <div class="h-12 shrink-0 flex items-center gap-2 px-3 border-b border-slate-800 bg-slate-950">
-      <span class="text-sm font-semibold truncate">{{ creatorName }}'s Board</span>
+      <span class="text-sm font-semibold truncate">{{ t('msg.boardOf', { name: creatorName }) }}</span>
       <span
         class="px-2 py-0.5 rounded-full text-[10px] font-semibold flex items-center gap-1 shrink-0"
         :class="isPrivate ? 'bg-slate-800 text-slate-400' : 'bg-emerald-500/15 text-emerald-400'"
       >
-        <component :is="isPrivate ? Lock : Globe" class="w-3 h-3" />{{ isPrivate ? 'Private' : 'Live' }}
+        <component :is="isPrivate ? Lock : Globe" class="w-3 h-3" />{{ isPrivate ? t('msg.private') : t('wb.live') }}
       </span>
       <div class="flex -space-x-1.5 ml-1">
         <span
@@ -1320,15 +1321,15 @@ const tools: { id: Tool; icon: any; label: string; key: string }[] = [
         >{{ p.name.slice(0, 1).toUpperCase() }}</span>
       </div>
       <div class="flex-1"></div>
-      <button v-if="isMine && isPrivate" class="wb-btn bg-emerald-600 hover:bg-emerald-500 text-white" @click="shareToChat" title="Share this board to the chat so everyone can edit it">
-        <Globe class="w-3.5 h-3.5" /> Share
+      <button v-if="isMine && isPrivate" class="wb-btn bg-emerald-600 hover:bg-emerald-500 text-white" @click="shareToChat" :title="t('wb.shareTitle')">
+        <Globe class="w-3.5 h-3.5" /> {{ t('wb.share') }}
       </button>
-      <button v-if="isMine && !isPrivate" class="wb-btn" @click="makePrivate" title="Make private (others are removed)">
-        <Lock class="w-3.5 h-3.5" /> Make Private
+      <button v-if="isMine && !isPrivate" class="wb-btn" @click="makePrivate" :title="t('wb.makePrivateTitle')">
+        <Lock class="w-3.5 h-3.5" /> {{ t('wb.makePrivate') }}
       </button>
-      <button class="wb-btn" @click="sendAsImage" title="Send the board as an image to the chat"><Send class="w-3.5 h-3.5" /></button>
-      <button class="wb-btn" @click="downloadPng" title="Download PNG"><Download class="w-3.5 h-3.5" /></button>
-      <button class="wb-btn" @click="handleCloseRequest" title="Close"><X class="w-4 h-4" /></button>
+      <button class="wb-btn" @click="sendAsImage" :title="t('wb.sendImage')"><Send class="w-3.5 h-3.5" /></button>
+      <button class="wb-btn" @click="downloadPng" :title="t('wb.downloadPng')"><Download class="w-3.5 h-3.5" /></button>
+      <button class="wb-btn" @click="handleCloseRequest" :title="t('common.close')"><X class="w-4 h-4" /></button>
     </div>
 
     <div class="flex-1 relative overflow-hidden">
@@ -1356,28 +1357,28 @@ const tools: { id: Tool; icon: any; label: string; key: string }[] = [
       </div>
       <div v-if="loadError" class="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-slate-900/90 z-30 text-sm text-slate-300">
         <Lock class="w-6 h-6 text-slate-500" />{{ loadError }}
-        <button class="wb-btn" @click="emit('close')">Close</button>
+        <button class="wb-btn" @click="emit('close')">{{ t('common.close') }}</button>
       </div>
 
       <!-- Tool rail -->
       <div class="absolute left-3 top-1/2 -translate-y-1/2 z-20 flex flex-col gap-1 p-1.5 rounded-2xl bg-slate-950/90 border border-slate-800 shadow-xl backdrop-blur">
         <button
-          v-for="t in tools"
-          :key="t.id"
+          v-for="tl in tools"
+          :key="tl.id"
           class="wb-tool"
-          :class="{ 'wb-tool-active': tool === t.id }"
-          :title="`${t.label} (${t.key})`"
-          @click="tool = t.id"
+          :class="{ 'wb-tool-active': tool === tl.id }"
+          :title="`${tl.label} (${tl.key})`"
+          @click="tool = tl.id"
         >
-          <component :is="t.icon" class="w-4 h-4" />
+          <component :is="tl.icon" class="w-4 h-4" />
         </button>
-        <button class="wb-tool" title="Insert image (or paste / drop)" @click="fileInput?.click()"><ImageIcon class="w-4 h-4" /></button>
-        <button v-if="showWhiteboardAi" class="wb-tool text-fuchsia-300" :class="{ 'wb-tool-active': ai.open }" :title="`Generate with ${aiName}`" @click="ai.open = !ai.open">
+        <button class="wb-tool" :title="t('wb.insertImage')" @click="fileInput?.click()"><ImageIcon class="w-4 h-4" /></button>
+        <button v-if="showWhiteboardAi" class="wb-tool text-fuchsia-300" :class="{ 'wb-tool-active': ai.open }" :title="t('wb.generateWith', { name: aiName })" @click="ai.open = !ai.open">
           <Sparkles class="w-4 h-4" />
         </button>
         <div class="h-px bg-slate-800 my-1"></div>
-        <button class="wb-tool" :disabled="!canUndo" title="Undo (Ctrl+Z)" @click="history.undo().then(refreshHistoryFlags)"><Undo2 class="w-4 h-4" /></button>
-        <button class="wb-tool" :disabled="!canRedo" title="Redo (Ctrl+Shift+Z)" @click="history.redo().then(refreshHistoryFlags)"><Redo2 class="w-4 h-4" /></button>
+        <button class="wb-tool" :disabled="!canUndo" :title="t('wb.undo')" @click="history.undo().then(refreshHistoryFlags)"><Undo2 class="w-4 h-4" /></button>
+        <button class="wb-tool" :disabled="!canRedo" :title="t('wb.redo')" @click="history.redo().then(refreshHistoryFlags)"><Redo2 class="w-4 h-4" /></button>
         <input ref="fileInput" type="file" accept="image/*" class="hidden" @change="onFilePicked" />
       </div>
 
@@ -1409,37 +1410,37 @@ const tools: { id: Tool; icon: any; label: string; key: string }[] = [
         </template>
         <template v-if="tool === 'pen'">
           <div class="w-px h-5 bg-slate-800"></div>
-          <input v-model.number="penWidth" type="range" min="1" max="24" class="w-20 accent-indigo-500" title="Stroke width" />
+          <input v-model.number="penWidth" type="range" min="1" max="24" class="w-20 accent-indigo-500" :title="t('wb.strokeWidth')" />
         </template>
         <template v-if="tool === 'rect' || tool === 'ellipse' || selectionKinds.fillable">
           <div class="w-px h-5 bg-slate-800"></div>
-          <button class="wb-chip" :class="{ 'wb-chip-active': shapeFilled }" @click="toggleFill">Fill</button>
+          <button class="wb-chip" :class="{ 'wb-chip-active': shapeFilled }" @click="toggleFill">{{ t('wb.fill') }}</button>
         </template>
         <template v-if="selectionKinds.connector">
           <div class="w-px h-5 bg-slate-800"></div>
-          <button class="wb-chip" :class="{ 'wb-chip-active': selection.every(o => (o as any).arrowStart) }" title="Arrowhead at the start" @click="toggleArrowHead('arrowStart')">◀ Start</button>
-          <button class="wb-chip" :class="{ 'wb-chip-active': selection.every(o => (o as any).arrowEnd) }" title="Arrowhead at the end" @click="toggleArrowHead('arrowEnd')">End ▶</button>
+          <button class="wb-chip" :class="{ 'wb-chip-active': selection.every(o => (o as any).arrowStart) }" :title="t('wb.arrowStartTitle')" @click="toggleArrowHead('arrowStart')">{{ t('wb.arrowStart') }}</button>
+          <button class="wb-chip" :class="{ 'wb-chip-active': selection.every(o => (o as any).arrowEnd) }" :title="t('wb.arrowEndTitle')" @click="toggleArrowHead('arrowEnd')">{{ t('wb.arrowEnd') }}</button>
         </template>
         <template v-if="selectionKinds.any">
           <div class="w-px h-5 bg-slate-800"></div>
-          <button v-if="selectionKinds.groupable" class="wb-tool !w-7 !h-7" title="Group (Ctrl+G)" @click="groupSelection"><GroupIcon class="w-3.5 h-3.5" /></button>
-          <button v-if="selectionKinds.group" class="wb-tool !w-7 !h-7" title="Ungroup (Ctrl+Shift+G) · double-click a group to edit inside it" @click="ungroupSelection"><Ungroup class="w-3.5 h-3.5" /></button>
+          <button v-if="selectionKinds.groupable" class="wb-tool !w-7 !h-7" :title="t('wb.group')" @click="groupSelection"><GroupIcon class="w-3.5 h-3.5" /></button>
+          <button v-if="selectionKinds.group" class="wb-tool !w-7 !h-7" :title="t('wb.ungroup')" @click="ungroupSelection"><Ungroup class="w-3.5 h-3.5" /></button>
           <button
             class="wb-tool !w-7 !h-7"
             :class="{ 'text-amber-300': selectionLocked }"
-            :title="selectionLocked ? 'Unlock (Ctrl+Shift+L)' : 'Lock (Ctrl+Shift+L)'"
+            :title="selectionLocked ? t('wb.unlock') : t('wb.lock')"
             @click="toggleLock"
           ><component :is="selectionLocked ? Lock : LockOpen" class="w-3.5 h-3.5" /></button>
-          <button class="wb-tool !w-7 !h-7" title="Bring to front" @click="bringToFront"><ArrowUpToLine class="w-3.5 h-3.5" /></button>
-          <button class="wb-tool !w-7 !h-7" title="Send to back" @click="sendToBack"><ArrowDownToLine class="w-3.5 h-3.5" /></button>
+          <button class="wb-tool !w-7 !h-7" :title="t('wb.toFront')" @click="bringToFront"><ArrowUpToLine class="w-3.5 h-3.5" /></button>
+          <button class="wb-tool !w-7 !h-7" :title="t('wb.toBack')" @click="sendToBack"><ArrowDownToLine class="w-3.5 h-3.5" /></button>
           <button
             v-if="showWhiteboardAi && selectionKinds.sketchable"
             class="wb-chip text-fuchsia-300"
             :disabled="ai.busy"
-            title="Redraw the selected sketch as a clean SVG"
+            :title="t('wb.sketchTitle')"
             @click="sketchToSvg"
-          ><Wand2 class="w-3.5 h-3.5" /> Sketch → SVG</button>
-          <button class="wb-tool !w-7 !h-7 text-rose-400" title="Delete (Del)" @click="deleteSelection"><Trash2 class="w-3.5 h-3.5" /></button>
+          ><Wand2 class="w-3.5 h-3.5" /> {{ t('wb.sketchToSvg') }}</button>
+          <button class="wb-tool !w-7 !h-7 text-rose-400" :title="t('wb.delete')" @click="deleteSelection"><Trash2 class="w-3.5 h-3.5" /></button>
         </template>
       </div>
       </div>
@@ -1448,8 +1449,8 @@ const tools: { id: Tool; icon: any; label: string; key: string }[] = [
         v-if="isolated"
         class="absolute left-1/2 -translate-x-1/2 bottom-14 z-20 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-600/90 text-white text-[11px] shadow-xl"
       >
-        Editing group — press Esc or click outside to finish
-        <button class="underline" @click="exitGroup">Done</button>
+        {{ t('wb.editingGroup') }}
+        <button class="underline" @click="exitGroup">{{ t('wb.done') }}</button>
       </div>
 
       <!-- Someone else is editing the selection -->
@@ -1457,7 +1458,7 @@ const tools: { id: Tool; icon: any; label: string; key: string }[] = [
         v-if="selection.length && selection.some(o => editingBy.has(o.id))"
         class="absolute left-1/2 -translate-x-1/2 top-14 z-20 px-2 py-1 rounded-lg bg-amber-500/15 text-amber-300 text-[11px]"
       >
-        {{ editingBy.get(selection.find(o => editingBy.has(o.id))!.id)?.name }} is editing this
+        {{ t('wb.isEditing', { name: editingBy.get(selection.find(o => editingBy.has(o.id))!.id)?.name || '' }) }}
       </div>
 
       <!-- AI generate panel -->
@@ -1465,28 +1466,28 @@ const tools: { id: Tool; icon: any; label: string; key: string }[] = [
         v-if="ai.open && showWhiteboardAi"
         class="absolute left-16 top-1/2 -translate-y-1/2 z-30 w-72 p-3 rounded-2xl bg-slate-950/95 border border-slate-800 shadow-2xl backdrop-blur"
       >
-        <p class="text-xs font-semibold mb-2 flex items-center gap-1.5"><Sparkles class="w-3.5 h-3.5 text-fuchsia-300" /> Generate SVG with {{ aiName }}</p>
+        <p class="text-xs font-semibold mb-2 flex items-center gap-1.5"><Sparkles class="w-3.5 h-3.5 text-fuchsia-300" /> {{ t('wb.generateSvg', { name: aiName }) }}</p>
         <textarea
           v-model="ai.prompt"
           rows="3"
-          placeholder="e.g. a minimalist desk lamp, line art"
+          :placeholder="t('wb.promptPlaceholder')"
           class="w-full text-xs rounded-lg bg-slate-900 border border-slate-700 p-2 outline-none focus:border-indigo-500 resize-none select-text"
           @keydown.enter.exact.prevent="generateSvg"
         ></textarea>
         <p v-if="ai.error" class="text-[11px] text-rose-400 mt-1">{{ ai.error }}</p>
         <div class="flex justify-end gap-2 mt-2">
-          <button class="wb-chip" @click="ai.open = false">Cancel</button>
+          <button class="wb-chip" @click="ai.open = false">{{ t('common.cancel') }}</button>
           <button class="wb-chip wb-chip-active" :disabled="ai.busy || !ai.prompt.trim()" @click="generateSvg">
-            {{ ai.busy ? 'Generating...' : 'Generate' }}
+            {{ ai.busy ? t('wb.generating') : t('wb.generate') }}
           </button>
         </div>
       </div>
 
       <!-- Zoom -->
       <div class="absolute right-3 bottom-3 z-20 flex items-center gap-1 px-1.5 py-1 rounded-xl bg-slate-950/90 border border-slate-800 shadow-xl text-xs">
-        <button class="wb-tool !w-7 !h-7" title="Zoom out" @click="zoomBy(1 / 1.2)"><Minus class="w-3.5 h-3.5" /></button>
-        <button class="w-12 text-center text-slate-300 hover:text-white" title="Zoom to fit" @click="zoomToFit">{{ zoomPct }}%</button>
-        <button class="wb-tool !w-7 !h-7" title="Zoom in" @click="zoomBy(1.2)"><Plus class="w-3.5 h-3.5" /></button>
+        <button class="wb-tool !w-7 !h-7" :title="t('wb.zoomOut')" @click="zoomBy(1 / 1.2)"><Minus class="w-3.5 h-3.5" /></button>
+        <button class="w-12 text-center text-slate-300 hover:text-white" :title="t('wb.zoomFit')" @click="zoomToFit">{{ zoomPct }}%</button>
+        <button class="wb-tool !w-7 !h-7" :title="t('wb.zoomIn')" @click="zoomBy(1.2)"><Plus class="w-3.5 h-3.5" /></button>
       </div>
 
       <div v-if="toast" class="absolute left-1/2 -translate-x-1/2 bottom-4 z-30 px-3 py-1.5 rounded-lg bg-slate-950/95 border border-slate-700 text-xs shadow-xl">

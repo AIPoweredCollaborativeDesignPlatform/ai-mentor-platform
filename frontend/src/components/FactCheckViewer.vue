@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '../i18n';
 import { ref } from 'vue';
 import { ShieldCheck, CheckCircle2, AlertTriangle, ExternalLink, ChevronRight } from 'lucide-vue-next';
 
@@ -27,16 +28,16 @@ const formatRefDisplay = (ref: string) => {
     <div class="flex items-center gap-2 mb-2">
       <ShieldCheck class="w-5 h-5 text-emerald-400 shrink-0" />
       <h4 class="font-semibold text-slate-100 text-sm tracking-wide">
-        Fact Retrieval & Design Verification
+        {{ t('fact.title') }}
       </h4>
       <span class="text-[10px] bg-emerald-500/20 text-emerald-300 font-mono px-2 py-0.5 rounded-full border border-emerald-500/30">
-        AI Verified
+        {{ t('fact.verified') }}
       </span>
     </div>
 
     <!-- Verified Claim -->
     <div v-if="assetData?.claim" class="mb-2 p-2.5 bg-slate-900/80 rounded-xl border border-slate-800 text-xs text-slate-300">
-      <span class="text-slate-500 font-medium">Claim / Topic:</span> {{ assetData.claim }}
+      <span class="text-slate-500 font-medium">{{ t('fact.claim') }}</span> {{ assetData.claim }}
     </div>
 
     <!-- Verdict -->
@@ -55,7 +56,7 @@ const formatRefDisplay = (ref: string) => {
       <button
         @click="isReferencesOpen = !isReferencesOpen"
         class="flex items-center gap-1.5 text-[11px] font-semibold text-slate-400 hover:text-slate-200 transition cursor-pointer select-none mb-1 group"
-        title="Toggle references and literature standards"
+        :title="t('fact.toggleRefs')"
       >
         <ChevronRight
           class="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-200 transition-transform duration-200 shrink-0"
@@ -74,7 +75,7 @@ const formatRefDisplay = (ref: string) => {
             :href="ref.startsWith('http') ? ref : `https://www.google.com/search?q=${encodeURIComponent(ref)}`"
             target="_blank"
             class="text-sky-400 hover:text-sky-300 hover:underline flex items-start gap-1.5 break-all max-w-full"
-            :title="ref.startsWith('http') ? 'Visit Link' : 'Search on Google'"
+            :title="ref.startsWith('http') ? t('fact.visit') : t('fact.search')"
           >
             <ExternalLink class="w-3.5 h-3.5 shrink-0 mt-0.5 text-sky-400" />
             <span class="min-w-0 break-all">{{ formatRefDisplay(ref) }}</span>

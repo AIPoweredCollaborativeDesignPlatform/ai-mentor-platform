@@ -1,5 +1,6 @@
 import { arrayUnion, deleteDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { roomDocRef, roomRef, type RoomContext } from './context';
+import { t } from '../../i18n';
 
 const MEMORY_COOLDOWN_MS = 30000;
 
@@ -25,7 +26,7 @@ export function useRoomWhiteboard(ctx: RoomContext) {
       senderName: name,
       senderAvatar: authStore.avatar || '🎨',
       type: 'whiteboard_state',
-      content: 'Personal Draft',
+      content: t('wb.personalDraft'),
       timestamp: Date.now(),
       fileData: { type: 'image', url: '', name: 'whiteboard.jpg', size: 0 },
       metadata: { boardV: 2, isPrivate: true, wasPublished: false, isSharedPost: false, creatorUid: authStore.uid, creatorName: name, creatorAvatar: authStore.avatar || '🎨', updatedAt: Date.now() }
@@ -47,7 +48,7 @@ export function useRoomWhiteboard(ctx: RoomContext) {
       'metadata.isSharedPost': !isPrivate,
       'metadata.wasPublished': true,
       'metadata.updatedAt': Date.now(),
-      ...(isPrivate ? {} : { content: `${name} shared a collaborative whiteboard`, timestamp: Date.now() }),
+      ...(isPrivate ? {} : { content: t('wb.sharedBoard', { name }), timestamp: Date.now() }),
       ...(thumbnail ? { 'fileData.url': thumbnail } : {})
     });
   };

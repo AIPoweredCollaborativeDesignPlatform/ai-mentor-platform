@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '../../i18n';
 import { computed, ref, watch } from 'vue';
 import { Box, EyeOff, Settings, X } from 'lucide-vue-next';
 import { useAuthStore } from '../../stores/auth';
@@ -105,8 +106,8 @@ const toggleHidden = async (m: MessageItem) => {
   m.metadata = metadata;
   await roomStore.updateCustomMessage(m.id, { metadata });
   roomStore.pushToast(
-    isHidden ? 'Asset Hidden' : 'Asset Unhidden',
-    isHidden ? 'Asset hidden from standard album view.' : 'Asset restored to album view.',
+    isHidden ? t('assets.hiddenTitle') : t('assets.unhiddenTitle'),
+    isHidden ? t('assets.hiddenText') : t('assets.unhiddenText'),
     'info'
   );
 };
@@ -116,7 +117,7 @@ const openItem = (m: MessageItem) => {
     emit('open-whiteboard', m);
     emit('close');
   } else if (m.assetType === 'summary' || m.assetType === 'contract') {
-    emit('open-document', m.assetPayload?.title || (m.assetType === 'contract' ? 'Team Agreement' : 'Executive Summary'), m.assetPayload?.content || '');
+    emit('open-document', m.assetPayload?.title || (m.assetType === 'contract' ? t('assets.teamAgreement') : t('assets.executiveSummary')), m.assetPayload?.content || '');
   } else {
     emit('scroll-to', m.id);
   }
@@ -132,14 +133,14 @@ const openItem = (m: MessageItem) => {
     <div class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950">
       <h2 class="text-base font-bold text-slate-100 flex items-center gap-2">
         <Box class="w-4 h-4 text-amber-400" />
-        Assets Library
+        {{ t('assets.title') }}
       </h2>
       <div class="flex items-center gap-1.5">
         <button
           @click="isManaging = !isManaging"
           class="px-2.5 py-1 rounded-lg text-xs font-medium transition cursor-pointer flex items-center gap-1"
           :class="isManaging ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' : 'bg-slate-800 text-slate-400 hover:text-slate-200'"
-          title="Manage hidden assets"
+          :title="t('assets.manageHidden')"
         >
           <Settings class="w-3.5 h-3.5" />
           <span>{{ isManaging ? 'Done' : 'Manage' }}</span>
@@ -157,22 +158,22 @@ const openItem = (m: MessageItem) => {
           class="flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold transition cursor-pointer text-center"
           :class="activeTab === 'public' ? 'bg-sky-600 text-white shadow-xs' : 'text-slate-400 hover:text-slate-200'"
         >
-          Public Assets ({{ countFor(publicItems) }})
+          {{ t('assets.public', { count: countFor(publicItems) }) }}
         </button>
         <button
           @click="activeTab = 'personal'"
           class="flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold transition cursor-pointer text-center"
           :class="activeTab === 'personal' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-400 hover:text-slate-200'"
         >
-          Personal Drafts ({{ countFor(personalItems) }})
+          {{ t('assets.personal', { count: countFor(personalItems) }) }}
         </button>
       </div>
     </div>
 
     <div class="flex-1 overflow-y-auto p-4 space-y-4">
       <div v-if="!visibleItems.length && !hiddenItems.length" class="text-center text-xs text-slate-500 py-10 px-4">
-        <template v-if="activeTab === 'personal'">No personal drafts yet. When you save a board as private, it will appear here only for you.</template>
-        <template v-else>No public media assets or shared whiteboards in this room yet.</template>
+        <template v-if="activeTab === 'personal'">{{ t('assets.noPersonal') }}</template>
+        <template v-else>{{ t('assets.noPublic') }}</template>
       </div>
 
       <div v-if="visibleItems.length" class="grid grid-cols-3 gap-2">
@@ -194,9 +195,9 @@ const openItem = (m: MessageItem) => {
         <div class="flex items-center justify-between mb-2.5 px-1 select-none">
           <div class="flex items-center gap-1.5 text-xs font-semibold text-slate-400">
             <EyeOff class="w-3.5 h-3.5 text-amber-400/80" />
-            <span>Hidden Items ({{ hiddenItems.length }})</span>
+            <span>{{ t('assets.hiddenItems', { count: hiddenItems.length }) }}</span>
           </div>
-          <span class="text-[10px] text-slate-500">Chronological Partition</span>
+          <span class="text-[10px] text-slate-500">{{ t('assets.chronological') }}</span>
         </div>
         <div class="grid grid-cols-3 gap-2 opacity-65 hover:opacity-100 transition-opacity">
           <AssetTile

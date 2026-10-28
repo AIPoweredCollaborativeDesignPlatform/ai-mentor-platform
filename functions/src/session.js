@@ -7,6 +7,7 @@ import { acquireLock, ensureRoomAi, fetchContext, postAiMessage, releaseLock, st
 import { writeEvent } from './events.js';
 import { logAiCall } from './log.js';
 import { cancelPendingExport, queueRoomExport } from './drive.js';
+import { consentTextFor, localized, str } from './i18n.js';
 
 /**
  * Experiment flow of a room (rooms/{id}.session, written only here):
@@ -42,8 +43,9 @@ const consentHash = text => createHash('sha256').update(text || '').digest('hex'
  */
 export async function joinRoom({ roomId, uid, displayName, avatar, consent, retry = false, observer = false, asParticipant = false }) {
   const sys = await getSystemConfig();
-  const hash = consentHash(sys.consentText);
   const now = Date.now();
+  let consentText = '';
+  let hash = '';
   const name = String(displayName || '').trim().slice(0, 20) || 'Participant';
   const partRef = roomRef(roomId).collection('participants').doc(uid);
 
@@ -51,6 +53,9 @@ export async function joinRoom({ roomId, uid, displayName, avatar, consent, retr
     const roomSnap = await tx.get(roomRef(roomId));
     const room = roomSnap.data();
     if (!roomSnap.exists || room.deletedAt) return { status: 'not_found' };
+    // The consent text shown in the room language is the one agreed to
+    consentText = consentTextFor(sys, room.language);
+    hash = consentHash(consentText);
 
     if (room.hostUid === uid) {
       tx.set(partRef, { uid, status: 'approved', isHost: true, isOnline: true, lastSeen: now }, { merge: true });
@@ -93,7 +98,7 @@ export async function joinRoom({ roomId, uid, displayName, avatar, consent, retr
 
   if (result.status === 'approved' && result.role === 'participant') {
     // Keep the exact consent text each participant agreed to
-    if (!result.returning) await db().doc(`consentTexts/${hash}`).set({ text: sys.consentText || '', firstUsedAt: now }, { merge: true }).catch(() => {});
+    if (!result.returning) await db().doc(`consentTexts/${hash}`).set({ text: consentText, firstUsedAt: now }, { merge: true }).catch(() => {});
     await writeEvent(roomId, { kind: result.returning ? 'participant_rejoined' : 'participant_joined', uid, role: 'participant', data: { displayName: name, ...(result.returning ? {} : { consentTextHash: hash }) } });
     await maybeStartSession(roomId);
   } else if (result.status === 'full' && !retry) {
@@ -126,10 +131,12 @@ export async function maybeStartSession(roomId) {
 
 /** Researcher pressed End, or the room went idle. */
 export async function endSession(roomId, endedBy) {
+  let language;
   const ended = await db().runTransaction(async tx => {
     const snap = await tx.get(roomRef(roomId));
     const room = snap.data();
     if (!room || room.session?.phase === 'ended') return false;
+    language = room.language;
     tx.update(roomRef(roomId), {
       session: { ...(room.session || {}), phase: 'ended', endedAt: Date.now(), endedBy },
       roomStatus: 'ended'
@@ -138,7 +145,7 @@ export async function endSession(roomId, endedBy) {
   });
   if (!ended) return false;
   await roomRef(roomId).collection('messages').add({
-    senderUid: 'system', senderName: 'System', senderAvatar: '🛑', type: 'text', content: 'This session has ended.', timestamp: Date.now()
+    senderUid: 'system', senderName: 'System', senderAvatar: '🛑', type: 'text', content: str('sessionEnded', language), timestamp: Date.now()
   });
   await writeEvent(roomId, { kind: 'session_ended', role: 'system', data: { endedBy } });
   await queueRoomExport(roomId);
@@ -150,10 +157,12 @@ export async function endSession(roomId, endedBy) {
  * is still ahead), and the pending upload waits for the next end.
  */
 export async function reopenSession(roomId, by) {
+  let language;
   const reopened = await db().runTransaction(async tx => {
     const snap = await tx.get(roomRef(roomId));
     const room = snap.data();
     if (room?.session?.phase !== 'ended') return false;
+    language = room.language;
     const { endedAt, endedBy, ...rest } = room.session;
     tx.update(roomRef(roomId), {
       session: { ...rest, phase: 'running', allOfflineSince: null, reopenedAt: Date.now(), reopenCount: (rest.reopenCount || 0) + 1 },
@@ -164,7 +173,7 @@ export async function reopenSession(roomId, by) {
   if (!reopened) return false;
   await cancelPendingExport(roomId);
   await roomRef(roomId).collection('messages').add({
-    senderUid: 'system', senderName: 'System', senderAvatar: '🔓', type: 'text', content: 'The session has been reopened.', timestamp: Date.now()
+    senderUid: 'system', senderName: 'System', senderAvatar: '🔓', type: 'text', content: str('sessionReopened', language), timestamp: Date.now()
   });
   await writeEvent(roomId, { kind: 'session_reopened', role: 'system', data: { by } });
   return true;
@@ -272,7 +281,7 @@ export async function runSessionJob(job, secrets) {
     // Control condition: nothing but a neutral time-up notice
     if (kind === 'time_up') {
       await roomRef(roomId).collection('messages').add({
-        senderUid: 'system', senderName: 'System', senderAvatar: '⏰', type: 'text', content: 'Time is up.', timestamp: Date.now()
+        senderUid: 'system', senderName: 'System', senderAvatar: '⏰', type: 'text', content: str('timeUp', room.language), timestamp: Date.now()
       });
     }
     return;
@@ -288,8 +297,9 @@ export async function runSessionJob(job, secrets) {
   try {
     // The AI is shown typing while it writes the message
     stopTyping = startPresence(roomId, 'text');
-    if (kind === 'kickoff' && profile.session?.openingText?.trim()) {
-      await postAiMessage(roomId, room, profile, { content: profile.session.openingText.trim(), meta: { session: 'opening_text', profileId: profile.id || null, profileVersion: profile.version ?? null } });
+    const openingText = localized(profile.session?.openingText, room.language).trim();
+    if (kind === 'kickoff' && openingText) {
+      await postAiMessage(roomId, room, profile, { content: openingText, meta: { session: 'opening_text', profileId: profile.id || null, profileVersion: profile.version ?? null } });
     }
     const out = await writeSessionMessage({ apiKey: secrets.anthropic, roomId, room, profile, memory: roomAi.memory, kind, minutes });
     if (!out) return;

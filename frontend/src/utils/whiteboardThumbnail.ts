@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import * as fabric from 'fabric';
 
 const WIDTH = 400;
@@ -50,7 +51,7 @@ export async function renderWhiteboardThumbnail(json: string | object): Promise<
     });
 
     const hasContent = minX !== Infinity && maxX > minX && maxY > minY;
-    if (!hasContent) return placeholder('Blank Canvas', true);
+    if (!hasContent) return placeholder(t('thumb.blank'), true);
 
     const pad = 60;
     const scale = Math.min(WIDTH / Math.max(100, maxX - minX + pad * 2), HEIGHT / Math.max(100, maxY - minY + pad * 2));
@@ -71,7 +72,7 @@ export async function renderWhiteboardThumbnail(json: string | object): Promise<
     return out.toDataURL('image/jpeg', 0.85);
   } catch (e) {
     console.warn('renderWhiteboardThumbnail error:', e);
-    return placeholder('Whiteboard Draft', false);
+    return placeholder(t('thumb.draft'), false);
   } finally {
     staticCanvas?.dispose();
   }

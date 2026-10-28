@@ -35,6 +35,8 @@ import {
 } from 'lucide-vue-next';
 
 import { ref, onMounted } from 'vue';
+import { intlLocale, t } from '../i18n';
+import LocaleSwitch from '../components/LocaleSwitch.vue';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -140,9 +142,9 @@ const loadDashboardData = async () => {
     initialRooms.push({
       id: item.roomId || `room_${pin}`,
       pin,
-      title: item.roomName || `Meeting (${pin})`,
+      title: item.roomName || t('room.meetingPin', { pin }),
       emoji: item.roomEmoji || '💡',
-      date: new Date(lastActive).toLocaleString([], {
+      date: new Date(lastActive).toLocaleString(intlLocale(), {
         month: 'short',
         day: 'numeric',
         hour: '2-digit',
@@ -168,7 +170,7 @@ const loadDashboardData = async () => {
                 ? 'moodboard'
                 : 'doc',
             title: m.assetPayload.title,
-            date: new Date(m.timestamp).toLocaleDateString(),
+            date: new Date(m.timestamp).toLocaleDateString(intlLocale()),
             roomPin: pin
           });
         }
@@ -306,7 +308,7 @@ const loadDashboardData = async () => {
                       ? 'moodboard'
                       : 'doc',
                   title: mData.assetPayload.title,
-                  date: new Date(mData.timestamp).toLocaleDateString(),
+                  date: new Date(mData.timestamp).toLocaleDateString(intlLocale()),
                   roomPin: pin
                 });
               }
@@ -341,7 +343,7 @@ const loadDashboardData = async () => {
         ...cached,
         roomId,
         pin,
-        roomName: roomData.roomName || roomData.title || `Meeting (${pin})`,
+        roomName: roomData.roomName || roomData.title || t('room.meetingPin', { pin }),
         roomEmoji: roomData.roomEmoji || cached.roomEmoji || '💡',
         hostUid: roomData.hostUid || cached.hostUid || '',
         isHost,
@@ -355,9 +357,9 @@ const loadDashboardData = async () => {
       mergedRooms.push({
         id: roomId,
         pin,
-        title: roomData.roomName || roomData.title || `Meeting (${pin})`,
+        title: roomData.roomName || roomData.title || t('room.meetingPin', { pin }),
         emoji: roomData.roomEmoji || cached.roomEmoji || '💡',
-        date: new Date(lastActive).toLocaleString([], {
+        date: new Date(lastActive).toLocaleString(intlLocale(), {
           month: 'short',
           day: 'numeric',
           hour: '2-digit',
@@ -537,7 +539,7 @@ const confirmPermanentDelete = async () => {
   trashRooms.value = trashRooms.value.filter((r) => !pinsToDelete.includes(r.pin));
 
   // 3. Transient toast notification
-  trashNotification.value = `Permanently deleted ${count} meeting${count > 1 ? 's' : ''}`;
+  trashNotification.value = t('dash.deleted', { count });
   if (trashNotificationTimer) clearTimeout(trashNotificationTimer);
   trashNotificationTimer = setTimeout(() => {
     trashNotification.value = '';
@@ -608,11 +610,11 @@ const handleLogout = async () => {
           <div class="min-w-0">
             <h1 class="text-lg sm:text-xl font-bold text-white flex items-center gap-2 truncate">
               <LayoutDashboard class="w-4 h-4 sm:w-5 sm:h-5 text-sky-400 shrink-0" />
-              Dashboard
+              {{ t('common.dashboard') }}
             </h1>
             <p class="text-xs text-slate-400 mt-0.5 truncate">
               <span class="text-sky-400 font-mono truncate block max-w-[130px] xs:max-w-[200px] sm:max-w-none">{{
-                authStore.displayName || authStore.email?.split('@')[0] || 'User'
+                authStore.displayName || authStore.email?.split('@')[0] || t('common.user')
               }}</span>
             </p>
           </div>
@@ -623,17 +625,19 @@ const handleLogout = async () => {
             @click="handleRefresh"
             :disabled="isRefreshing"
             class="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-xl border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 transition"
-            title="Sync meetings from Cloud"
+            :title="t('dash.syncTitle')"
           >
             <RefreshCw class="w-3.5 h-3.5 text-sky-400" :class="{ 'animate-spin': isRefreshing }" />
-            <span class="hidden sm:inline">Sync</span>
+            <span class="hidden sm:inline">{{ t('dash.sync') }}</span>
           </button>
+
+          <LocaleSwitch />
 
           <button
             @click="handleLogout"
             class="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 transition"
           >
-            <LogOut class="w-4 h-4 text-rose-400" /> Sign Out
+            <LogOut class="w-4 h-4 text-rose-400" /> {{ t('dash.signOut') }}
           </button>
         </div>
       </div>
@@ -644,13 +648,13 @@ const handleLogout = async () => {
           <div class="flex items-center justify-between mb-3">
             <div class="flex items-center gap-2">
               <h2 class="text-base font-bold text-slate-100 flex items-center gap-2">
-                <Clock class="w-4 h-4 text-sky-400" /> {{ isTrashView ? 'Trash' : 'Meeting History' }}
+                <Clock class="w-4 h-4 text-sky-400" /> {{ isTrashView ? t('dash.trash') : t('dash.history') }}
               </h2>
               <span v-if="historyRooms.length > 0 || trashRooms.length > 0" class="text-xs text-slate-500">
                 ({{ isTrashView ? trashRooms.length : historyRooms.length }})
               </span>
               <span v-if="isLoading" class="text-xs text-slate-500 flex items-center gap-1">
-                <Loader2 class="w-3 h-3 animate-spin text-sky-400" /> Syncing...
+                <Loader2 class="w-3 h-3 animate-spin text-sky-400" /> {{ t('dash.syncing') }}
               </span>
             </div>
 
@@ -663,7 +667,7 @@ const handleLogout = async () => {
                   class="text-xs px-2.5 py-1.5 rounded-lg border border-slate-700 bg-slate-800 text-slate-300 hover:text-white transition flex items-center gap-1"
                 >
                   <CheckCheck class="w-3.5 h-3.5 text-sky-400" />
-                  <span>{{ selectedRooms.size === (isTrashView ? trashRooms.length : historyRooms.length) ? 'Deselect All' : 'Select All' }}</span>
+                  <span>{{ selectedRooms.size === (isTrashView ? trashRooms.length : historyRooms.length) ? t('dash.deselectAll') : t('dash.selectAll') }}</span>
                 </button>
                 <button
                   v-if="!isTrashView"
@@ -672,7 +676,7 @@ const handleLogout = async () => {
                   class="text-xs px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium transition flex items-center gap-1.5 shadow"
                 >
                   <Trash2 class="w-3.5 h-3.5" />
-                  <span>Move to Trash ({{ selectedRooms.size }})</span>
+                  <span>{{ t('dash.moveToTrashN', { count: selectedRooms.size }) }}</span>
                 </button>
                 <template v-else>
                   <button
@@ -680,21 +684,21 @@ const handleLogout = async () => {
                     :disabled="selectedRooms.size === 0"
                     class="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium transition shadow"
                   >
-                    Restore ({{ selectedRooms.size }})
+                    {{ t('dash.restoreN', { count: selectedRooms.size }) }}
                   </button>
                   <button
                     @click="showPermanentDeleteModal = true"
                     :disabled="selectedRooms.size === 0"
                     class="text-xs px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium transition shadow"
                   >
-                    Delete Permanently ({{ selectedRooms.size }})
+                    {{ t('dash.deleteN', { count: selectedRooms.size }) }}
                   </button>
                 </template>
                 <button
                   @click="cancelManageMode"
                   class="text-xs px-2.5 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition"
                 >
-                  Done
+                  {{ t('wb.done') }}
                 </button>
               </template>
 
@@ -706,7 +710,7 @@ const handleLogout = async () => {
                   :class="isTrashView ? 'border-sky-500/50 bg-sky-900/30 text-sky-400' : 'border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300'"
                 >
                   <Trash2 class="w-3.5 h-3.5" />
-                  <span>{{ isTrashView ? 'Exit Trash' : 'Trash' }}</span>
+                  <span>{{ isTrashView ? t('dash.exitTrash') : t('dash.trash') }}</span>
                 </button>
                 <button
                   v-if="(isTrashView ? trashRooms.length : historyRooms.length) > 0"
@@ -714,7 +718,7 @@ const handleLogout = async () => {
                   class="text-xs px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white transition flex items-center gap-1.5"
                 >
                   <SlidersHorizontal class="w-3.5 h-3.5 text-sky-400" />
-                  <span>Manage</span>
+                  <span>{{ t('dash.manage') }}</span>
                 </button>
               </template>
             </div>
@@ -727,13 +731,13 @@ const handleLogout = async () => {
           >
             <template v-if="isTrashView">
               <Trash2 class="w-10 h-10 text-slate-600 mx-auto mb-3" />
-              <p class="text-sm text-slate-400">Trash is empty</p>
-              <p class="text-xs text-slate-500 mt-1">Items in trash will be permanently deleted after 30 days.</p>
+              <p class="text-sm text-slate-400">{{ t('dash.trashEmpty') }}</p>
+              <p class="text-xs text-slate-500 mt-1">{{ t('dash.trashHint') }}</p>
             </template>
             <template v-else>
               <FolderOpen class="w-10 h-10 text-slate-600 mx-auto mb-3" />
-              <p class="text-sm text-slate-400">No meetings yet</p>
-              <p class="text-xs text-slate-500 mt-1">Create or join a meeting to see your history here</p>
+              <p class="text-sm text-slate-400">{{ t('dash.noMeetings') }}</p>
+              <p class="text-xs text-slate-500 mt-1">{{ t('dash.noMeetingsHint') }}</p>
             </template>
           </div>
 
@@ -782,7 +786,7 @@ const handleLogout = async () => {
                       {{ room.title }}
                     </h3>
                     <p class="text-[11px] text-slate-400">
-                      {{ room.members }} members
+                      {{ t('dash.members', { count: room.members }) }}
                     </p>
                   </div>
                 </div>
@@ -801,7 +805,7 @@ const handleLogout = async () => {
                 :to="`/room/${room.id}`"
                 class="mt-3 w-full text-center py-1.5 rounded-lg bg-slate-800 hover:bg-sky-600 hover:text-white text-slate-300 text-xs font-semibold transition"
               >
-                Open
+                {{ t('dash.open') }}
               </router-link>
             </div>
           </div>
@@ -822,17 +826,17 @@ const handleLogout = async () => {
             <Trash2 class="w-5 h-5" />
           </div>
           <div>
-            <h3 class="text-base font-bold text-white">Move to Trash?</h3>
-            <p class="text-xs text-slate-400">This will remove the selected meetings from your dashboard.</p>
+            <h3 class="text-base font-bold text-white">{{ t('dash.moveTitle') }}</h3>
+            <p class="text-xs text-slate-400">{{ t('dash.moveText') }}</p>
           </div>
         </div>
 
         <p class="text-sm text-slate-300 mb-6">
-          Are you sure you want to move
+          {{ t('dash.moveQ1') }}
           <span class="font-semibold text-white">
-            {{ selectedRooms.size === 1 ? '1 meeting' : `${selectedRooms.size} meetings` }}
+            {{ t('dash.meetingsN', { count: selectedRooms.size }) }}
           </span>
-          to trash?
+          {{ t('dash.moveQ2') }}
         </p>
 
         <div class="flex items-center justify-end gap-2.5">
@@ -840,13 +844,13 @@ const handleLogout = async () => {
             @click="showDeleteModal = false"
             class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition border border-slate-700"
           >
-            Cancel
+            {{ t('common.cancel') }}
           </button>
           <button
             @click="confirmDelete"
             class="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold transition shadow-md"
           >
-            Move to Trash
+            {{ t('dash.moveToTrash') }}
           </button>
         </div>
       </div>
@@ -864,15 +868,15 @@ const handleLogout = async () => {
             <Trash2 class="w-5 h-5" />
           </div>
           <div>
-            <h3 class="text-base font-bold text-white">Permanently Delete?</h3>
-            <p class="text-xs text-slate-400">This action cannot be undone. Meeting records will be removed forever.</p>
+            <h3 class="text-base font-bold text-white">{{ t('dash.deleteTitle') }}</h3>
+            <p class="text-xs text-slate-400">{{ t('dash.deleteText') }}</p>
           </div>
         </div>
 
         <p class="text-sm text-slate-300 mb-6">
-          Are you sure you want to permanently delete
+          {{ t('dash.deleteQ') }}
           <span class="font-semibold text-white">
-            {{ selectedRooms.size === 1 ? '1 meeting' : `${selectedRooms.size} meetings` }}
+            {{ t('dash.meetingsN', { count: selectedRooms.size }) }}
           </span>?
         </p>
 
@@ -881,13 +885,13 @@ const handleLogout = async () => {
             @click="showPermanentDeleteModal = false"
             class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition border border-slate-700"
           >
-            Cancel
+            {{ t('common.cancel') }}
           </button>
           <button
             @click="confirmPermanentDelete"
             class="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold transition shadow-md"
           >
-            Delete Permanently
+            {{ t('dash.deletePermanently') }}
           </button>
         </div>
       </div>

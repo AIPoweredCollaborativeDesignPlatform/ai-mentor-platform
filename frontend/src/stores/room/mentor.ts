@@ -2,6 +2,7 @@ import { computed, ref, type Ref } from 'vue';
 import { deleteDoc, updateDoc } from 'firebase/firestore';
 import type { MessageItem, TypingUser } from '../../types';
 import { roomDocRef, roomRef, type RoomContext } from './context';
+import { t } from '../../i18n';
 
 type Messages = {
   addAiMessage: (content: string, assetType?: any, assetPayload?: any, actionOptions?: string[], aiMeta?: unknown) => Promise<void>;
@@ -19,8 +20,8 @@ export function useRoomMentor(ctx: RoomContext, messages: Messages, typingUsers:
   const isGenerating3D = computed(() => typingUsers.value.some(u => u.uid === 'ai_mentor_3d'));
   const isRefining = ref(false);
   const aiStatus = computed<'idle' | 'analyzing'>(() => (isAnalyzing.value ? 'analyzing' : 'idle'));
-  const aiStatusDetail = computed(() => (isAnalyzing.value ? 'AI is thinking...' : 'Ready'));
-  const generating3DStatus = computed(() => (isGenerating3D.value || isRefining.value ? 'Generating 3D model (about 1–3 minutes)...' : ''));
+  const aiStatusDetail = computed(() => (isAnalyzing.value ? t('ai.thinking') : t('ai.ready')));
+  const generating3DStatus = computed(() => (isGenerating3D.value || isRefining.value ? t('ai.generating3D') : ''));
   // Kept for UI compatibility; pacing is now handled by the server-side cooldown
   const aiCooldownRemaining = ref(0);
 
@@ -30,7 +31,7 @@ export function useRoomMentor(ctx: RoomContext, messages: Messages, typingUsers:
     const roomId = currentRoom.value.roomId;
     updateDoc(roomRef(roomId), { aiAbortAt: Date.now(), aiActiveTask: null }).catch(() => {});
     deleteDoc(roomDocRef(roomId, 'typing', 'ai_mentor')).catch(() => {});
-    pushToast('AI Stopped', 'The AI reply in progress has been stopped.', 'info');
+    pushToast(t('ai.stoppedTitle'), t('ai.stoppedText'), 'info');
   };
 
   const retryAiMentorMessage = async (messageId: string) => {
@@ -40,7 +41,7 @@ export function useRoomMentor(ctx: RoomContext, messages: Messages, typingUsers:
       await requestMentorResponse(currentRoom.value.roomId, messageId);
     } catch (err) {
       console.error('Failed to retry AI message:', err);
-      pushToast('Retry Failed', 'Could not reach the AI service. Please try again.', 'error');
+      pushToast(t('toast.retryFailed'), t('ai.retryFailedText'), 'error');
     }
   };
 
@@ -48,19 +49,19 @@ export function useRoomMentor(ctx: RoomContext, messages: Messages, typingUsers:
   const refineMeshyModel = async (originalMsg: MessageItem, texturePrompt = '') => {
     const { title, taskId } = originalMsg.assetPayload || {};
     if (!currentRoom.value || !taskId) {
-      pushToast('Cannot Refine', 'No valid Meshy task ID associated with this model.', 'warning');
+      pushToast(t('ai.cannotRefineTitle'), t('ai.cannotRefineText'), 'warning');
       return;
     }
     if (isGenerating3D.value || isRefining.value) {
-      pushToast('AI Busy', 'A 3D model is already being generated.', 'info');
+      pushToast(t('ai.busyTitle'), t('ai.busy3D'), 'info');
       return;
     }
     isRefining.value = true;
     try {
       const { refineModel3D } = await import('../../services/model3d');
       const res = await refineModel3D(taskId, texturePrompt || title || 'high quality realistic pbr textures');
-      await messages.addAiMessage(`✨ Refined「${title}」with color PBR textures and details.`, 'mesh_3d', {
-        title: `${title} (Colored / PBR)`,
+      await messages.addAiMessage(t('ai.refinedMessage', { title }), 'mesh_3d', {
+        title: t('ai.refinedTitle', { title }),
         provider: res.provider,
         taskId: res.taskId,
         modelUrl: res.modelUrl,
@@ -69,10 +70,10 @@ export function useRoomMentor(ctx: RoomContext, messages: Messages, typingUsers:
         isRefined: true,
         isInteractive: true
       });
-      pushToast('3D Refined', 'Textures and colors have been applied successfully!', 'success');
+      pushToast(t('ai.refinedToastTitle'), t('ai.refinedToastText'), 'success');
     } catch (err: any) {
       console.error('Meshy refine error:', err);
-      pushToast('Refine Failed', err?.message || 'Meshy texturing failed.', 'error');
+      pushToast(t('ai.refineFailedTitle'), err?.message || t('ai.refineFailedText'), 'error');
     } finally {
       isRefining.value = false;
     }

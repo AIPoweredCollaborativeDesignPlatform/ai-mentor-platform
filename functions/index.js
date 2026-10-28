@@ -16,6 +16,7 @@ import { endSession, joinRoom, maybeStartSession, reopenSession, runSessionJob, 
 import { logBoardObjectChange, logMessageChange } from './src/events.js';
 import { authUrl, exportRoom, handleCallback, runDueExports } from './src/drive.js';
 import { createRoom, listPins, markRoomDeleted } from './src/rooms.js';
+import { consentTextFor, roomLanguage } from './src/i18n.js';
 import { claimAnonymousRooms, isAdminToken, isObserverToken, listObservers, setObserver, syncRole } from './src/roles.js';
 
 initializeApp();
@@ -135,7 +136,9 @@ export const peekStudyRoom = onCall({ maxInstances: 20 }, async request => {
   if (!/^room_\d{4,6}$/.test(roomId)) return { exists: false };
   const room = (await getFirestore().doc(`rooms/${roomId}`).get()).data();
   if (!room || room.deletedAt) return { exists: false };
-  return { exists: true, roomName: room.roomName || '', isHost: room.hostUid === request.auth.uid };
+  // The join page shows the consent text in the room language
+  const language = roomLanguage(room.language);
+  return { exists: true, roomName: room.roomName || '', isHost: room.hostUid === request.auth.uid, language, consentText: consentTextFor(await getSystemConfig(), language) };
 });
 
 /** Assigns (or re-assigns) a condition profile to a room; the room keeps a frozen snapshot. */

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '../i18n';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import { useRoomStore } from '../stores/room';
@@ -96,7 +97,7 @@ const handleSaveRoomInfo = async () => {
   isSavingRoomInfo.value = true;
   try {
     await roomStore.updateRoomInfo(editRoomName.value, editRoomEmoji.value);
-    roomInfoSavedMsg.value = 'Room details updated!';
+    roomInfoSavedMsg.value = t('drawer.detailsUpdated');
     setTimeout(() => {
       roomInfoSavedMsg.value = '';
     }, 2500);
@@ -118,11 +119,11 @@ const handleGoogleSignIn = async () => {
   try {
     // Signing in replaces the anonymous uid; the server moves rooms the guest hosted (claimGuestRooms)
     await authStore.upgradeWithGoogle();
-    roomStore.pushToast('Signed In', `Signed in as ${authStore.displayName}`, 'success');
+    roomStore.pushToast(t('profile.signedInTitle'), t('profile.signedInText', { name: authStore.displayName }), 'success');
   } catch (err: any) {
     if (err?.code !== 'auth/popup-closed-by-user' && err?.code !== 'auth/cancelled-popup-request') {
       console.warn('Google sign-in error:', err);
-      roomStore.pushToast('Sign-In Failed', err?.message || 'Could not complete Google Sign-in', 'error');
+      roomStore.pushToast(t('profile.signInFailedTitle'), err?.message || t('drawer.googleFailed'), 'error');
     }
   } finally {
     isGoogleSigningIn.value = false;
@@ -184,7 +185,7 @@ const handleReopenMeeting = async () => {
         senderName: 'System',
         senderAvatar: '🔓',
         type: 'text',
-        content: 'Meeting has been reopened by the host',
+        content: t('drawer.reopenedNotice'),
         timestamp: Date.now()
       });
     } catch (e) {
@@ -240,12 +241,12 @@ onUnmounted(() => {
       <div class="flex items-center justify-between p-4 border-b border-slate-800 bg-slate-950/80">
         <div class="flex items-center gap-2">
           <Sliders class="w-5 h-5 text-sky-400" />
-          <h3 class="font-bold text-slate-100">Room Settings</h3>
+          <h3 class="font-bold text-slate-100">{{ t('drawer.title') }}</h3>
         </div>
         <button
           @click="emit('close')"
           class="p-2 rounded-xl hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition min-h-[44px] min-w-[44px] flex items-center justify-center cursor-pointer"
-          title="Close drawer"
+          :title="t('drawer.close')"
         >
           <X class="w-5 h-5" />
         </button>
@@ -260,17 +261,17 @@ onUnmounted(() => {
           <div class="space-y-0.5">
             <p class="text-xs font-bold text-amber-300 flex items-center gap-1.5">
               <AlertTriangle class="w-3.5 h-3.5 text-amber-400" />
-              Hosting Anonymously
+              {{ t('drawer.hostingAnon') }}
             </p>
             <p class="text-[11px] text-slate-400 leading-tight">
-              Sign in to save this room to your permanent Dashboard
+              {{ t('drawer.hostingAnonHint') }}
             </p>
           </div>
           <button
             @click="handleGoogleSignIn"
             class="px-3 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold shrink-0 flex items-center gap-1.5 shadow transition"
           >
-            <LogIn class="w-3.5 h-3.5" /> Sign in
+            <LogIn class="w-3.5 h-3.5" /> {{ t('drawer.signIn') }}
           </button>
         </div>
 
@@ -279,19 +280,19 @@ onUnmounted(() => {
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-2">
               <Sparkles class="w-4 h-4 text-sky-400" />
-              <h4 class="font-semibold text-sm text-slate-100">Room Details</h4>
+              <h4 class="font-semibold text-sm text-slate-100">{{ t('drawer.roomDetails') }}</h4>
             </div>
             <span
               v-if="roomStore.isHost"
               class="text-[10px] font-medium px-2 py-0.5 rounded-full bg-sky-500/20 text-sky-300 border border-sky-500/30 flex items-center gap-1"
             >
-              👑 Host Edit
+              {{ t('drawer.hostEdit') }}
             </span>
             <span
               v-else
               class="text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700"
             >
-              Host Only
+              {{ t('drawer.hostOnly') }}
             </span>
           </div>
 
@@ -304,13 +305,13 @@ onUnmounted(() => {
                 :disabled="!roomStore.isHost"
                 class="w-13 h-13 rounded-2xl bg-slate-900 border-2 transition-all flex items-center justify-center text-2xl sm:text-3xl shadow-inner group relative"
                 :class="roomStore.isHost ? 'border-slate-700 hover:border-sky-400 cursor-pointer hover:scale-105 active:scale-95' : 'border-slate-800 cursor-default opacity-90'"
-                :title="roomStore.isHost ? 'Click to change room avatar emoji' : 'Room avatar'"
+                :title="roomStore.isHost ? t('drawer.changeAvatar') : t('drawer.roomAvatar')"
               >
                 <span>{{ editRoomEmoji || '💡' }}</span>
                 <span
                   v-if="roomStore.isHost"
                   class="absolute -bottom-1 -right-1 p-1 bg-sky-600 group-hover:bg-sky-500 text-white rounded-full shadow-md transition"
-                  title="Change emoji"
+                  :title="t('drawer.changeEmoji')"
                 >
                   <Edit3 class="w-2.5 h-2.5" />
                 </span>
@@ -320,7 +321,7 @@ onUnmounted(() => {
             <!-- Room Name Input & Save -->
             <div class="flex-1 space-y-1 min-w-0">
               <label class="text-[11px] font-medium text-slate-400 block truncate">
-                Room Name
+                {{ t('drawer.roomName') }}
               </label>
               <div class="flex items-center gap-1.5">
                 <input
@@ -328,7 +329,7 @@ onUnmounted(() => {
                   :disabled="!roomStore.isHost"
                   @keydown.enter.prevent="handleSaveRoomInfo"
                   type="text"
-                  placeholder="e.g. Design Sync, Sprint 4..."
+                  :placeholder="t('drawer.roomNamePlaceholder')"
                   maxlength="50"
                   class="flex-1 bg-slate-900 border border-slate-700 disabled:opacity-60 disabled:cursor-not-allowed rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 transition min-w-0"
                 />
@@ -341,7 +342,7 @@ onUnmounted(() => {
                 >
                   <Loader2 v-if="isSavingRoomInfo" class="w-3.5 h-3.5 animate-spin" />
                   <Check v-else-if="roomInfoSavedMsg" class="w-3.5 h-3.5 text-emerald-300" />
-                  <span>{{ roomInfoSavedMsg ? 'Saved' : 'Save' }}</span>
+                  <span>{{ roomInfoSavedMsg ? t('drawer.saved') : t('drawer.save') }}</span>
                 </button>
               </div>
             </div>
@@ -354,7 +355,7 @@ onUnmounted(() => {
           >
             <div class="flex items-center justify-between pb-1 border-b border-slate-800">
               <span class="text-xs font-semibold text-sky-300 flex items-center gap-1.5">
-                <span>Select Room Avatar</span>
+                <span>{{ t('drawer.selectAvatar') }}</span>
               </span>
               <button
                 type="button"
@@ -371,7 +372,7 @@ onUnmounted(() => {
               <input
                 v-model="emojiSearchQuery"
                 type="text"
-                placeholder="Search emojis (e.g. rocket, coffee, cat, tools)..."
+                :placeholder="t('drawer.emojiSearch')"
                 class="w-full bg-slate-950 border border-slate-700 rounded-xl pl-8 pr-7 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500"
               />
               <button
@@ -391,43 +392,43 @@ onUnmounted(() => {
                 @click="selectedEmojiCategory = 'all'"
                 class="px-2 py-0.5 rounded-lg shrink-0 transition"
                 :class="selectedEmojiCategory === 'all' ? 'bg-sky-600 text-white font-medium' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'"
-              >All</button>
+              >{{ t('home.emojiAll') }}</button>
               <button
                 type="button"
                 @click="selectedEmojiCategory = 'tools'"
                 class="px-2 py-0.5 rounded-lg shrink-0 transition"
                 :class="selectedEmojiCategory === 'tools' ? 'bg-sky-600 text-white font-medium' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'"
-              >🛠️ Tools</button>
+              >{{ t('home.emojiTools') }}</button>
               <button
                 type="button"
                 @click="selectedEmojiCategory = 'food'"
                 class="px-2 py-0.5 rounded-lg shrink-0 transition"
                 :class="selectedEmojiCategory === 'food' ? 'bg-sky-600 text-white font-medium' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'"
-              >🍕 Food</button>
+              >{{ t('home.emojiFood') }}</button>
               <button
                 type="button"
                 @click="selectedEmojiCategory = 'transport'"
                 class="px-2 py-0.5 rounded-lg shrink-0 transition"
                 :class="selectedEmojiCategory === 'transport' ? 'bg-sky-600 text-white font-medium' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'"
-              >🚀 Transport</button>
+              >{{ t('drawer.emojiTransport') }}</button>
               <button
                 type="button"
                 @click="selectedEmojiCategory = 'characters'"
                 class="px-2 py-0.5 rounded-lg shrink-0 transition"
                 :class="selectedEmojiCategory === 'characters' ? 'bg-sky-600 text-white font-medium' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'"
-              >🧑‍🚀 People</button>
+              >{{ t('home.emojiPeople') }}</button>
               <button
                 type="button"
                 @click="selectedEmojiCategory = 'nature'"
                 class="px-2 py-0.5 rounded-lg shrink-0 transition"
                 :class="selectedEmojiCategory === 'nature' ? 'bg-sky-600 text-white font-medium' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'"
-              >🌿 Nature</button>
+              >{{ t('home.emojiNature') }}</button>
               <button
                 type="button"
                 @click="selectedEmojiCategory = 'activities'"
                 class="px-2 py-0.5 rounded-lg shrink-0 transition"
                 :class="selectedEmojiCategory === 'activities' ? 'bg-sky-600 text-white font-medium' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'"
-              >🎯 Activities</button>
+              >{{ t('home.emojiActivities') }}</button>
             </div>
 
             <!-- Emoji Grid -->
@@ -444,7 +445,7 @@ onUnmounted(() => {
                 {{ item.emoji }}
               </button>
               <div v-if="filteredRoomEmojis.length === 0" class="col-span-7 py-3 text-center text-xs text-slate-500">
-                No matching emojis found
+                {{ t('home.noEmoji') }}
               </div>
             </div>
           </div>
@@ -460,19 +461,19 @@ onUnmounted(() => {
             <div class="flex items-center gap-2">
               <Users class="w-4 h-4 text-amber-400" />
               <h4 class="font-semibold text-sm text-slate-200">
-                Pending Requests
+                {{ t('drawer.pendingRequests') }}
               </h4>
             </div>
             <span
               class="text-xs px-2 py-0.5 rounded-full font-bold"
               :class="roomStore.pendingParticipants.length > 0 ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40 animate-pulse' : 'bg-slate-800 text-slate-500'"
             >
-              {{ roomStore.pendingParticipants.length }} pending
+              {{ t('drawer.pendingCount', { count: roomStore.pendingParticipants.length }) }}
             </span>
           </div>
 
           <div v-if="roomStore.pendingParticipants.length === 0" class="text-xs text-slate-500 italic p-3 bg-slate-950/50 rounded-xl border border-slate-800/80 text-center">
-            No pending requests
+            {{ t('drawer.noPending') }}
           </div>
 
           <div v-else class="space-y-2">
@@ -485,7 +486,7 @@ onUnmounted(() => {
                 <span class="text-2xl">{{ p.avatar }}</span>
                 <div>
                   <h5 class="text-sm font-medium text-slate-100">{{ p.displayName }}</h5>
-                  <p class="text-[11px] text-amber-400/80">Waiting for approval...</p>
+                  <p class="text-[11px] text-amber-400/80">{{ t('drawer.waitingApproval') }}</p>
                 </div>
               </div>
               <div class="flex items-center gap-1.5">
@@ -493,13 +494,13 @@ onUnmounted(() => {
                   @click="roomStore.approveParticipant(p.uid)"
                   class="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow transition"
                 >
-                  <CheckCircle class="w-3.5 h-3.5" /> Approve
+                  <CheckCircle class="w-3.5 h-3.5" /> {{ t('toast.approve') }}
                 </button>
                 <button
                   @click="roomStore.rejectParticipant(p.uid)"
                   class="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-600/80 hover:bg-rose-500 text-white text-xs transition"
                 >
-                  <XCircle class="w-3.5 h-3.5" /> Decline
+                  <XCircle class="w-3.5 h-3.5" /> {{ t('toast.decline') }}
                 </button>
               </div>
             </div>
@@ -512,7 +513,7 @@ onUnmounted(() => {
             <div class="flex items-center gap-2">
               <ShieldCheck class="w-4 h-4 text-emerald-400" />
               <h4 class="font-semibold text-sm text-slate-200">
-                Members ({{ roomStore.approvedParticipants.length }})
+                {{ t('drawer.members', { count: roomStore.approvedParticipants.length }) }}
               </h4>
             </div>
           </div>
@@ -547,7 +548,7 @@ onUnmounted(() => {
                   <button
                     @click="roomStore.muteParticipant(p.uid, !p.isMuted)"
                     class="p-1.5 rounded bg-slate-800 hover:bg-slate-700 transition"
-                    :title="p.isMuted ? 'Unmute' : 'Mute'"
+                    :title="p.isMuted ? t('drawer.unmute') : t('drawer.mute')"
                   >
                     <MicOff v-if="p.isMuted" class="w-3.5 h-3.5 text-rose-400" />
                     <Mic v-else class="w-3.5 h-3.5 text-slate-400" />
@@ -555,7 +556,7 @@ onUnmounted(() => {
                   <button
                     @click="roomStore.kickParticipant(p.uid)"
                     class="p-1.5 rounded bg-slate-800 hover:bg-rose-900/50 transition"
-                    title="Remove from meeting"
+                    :title="t('drawer.remove')"
                   >
                     <UserMinus class="w-3.5 h-3.5 text-rose-400" />
                   </button>
@@ -568,7 +569,7 @@ onUnmounted(() => {
         <hr class="border-slate-800" />
         <!-- Research conditions are managed in the admin page (/#/admin) -->
         <router-link v-if="isStudyAdmin" to="/admin" class="block p-3 rounded-xl border border-sky-500/40 bg-sky-950/40 text-xs text-sky-200 hover:bg-sky-900/50 transition">
-          研究設定後台：AI 條件設定檔、指派房間、費用估算 →
+          {{ t('drawer.adminLink') }}
         </router-link>
 
         <hr class="border-slate-800" />
@@ -577,10 +578,10 @@ onUnmounted(() => {
         <div v-if="roomStore.isHost && !authStore.isGoogleLinked" class="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl mb-4 text-left">
           <div class="flex items-center gap-2 text-amber-400 font-semibold text-xs mb-1">
             <AlertTriangle class="w-4 h-4 shrink-0" />
-            <span>Anonymous Host</span>
+            <span>{{ t('drawer.anonHost') }}</span>
           </div>
           <p class="text-[11px] text-slate-300 leading-relaxed mb-2.5">
-            You are hosting as an anonymous guest. Link your Google account to keep this meeting in your history and reclaim host privileges later.
+            {{ t('drawer.anonHostText') }}
           </p>
           <button
             @click="handleGoogleSignIn"
@@ -589,7 +590,7 @@ onUnmounted(() => {
           >
             <Loader2 v-if="isGoogleSigningIn" class="w-3.5 h-3.5 animate-spin" />
             <LogIn v-else class="w-3.5 h-3.5" />
-            {{ isGoogleSigningIn ? 'Signing in...' : 'Sign in with Google to Save Room' }}
+            {{ isGoogleSigningIn ? t('common.signingIn') : t('drawer.signInSave') }}
           </button>
         </div>
 
@@ -597,7 +598,7 @@ onUnmounted(() => {
 
         <!-- 5. Meeting Session Actions -->
         <section class="space-y-2 pb-6">
-          <h4 class="font-semibold text-sm text-slate-100 mb-2">Meeting Actions</h4>
+          <h4 class="font-semibold text-sm text-slate-100 mb-2">{{ t('drawer.actions') }}</h4>
 
           <!-- Reopen Meeting (If Ended & Host) -->
           <button
@@ -606,7 +607,7 @@ onUnmounted(() => {
             class="w-full py-2.5 px-3 rounded-xl border border-emerald-500/40 bg-emerald-950/40 hover:bg-emerald-900/50 text-emerald-300 hover:text-emerald-100 text-xs font-semibold transition flex items-center justify-center gap-2 shadow"
           >
             <Unlock class="w-4 h-4 text-emerald-400" />
-            <span>Reopen Meeting (Enable Chat)</span>
+            <span>{{ t('drawer.reopenChat') }}</span>
           </button>
 
           <!-- Leave Meeting -->
@@ -615,7 +616,7 @@ onUnmounted(() => {
             class="w-full py-2.5 px-3 rounded-xl border border-slate-700 bg-slate-950/60 hover:bg-slate-800 text-slate-300 hover:text-white text-xs font-semibold transition flex items-center justify-center gap-2"
           >
             <LogOut class="w-4 h-4 text-amber-400" />
-            <span>{{ roomStore.isHost ? 'Leave Meeting (Keep Active for Others)' : 'Leave Meeting' }}</span>
+            <span>{{ roomStore.isHost ? t('drawer.leaveKeep') : t('drawer.leave') }}</span>
           </button>
 
           <!-- End Meeting for All (Host only) -->
@@ -625,7 +626,7 @@ onUnmounted(() => {
             class="w-full py-2.5 px-3 rounded-xl border border-rose-900/60 bg-rose-950/30 hover:bg-rose-900/50 text-rose-300 hover:text-rose-100 text-xs font-semibold transition flex items-center justify-center gap-2"
           >
             <Power class="w-4 h-4 text-rose-400" />
-            <span>Close Meeting (Read-Only Archive)</span>
+            <span>{{ t('drawer.closeArchive') }}</span>
           </button>
         </section>
       </div>
@@ -637,29 +638,29 @@ onUnmounted(() => {
         <div class="w-12 h-12 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center mx-auto mb-3">
           <AlertTriangle class="w-6 h-6" />
         </div>
-        <h3 class="text-base font-bold text-white mb-2">Save This Room First?</h3>
+        <h3 class="text-base font-bold text-white mb-2">{{ t('drawer.saveFirst') }}</h3>
         <p class="text-xs text-slate-300 mb-5 leading-relaxed">
-          You are not signed in. If you leave now, you will <strong class="text-amber-400">permanently lose host privileges</strong> and cannot access this meeting again. Would you like to sign in with Google?
+          {{ t('drawer.saveFirstText') }}
         </p>
         <div class="space-y-2">
           <button
             @click="handleGoogleSignIn"
             class="w-full py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold transition shadow flex items-center justify-center gap-1.5"
           >
-            <LogIn class="w-3.5 h-3.5" /> Sign in with Google (Save Room)
+            <LogIn class="w-3.5 h-3.5" /> {{ t('drawer.signInSaveRoom') }}
           </button>
           <div class="flex gap-2 pt-1">
             <button
               @click="showAnonWarningModal = false"
               class="flex-1 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 text-xs font-semibold transition"
             >
-              Cancel
+              {{ t('common.cancel') }}
             </button>
             <button
               @click="proceedAfterAnonWarning"
               class="flex-1 py-2 rounded-xl bg-slate-800 hover:bg-rose-950/60 text-rose-400 border border-slate-700 text-xs font-semibold transition"
             >
-              Leave Anyway
+              {{ t('drawer.leaveAnyway') }}
             </button>
           </div>
         </div>
@@ -669,24 +670,22 @@ onUnmounted(() => {
     <!-- Confirm Leave Modal -->
     <div v-if="showLeaveModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs">
       <div class="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-6 shadow-2xl text-center">
-        <h3 class="text-base font-bold text-white mb-2">Leave Meeting?</h3>
+        <h3 class="text-base font-bold text-white mb-2">{{ t('drawer.leaveTitle') }}</h3>
         <p class="text-xs text-slate-400 mb-5 leading-relaxed">
-          {{ roomStore.isHost
-            ? 'You will leave the meeting, but other members can continue chatting. You can rejoin anytime from your Dashboard.'
-            : 'Are you sure you want to leave this meeting? You can rejoin later.' }}
+          {{ roomStore.isHost ? t('drawer.leaveHostText') : t('drawer.leaveText') }}
         </p>
         <div class="flex gap-2">
           <button
             @click="showLeaveModal = false"
             class="flex-1 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition"
           >
-            Cancel
+            {{ t('common.cancel') }}
           </button>
           <button
             @click="handleLeaveMeeting"
             class="flex-1 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold transition shadow"
           >
-            Confirm Leave
+            {{ t('drawer.confirmLeave') }}
           </button>
         </div>
       </div>
@@ -695,22 +694,22 @@ onUnmounted(() => {
     <!-- Confirm End for All Modal -->
     <div v-if="showEndAllModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs">
       <div class="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-6 shadow-2xl text-center">
-        <h3 class="text-base font-bold text-rose-400 mb-2">Close Meeting for Everyone?</h3>
+        <h3 class="text-base font-bold text-rose-400 mb-2">{{ t('drawer.closeTitle') }}</h3>
         <p class="text-xs text-slate-400 mb-5 leading-relaxed">
-          This will set the meeting to read-only archive mode. Members will be able to review past messages and assets, but messaging will be disabled. As host, you can reopen it anytime.
+          {{ t('drawer.closeText') }}
         </p>
         <div class="flex gap-2">
           <button
             @click="showEndAllModal = false"
             class="flex-1 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition"
           >
-            Cancel
+            {{ t('common.cancel') }}
           </button>
           <button
             @click="handleEndMeetingForAll"
             class="flex-1 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold transition shadow"
           >
-            Close Meeting
+            {{ t('drawer.closeMeeting') }}
           </button>
         </div>
       </div>

@@ -3,6 +3,9 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { ArrowLeft, Loader2, Pause, Play } from 'lucide-vue-next';
 import { useAuthStore } from '../stores/auth';
+// `t` is the playback time in this view
+import { t as tr, type MessageKey } from '../i18n';
+import LocaleSwitch from '../components/LocaleSwitch.vue';
 import BoardReplayCanvas from '../components/admin/BoardReplayCanvas.vue';
 import {
   KIND_GROUPS, describe, fmtOffset, groupOf, indexAt, loadEvents, loadFinalBoard, membersOf, stateAt, wasTruncated,
@@ -27,7 +30,7 @@ const t = ref(0);
 const members = computed(() => membersOf(events.value));
 const who = (e: { uid: string | null; role: string }) => {
   if (e.role === 'ai') return 'AI';
-  if (e.role === 'system') return '系統';
+  if (e.role === 'system') return tr('rp.system');
   const m = e.uid ? members.value.get(e.uid) : undefined;
   return m ? m.alias : e.role === 'unknown' ? '—' : e.role;
 };
@@ -44,7 +47,7 @@ const boardIds = computed(() => [...new Set([...boardCards.value.keys(), ...stat
 const boardLabel = (id: string) => {
   const card = boardCards.value.get(id);
   const creator = card?.metadata?.creatorUid ? aliasOfUid(card.metadata.creatorUid) : '?';
-  return `${creator} · ${card?.metadata?.isPrivate ? '私人' : card ? '公開' : '—'}`;
+  return `${creator} · ${card?.metadata?.isPrivate ? tr('rp.private') : card ? tr('rp.public') : '—'}`;
 };
 const showBoard = (id: string) => {
   boardId.value = id;
@@ -131,9 +134,11 @@ watch(() => state.value.messages.length, async () => {
 const votersOf = (m: ReplayMessage, option: string) => Object.values(m.pollVotes || {}).filter(v => v?.option === option);
 const aliasOfUid = (uid: string) => members.value.get(uid)?.alias || '?';
 const isUrl = (u?: string) => Boolean(u && /^(https?:|data:image)/.test(u));
-const ASSET_LABELS: Record<string, string> = {
-  summary: '摘要', fact_check: '事實查核', moodboard: '情緒板', mesh_3d: '3D 模型', parametric_3d: '3D 預覽', image: '圖片', vector: '向量圖', text: '文字', contract: '文件'
+const ASSET_KEYS: Record<string, MessageKey> = {
+  summary: 'rp.assetSummary', fact_check: 'rp.assetFact', moodboard: 'rp.assetMood', mesh_3d: 'rp.assetMesh', parametric_3d: 'rp.assetParam',
+  image: 'rp.assetImage', vector: 'rp.assetVector', text: 'rp.assetText', contract: 'rp.assetContract'
 };
+const assetLabel = (type?: string) => (type && ASSET_KEYS[type] ? tr(ASSET_KEYS[type]) : type || '');
 
 const ROLE_CLASS: Record<string, string> = {
   participant: 'text-sky-300',
@@ -166,24 +171,25 @@ onMounted(async () => {
   <div class="min-h-[100dvh] bg-slate-950 text-slate-100">
     <header class="h-14 border-b border-slate-800 bg-slate-900/90 px-4 flex items-center gap-3">
       <router-link to="/admin" class="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400"><ArrowLeft class="w-4 h-4" /></router-link>
-      <h1 class="font-semibold text-sm">重播 <span class="font-mono text-sky-400">{{ roomId }}</span></h1>
-      <span v-if="events.length" class="text-[11px] text-slate-500">{{ events.length }} 個事件 · 長度 {{ fmtOffset(tEnd - t0) }}</span>
-      <div class="ml-auto flex flex-wrap gap-2 text-[11px]">
+      <h1 class="font-semibold text-sm">{{ tr('rp.title') }} <span class="font-mono text-sky-400">{{ roomId }}</span></h1>
+      <span v-if="events.length" class="text-[11px] text-slate-500">{{ tr('rp.eventsLength', { count: events.length, length: fmtOffset(tEnd - t0) }) }}</span>
+      <LocaleSwitch class="ml-auto" />
+      <div class="flex flex-wrap gap-2 text-[11px]">
         <span v-for="m in members.values()" :key="m.uid" class="px-2 py-0.5 rounded-full bg-slate-800 border border-slate-700">
           <b>{{ m.alias }}</b> {{ m.nickname }}
         </span>
       </div>
     </header>
 
-    <div v-if="!isAdmin && !loading" class="text-center text-sm text-slate-400 mt-24">需要研究管理者或觀察員帳號。</div>
-    <div v-else-if="loading" class="flex items-center justify-center gap-2 text-xs text-slate-400 mt-24"><Loader2 class="w-4 h-4 animate-spin" />讀取事件…</div>
+    <div v-if="!isAdmin && !loading" class="text-center text-sm text-slate-400 mt-24">{{ tr('rp.noAccess') }}</div>
+    <div v-else-if="loading" class="flex items-center justify-center gap-2 text-xs text-slate-400 mt-24"><Loader2 class="w-4 h-4 animate-spin" />{{ tr('rp.loading') }}</div>
     <div v-else-if="error" class="text-center text-sm text-rose-300 mt-24">{{ error }}</div>
-    <div v-else-if="!events.length" class="text-center text-sm text-slate-400 mt-24">這個房間沒有事件紀錄（P4a 之前建立的房間不會有）。</div>
+    <div v-else-if="!events.length" class="text-center text-sm text-slate-400 mt-24">{{ tr('rp.noEvents') }}</div>
 
     <main v-else class="p-4 space-y-3 max-w-7xl mx-auto">
       <!-- Transport -->
       <div class="flex items-center gap-3 p-3 rounded-2xl border border-slate-800 bg-slate-900/70">
-        <button @click="togglePlay" class="p-2 rounded-lg bg-sky-600 hover:bg-sky-500" :title="playing ? '暫停' : '播放'">
+        <button @click="togglePlay" class="p-2 rounded-lg bg-sky-600 hover:bg-sky-500" :title="playing ? tr('rp.pause') : tr('rp.play')">
           <Pause v-if="playing" class="w-4 h-4" /><Play v-else class="w-4 h-4" />
         </button>
         <select v-model.number="speed" class="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs">
@@ -197,7 +203,7 @@ onMounted(async () => {
       <div class="grid lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-3">
         <!-- Chat at t -->
         <section class="rounded-2xl border border-slate-800 bg-slate-900/70 flex flex-col h-[440px]">
-          <h2 class="px-3 py-2 text-xs font-semibold text-slate-300 border-b border-slate-800">聊天（{{ state.messages.filter(m => !m.deleted).length }}）</h2>
+          <h2 class="px-3 py-2 text-xs font-semibold text-slate-300 border-b border-slate-800">{{ tr('rp.chat', { count: state.messages.filter(m => !m.deleted).length }) }}</h2>
           <div ref="chatRef" class="flex-1 overflow-y-auto p-3 space-y-2 text-xs">
             <div v-for="m in state.messages" :key="m.id" :class="m.deleted ? 'opacity-40 line-through' : ''">
               <div class="text-[10px] text-slate-500">
@@ -207,33 +213,33 @@ onMounted(async () => {
                 {{ m.senderName }} · {{ fmtOffset(m.timestamp - t0) }}
               </div>
               <button v-if="m.type === 'whiteboard_state'" @click="showBoard(m.id)" class="text-sky-300 hover:underline text-left">
-                🖼 白板（{{ boardLabel(m.id) }}）— 點擊在右側檢視
+                {{ tr('rp.boardInChat', { label: boardLabel(m.id) }) }}
               </button>
               <div v-else-if="m.content" class="replay-md text-slate-200" v-html="formatMessageText(m.content)"></div>
 
               <!-- Attached file -->
               <div v-if="m.fileData && m.type === 'file'" class="mt-1">
                 <img v-if="m.fileData.type === 'image' && isUrl(m.fileData.url)" :src="m.fileData.url" class="max-h-40 rounded-lg border border-slate-700" />
-                <a v-else-if="isUrl(m.fileData.url)" :href="m.fileData.url" target="_blank" rel="noopener" class="text-sky-400 hover:underline">📎 {{ m.fileData.name || '檔案' }}</a>
-                <span v-else class="text-slate-400">📎 {{ m.fileData.name || '檔案' }}</span>
+                <a v-else-if="isUrl(m.fileData.url)" :href="m.fileData.url" target="_blank" rel="noopener" class="text-sky-400 hover:underline">📎 {{ m.fileData.name || tr('rp.file') }}</a>
+                <span v-else class="text-slate-400">📎 {{ m.fileData.name || tr('rp.file') }}</span>
               </div>
 
               <!-- AI asset -->
               <div v-if="m.assetType" class="mt-1 p-2 rounded-lg border border-amber-500/30 bg-amber-500/5 space-y-1">
-                <div class="text-[10px] font-semibold text-amber-300">{{ ASSET_LABELS[m.assetType] || m.assetType }}<template v-if="m.assetPayload?.title">：{{ m.assetPayload.title }}</template></div>
+                <div class="text-[10px] font-semibold text-amber-300">{{ assetLabel(m.assetType) }}<template v-if="m.assetPayload?.title">: {{ m.assetPayload.title }}</template></div>
                 <div v-if="m.assetType === 'summary' && m.assetPayload?.content" class="replay-md text-slate-200 max-h-64 overflow-y-auto" v-html="formatMessageText(m.assetPayload.content)"></div>
                 <template v-else-if="m.assetType === 'fact_check'">
-                  <div class="text-slate-200">主張：{{ m.assetPayload?.claim }}</div>
-                  <div class="text-slate-200">結論：{{ m.assetPayload?.verdict }}</div>
+                  <div class="text-slate-200">{{ tr('rp.claim', { text: m.assetPayload?.claim || '' }) }}</div>
+                  <div class="text-slate-200">{{ tr('rp.verdict', { text: m.assetPayload?.verdict || '' }) }}</div>
                   <div v-if="m.assetPayload?.details" class="text-slate-400">{{ m.assetPayload.details }}</div>
                   <a v-for="r in m.assetPayload?.references || []" :key="r" :href="r" target="_blank" rel="noopener" class="block text-sky-400 hover:underline truncate">{{ r }}</a>
                 </template>
                 <template v-else-if="m.assetType === 'moodboard'">
-                  <div v-if="m.assetPayload?.keywords?.length" class="text-slate-400">{{ m.assetPayload.keywords.join('、') }}</div>
+                  <div v-if="m.assetPayload?.keywords?.length" class="text-slate-400">{{ m.assetPayload.keywords.join(', ') }}</div>
                   <div class="grid grid-cols-4 gap-1">
                     <div v-for="(img, k) in m.assetPayload?.images || []" :key="k" class="aspect-[4/3] rounded bg-slate-800 overflow-hidden" :title="img.prompt || img.title">
                       <img v-if="isUrl(img.url)" :src="img.url" class="w-full h-full object-cover" />
-                      <span v-else class="block p-1 text-[9px] text-slate-500">未產生</span>
+                      <span v-else class="block p-1 text-[9px] text-slate-500">{{ tr('rp.notGenerated') }}</span>
                     </div>
                   </div>
                   <div v-if="m.assetPayload?.palette?.length" class="flex gap-1">
@@ -242,8 +248,8 @@ onMounted(async () => {
                 </template>
                 <template v-else-if="m.assetType === 'mesh_3d' || m.assetType === 'parametric_3d'">
                   <img v-if="isUrl(m.assetPayload?.posterUrl)" :src="m.assetPayload.posterUrl" class="max-h-32 rounded" />
-                  <a v-if="isUrl(m.assetPayload?.modelUrl)" :href="m.assetPayload.modelUrl" target="_blank" rel="noopener" class="text-sky-400 hover:underline">下載模型</a>
-                  <div v-if="m.assetPayload?.isRefined" class="text-slate-400">已上色（refined）</div>
+                  <a v-if="isUrl(m.assetPayload?.modelUrl)" :href="m.assetPayload.modelUrl" target="_blank" rel="noopener" class="text-sky-400 hover:underline">{{ tr('rp.downloadModel') }}</a>
+                  <div v-if="m.assetPayload?.isRefined" class="text-slate-400">{{ tr('rp.refined') }}</div>
                 </template>
                 <pre v-else class="text-[10px] text-slate-400 whitespace-pre-wrap max-h-40 overflow-y-auto">{{ JSON.stringify(m.assetPayload, null, 1) }}</pre>
               </div>
@@ -252,7 +258,7 @@ onMounted(async () => {
               <div v-if="m.actionOptions?.length" class="mt-1 space-y-0.5">
                 <div v-for="opt in m.actionOptions" :key="opt" class="flex items-center gap-2 text-[11px]">
                   <span class="px-1.5 py-0.5 rounded border border-slate-700 text-slate-200">{{ opt }}</span>
-                  <span class="text-slate-400">{{ votersOf(m, opt).length }} 票<template v-if="votersOf(m, opt).length">（{{ votersOf(m, opt).map(v => aliasOfUid(v.uid)).join(', ') }}）</template></span>
+                  <span class="text-slate-400">{{ tr('rp.votes', { count: votersOf(m, opt).length }) }}<template v-if="votersOf(m, opt).length"> ({{ votersOf(m, opt).map(v => aliasOfUid(v.uid)).join(', ') }})</template></span>
                 </div>
               </div>
               <div v-if="m.reactions && Object.values(m.reactions).some(u => u.length)" class="text-[10px] text-slate-400">
@@ -265,7 +271,7 @@ onMounted(async () => {
         <!-- Board at t -->
         <section class="rounded-2xl border border-slate-800 bg-slate-900/70 flex flex-col h-[440px]">
           <div class="px-3 py-2 border-b border-slate-800 flex items-center gap-2 overflow-x-auto">
-            <h2 class="text-xs font-semibold text-slate-300 shrink-0">白板</h2>
+            <h2 class="text-xs font-semibold text-slate-300 shrink-0">{{ tr('rp.boards') }}</h2>
             <button
               v-for="id in boardIds"
               :key="id"
@@ -274,11 +280,11 @@ onMounted(async () => {
               :class="id === boardId ? 'border-sky-400 bg-sky-500/15 text-sky-200' : 'border-slate-700 text-slate-400'"
               :title="id"
             >{{ boardLabel(id) }}</button>
-            <label class="ml-auto flex items-center gap-1 text-[10px] text-slate-400 shrink-0"><input type="checkbox" v-model="followBoard" />跟隨最新變更</label>
+            <label class="ml-auto flex items-center gap-1 text-[10px] text-slate-400 shrink-0"><input type="checkbox" v-model="followBoard" />{{ tr('rp.followBoard') }}</label>
           </div>
           <div class="flex-1 flex items-center justify-center overflow-hidden p-2">
             <BoardReplayCanvas v-if="boardId" :objects="boardObjects" :width="640" :height="380" />
-            <p v-else class="text-xs text-slate-500">此時間點還沒有白板內容</p>
+            <p v-else class="text-xs text-slate-500">{{ tr('rp.noBoardYet') }}</p>
           </div>
         </section>
       </div>
@@ -286,10 +292,10 @@ onMounted(async () => {
       <!-- Timeline -->
       <section class="rounded-2xl border border-slate-800 bg-slate-900/70">
         <div class="px-3 py-2 border-b border-slate-800 flex flex-wrap items-center gap-3 text-[11px]">
-          <h2 class="text-xs font-semibold text-slate-300">時間軸</h2>
-          <label class="flex items-center gap-1 text-slate-400"><input type="checkbox" v-model="followTimeline" />時間軸跟著播放</label>
-          <label class="flex items-center gap-1 text-violet-300"><input type="checkbox" v-model="hideObserver" />隱藏觀察者行為</label>
-          <label v-for="g in KIND_GROUPS" :key="g.id" class="flex items-center gap-1 text-slate-300"><input type="checkbox" v-model="groups[g.id]" />{{ g.label }}</label>
+          <h2 class="text-xs font-semibold text-slate-300">{{ tr('rp.timeline') }}</h2>
+          <label class="flex items-center gap-1 text-slate-400"><input type="checkbox" v-model="followTimeline" />{{ tr('rp.followTimeline') }}</label>
+          <label class="flex items-center gap-1 text-violet-300"><input type="checkbox" v-model="hideObserver" />{{ tr('rp.hideObserver') }}</label>
+          <label v-for="g in KIND_GROUPS" :key="g.id" class="flex items-center gap-1 text-slate-300"><input type="checkbox" v-model="groups[g.id]" />{{ tr(g.label) }}</label>
         </div>
         <div ref="listRef" class="relative max-h-72 overflow-y-auto text-[11px] font-mono">
           <button

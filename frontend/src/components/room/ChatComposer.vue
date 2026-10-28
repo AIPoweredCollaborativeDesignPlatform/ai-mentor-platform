@@ -34,10 +34,10 @@ const quickTags = computed(() => {
   const m = aiModules.value;
   return [
     { tag: '@Mentor', label: `@${aiName.value}`, icon: Sparkles, iconClass: '', accent: true, show: true },
-    { tag: '@Mentor generate a 3D prototype', label: '3D Prototype', icon: Box, iconClass: 'text-sky-400', show: m.enable3D },
-    { tag: '@Mentor create a visual mood board', label: 'Mood Board', icon: Palette, iconClass: 'text-amber-400', show: m.enableMoodboard },
-    { tag: '@Mentor fact-check this design specification', label: 'Fact Check', icon: Check, iconClass: 'text-emerald-400', show: m.enableFactRetrieval },
-    { tag: '@Mentor summarize the discussion so far', label: 'Summary', icon: FileText, iconClass: 'text-purple-400', show: m.enableSummary }
+    { tag: `@Mentor ${t('quick.3dText')}`, label: t('quick.3d'), icon: Box, iconClass: 'text-sky-400', show: m.enable3D },
+    { tag: `@Mentor ${t('quick.moodText')}`, label: t('quick.mood'), icon: Palette, iconClass: 'text-amber-400', show: m.enableMoodboard },
+    { tag: `@Mentor ${t('quick.factText')}`, label: t('quick.fact'), icon: Check, iconClass: 'text-emerald-400', show: m.enableFactRetrieval },
+    { tag: `@Mentor ${t('quick.summaryText')}`, label: t('quick.summary'), icon: FileText, iconClass: 'text-purple-400', show: m.enableSummary }
   ].filter(q => q.show);
 });
 
@@ -198,18 +198,18 @@ const stageFile = async (file: File) => {
     } else if (file.type.startsWith('video/')) {
       type = 'video';
       if (file.size > MAX_VIDEO_BYTES) {
-        roomStore.pushToast('Video Too Large', 'Please keep video size under 15MB.', 'warning');
+        roomStore.pushToast(t('composer.videoTooLargeTitle'), t('composer.videoTooLargeText'), 'warning');
         return;
       }
       const duration = await getVideoDuration(file);
       if (duration > MAX_VIDEO_SECONDS) {
-        roomStore.pushToast('Video Too Long', `Video is ${Math.round(duration)}s long. Please keep under 30 seconds.`, 'warning');
+        roomStore.pushToast(t('composer.videoTooLongTitle'), t('composer.videoTooLongText', { seconds: Math.round(duration) }), 'warning');
         return;
       }
       dataUrl = await readAsDataUrl(file);
     } else {
       if (file.size > MAX_DOC_BYTES) {
-        roomStore.pushToast('Document Too Large', 'Please keep documents under 10MB.', 'warning');
+        roomStore.pushToast(t('composer.docTooLargeTitle'), t('composer.docTooLargeText'), 'warning');
         return;
       }
       dataUrl = await readAsDataUrl(file);
@@ -224,7 +224,7 @@ const stageFile = async (file: File) => {
     };
   } catch (err) {
     console.error('File staging error:', err);
-    roomStore.pushToast('File Error', 'Could not prepare attachment.', 'error');
+    roomStore.pushToast(t('composer.fileErrorTitle'), t('composer.fileErrorText'), 'error');
   } finally {
     isUploadingFile.value = false;
     if (fileInputRef.value) fileInputRef.value.value = '';
@@ -307,7 +307,7 @@ defineExpose({ setReply, sendFile });
           v-if="roomStore.currentRoom.aiActiveTask.callerUid === authStore.uid || roomStore.isHost"
           @click="roomStore.abortCurrentAiGeneration()"
           class="ml-2 px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 hover:text-white text-[11px] font-medium transition cursor-pointer flex items-center gap-1 shrink-0"
-          title="Stop AI Generation"
+          :title="t('composer.stopAi')"
         >
           <X class="w-3 h-3" /> Stop
         </button>
@@ -319,7 +319,7 @@ defineExpose({ setReply, sendFile });
           <span class="text-sky-300 font-medium shrink-0">Replying to {{ replyingTo.senderName }}:</span>
           <span class="truncate opacity-80">{{ replyingTo.content.slice(0, 75) }}</span>
         </div>
-        <button @click="replyingTo = null" class="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition shrink-0 cursor-pointer" title="Cancel reply">
+        <button @click="replyingTo = null" class="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition shrink-0 cursor-pointer" :title="t('composer.cancelReply')">
           <X class="w-3.5 h-3.5" />
         </button>
       </div>
@@ -347,11 +347,11 @@ defineExpose({ setReply, sendFile });
             <p class="text-xs font-semibold text-slate-200 truncate">{{ stagedAttachment.name }}</p>
             <p class="text-[10px] text-slate-400 font-mono flex items-center gap-1">
               <span>{{ (stagedAttachment.size / 1024).toFixed(1) }} KB</span>
-              <span class="text-emerald-400 font-medium">• Ready to send</span>
+              <span class="text-emerald-400 font-medium">{{ t('composer.readyToSend') }}</span>
             </p>
           </div>
         </div>
-        <button @click="stagedAttachment = null" class="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition shrink-0" title="Remove attachment">
+        <button @click="stagedAttachment = null" class="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition shrink-0" :title="t('composer.removeAttachment')">
           <X class="w-4 h-4" />
         </button>
       </div>
@@ -363,7 +363,7 @@ defineExpose({ setReply, sendFile });
           @click="!isMeetingClosed && fileInputRef?.click()"
           :disabled="isBlocked || isUploadingFile"
           class="p-2.5 rounded-xl border border-slate-700 bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-sky-400 transition disabled:opacity-40 disabled:cursor-not-allowed shrink-0 min-h-[44px] min-w-[44px] flex items-center justify-center cursor-pointer"
-          title="Attach images, videos (<=30s), PDF or documents"
+          :title="t('composer.attach')"
         >
           <Paperclip class="w-4 h-4" :class="{ 'animate-spin': isUploadingFile }" />
         </button>
@@ -372,7 +372,7 @@ defineExpose({ setReply, sendFile });
           @click="emit('open-whiteboard')"
           :disabled="isBlocked || isWhiteboardOpen"
           class="p-2.5 rounded-xl border border-indigo-500/40 bg-indigo-950/40 hover:bg-indigo-900/60 text-indigo-300 hover:text-white transition disabled:opacity-40 disabled:cursor-not-allowed shrink-0 min-h-[44px] min-w-[44px] flex items-center justify-center cursor-pointer"
-          title="Open Collaborative Whiteboard"
+          :title="t('composer.openWhiteboard')"
         >
           <Palette class="w-4 h-4 text-indigo-400" />
         </button>
@@ -384,7 +384,7 @@ defineExpose({ setReply, sendFile });
           >
             <div class="px-2 py-1 text-[10px] font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-800 mb-1 flex items-center justify-between">
               <span>{{ t('room.mentionMember') }}</span>
-              <span class="text-[9px] text-slate-500">↑↓ to navigate · Enter to select</span>
+              <span class="text-[9px] text-slate-500">{{ t('composer.mentionNav') }}</span>
             </div>
             <button
               v-for="(cand, idx) in mentionCandidates"
@@ -414,8 +414,8 @@ defineExpose({ setReply, sendFile });
             @keydown="onKeyDown"
             :disabled="isBlocked"
             :placeholder="isMeetingClosed
-              ? lockedText || 'This meeting has been closed. Chat is in read-only mode.'
-              : isMuted ? 'You have been muted by the host.' : aiEnabled ? 'Type a message (e.g. @Mentor or @Name)...' : 'Type a message (e.g. @Name)...'"
+              ? lockedText || t('room.closedReadOnly')
+              : isMuted ? t('room.mutedText') : aiEnabled ? t('composer.placeholderAi') : t('composer.placeholder')"
             class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-base sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500 transition resize-none min-h-[44px] max-h-32 overflow-y-auto disabled:opacity-50"
             rows="1"
           ></textarea>
@@ -426,7 +426,7 @@ defineExpose({ setReply, sendFile });
           @click="sendQuickThumbsUp"
           :disabled="isBlocked"
           class="px-3 py-2.5 bg-slate-800 hover:bg-slate-700 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed text-sky-400 rounded-xl font-semibold shadow transition flex items-center justify-center shrink-0 min-h-[44px] min-w-[44px] cursor-pointer text-lg select-none"
-          title="Send quick thumbs up (👍)"
+          :title="t('composer.thumbsUp')"
         >
           👍
         </button>
@@ -435,7 +435,7 @@ defineExpose({ setReply, sendFile });
           @click="handleSend"
           :disabled="isBlocked || (mentionsMentor && (roomStore.aiCooldownRemaining > 0 || roomStore.isAnalyzing))"
           class="px-3.5 py-2.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl font-semibold shadow transition flex items-center justify-center gap-1.5 shrink-0 min-h-[44px] min-w-[44px] cursor-pointer"
-          :title="mentionsMentor && roomStore.aiCooldownRemaining > 0 ? `AI Cooling down (${roomStore.aiCooldownRemaining}s remaining)` : 'Send message'"
+          :title="mentionsMentor && roomStore.aiCooldownRemaining > 0 ? t('composer.cooldown', { seconds: roomStore.aiCooldownRemaining }) : t('composer.send')"
         >
           <span v-if="mentionsMentor && roomStore.aiCooldownRemaining > 0" class="text-xs font-mono text-amber-200">{{ roomStore.aiCooldownRemaining }}s</span>
           <Loader2 v-else-if="mentionsMentor && roomStore.isAnalyzing" class="w-4 h-4 animate-spin text-sky-200" />

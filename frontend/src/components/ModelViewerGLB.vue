@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '../i18n';
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
@@ -259,7 +260,7 @@ const loadGlbModel = (rawUrl: string) => {
       console.warn('[ModelViewer] Three.js GLTFLoader failed:', err);
       isLoading.value = false;
       isModelInteractive.value = false;
-      loadError.value = 'Direct 3D load failed. Displaying 2D render preview.';
+      loadError.value = t('glb.directFailed');
     }
   );
 
@@ -364,10 +365,10 @@ const copyTransparentImage = async () => {
           await navigator.clipboard.write([
             new ClipboardItem({ 'image/png': blob })
           ]);
-          roomStore.pushToast('Image Copied', 'Tightly cropped 3D preview copied to clipboard', 'success');
+          roomStore.pushToast(t('glb.imageCopiedTitle'), t('glb.imageCopiedText'), 'success');
         } catch (err) {
           console.error('Clipboard write error:', err);
-          roomStore.pushToast('Copy Failed', 'Clipboard access denied or unsupported', 'error');
+          roomStore.pushToast(t('glb.copyFailedTitle'), t('glb.copyFailedText'), 'error');
         }
       }
       isCopyingImage.value = false;
@@ -417,8 +418,8 @@ const downloadModel = async () => {
   document.body.removeChild(a);
 
   roomStore.pushToast(
-    'Download Started',
-    `Downloading model as ${filename}`,
+    t('glb.downloadStarted'),
+    t('glb.downloading', { name: filename }),
     'success'
   );
 };
@@ -441,13 +442,13 @@ const reHostModel = async () => {
       rehostError.value = status;
     });
     if (proxyRes.success && proxyRes.firebaseUrl) {
-      roomStore.pushToast('Interactive 3D Enabled', 'Model ready for 360° global rotation and zoom.', 'success');
+      roomStore.pushToast(t('glb.interactiveTitle'), t('glb.interactiveText'), 'success');
       loadGlbModel(proxyRes.firebaseUrl);
     } else {
-      rehostError.value = proxyRes.error || 'Failed to load, check if model link is still valid.';
+      rehostError.value = proxyRes.error || t('glb.loadFailed');
     }
   } catch (e: any) {
-    rehostError.value = e?.message || 'Error occurred during 3D activation.';
+    rehostError.value = e?.message || t('glb.activationError');
   } finally {
     isRehosting.value = false;
   }
@@ -526,7 +527,7 @@ onUnmounted(() => {
         </span>
       </div>
       <span class="text-xs text-slate-400 font-medium hidden sm:block shrink-0">
-        {{ assetData?.provider || 'Meshy.ai Engine' }}
+        {{ assetData?.provider || t('glb.engine') }}
       </span>
     </div>
 
@@ -550,7 +551,7 @@ onUnmounted(() => {
           class="absolute inset-0 z-30 flex items-center justify-center pointer-events-none"
         >
           <div class="bg-slate-900/85 backdrop-blur-sm text-white px-4 py-2 rounded-full border border-slate-600/50 shadow-2xl flex items-center gap-2">
-            <span class="text-xs font-semibold">Press <kbd class="bg-slate-700 px-1.5 py-0.5 rounded text-indigo-300">Shift</kbd> + Scroll to zoom</span>
+            <span class="text-xs font-semibold glb-kbd" v-html="t('glb.shiftZoom')"></span>
           </div>
         </div>
       </transition>
@@ -561,7 +562,7 @@ onUnmounted(() => {
         class="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-950/80 backdrop-blur-xs text-slate-300 pointer-events-none"
       >
         <Loader2 class="w-8 h-8 text-indigo-400 animate-spin mb-2" />
-        <p class="text-xs font-medium">Loading 3D Model...</p>
+        <p class="text-xs font-medium">{{ t('glb.loading') }}</p>
       </div>
 
       <!-- Pure Three.js WebGL Canvas Mount Node -->
@@ -577,33 +578,33 @@ onUnmounted(() => {
       >
         <img
           :src="assetData?.posterUrl"
-          alt="3D Preview Render"
+          :alt="t('glb.previewAlt')"
           style="width: 100%; height: 100%; object-fit: contain; padding: 1rem;"
         />
         <!-- Info badge -->
         <div class="absolute bottom-3 left-3 bg-slate-900/90 border border-slate-700/80 backdrop-blur-md px-3 py-1.5 rounded-xl text-xs text-slate-300 flex items-center gap-2 shadow-lg">
-          <span>High-Res 3D Render</span>
+          <span>{{ t('glb.highRes') }}</span>
           <span class="text-slate-500">•</span>
-          <span class="text-indigo-400 font-mono text-[11px]">watertight mesh</span>
+          <span class="text-indigo-400 font-mono text-[11px]">{{ t('glb.watertight') }}</span>
         </div>
         <!-- Poster Action Buttons (Interactive & Download) -->
         <div class="absolute bottom-3 right-3 flex items-center gap-2">
           <button
             @click="downloadModel"
             class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold shadow-lg transition cursor-pointer"
-            title="Download GLB"
+            :title="t('glb.downloadGlb')"
           >
             <Download class="w-3.5 h-3.5 text-indigo-400" />
-            <span>Download GLB</span>
+            <span>{{ t('glb.downloadGlb') }}</span>
           </button>
           <button
             v-if="!isRehosting && assetData?.taskId"
             @click.stop="reHostModel"
             class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-lg transition cursor-pointer"
-            title="Enable Interactive 3D"
+            :title="t('glb.enableInteractive')"
           >
             <RefreshCw class="w-3.5 h-3.5" />
-            <span>Interactive 3D</span>
+            <span>{{ t('glb.interactive') }}</span>
           </button>
           <div
             v-if="isRehosting"
@@ -621,28 +622,28 @@ onUnmounted(() => {
         <button
           @click="zoomIn"
           class="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
-          title="Zoom In (+)"
+          :title="t('glb.zoomIn')"
         >
           <ZoomIn class="w-4 h-4" />
         </button>
         <button
           @click="zoomOut"
           class="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
-          title="Zoom Out (-)"
+          :title="t('glb.zoomOut')"
         >
           <ZoomOut class="w-4 h-4" />
         </button>
         <button
           @click="resetView"
           class="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
-          title="Reset Camera Angle & Center"
+          :title="t('glb.reset')"
         >
           <RotateCcw class="w-4 h-4" />
         </button>
         <button
           @click="copyTransparentImage"
           class="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
-          :title="isCopyingImage ? 'Copying...' : 'Copy Transparent 3D Render to Clipboard'"
+          :title="isCopyingImage ? t('glb.copying') : t('glb.copyRender')"
           :disabled="isCopyingImage"
         >
           <Loader2 v-if="isCopyingImage" class="w-4 h-4 animate-spin text-sky-400" />
@@ -658,17 +659,17 @@ onUnmounted(() => {
           class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white font-medium text-xs shadow transition cursor-pointer"
         >
           <Sparkles class="w-3.5 h-3.5" />
-          <span>Refine Color</span>
+          <span>{{ t('glb.refineColor') }}</span>
         </button>
 
         <!-- Download GLB Button (Parallel with tools) -->
         <button
           @click="downloadModel"
           class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-md shadow-indigo-950/40 transition cursor-pointer"
-          title="Download GLB with suggested name"
+          :title="t('glb.downloadNamed')"
         >
           <Download class="w-3.5 h-3.5" />
-          <span>Download GLB</span>
+          <span>{{ t('glb.downloadGlb') }}</span>
         </button>
       </div>
 
@@ -677,7 +678,7 @@ onUnmounted(() => {
         v-if="isModelInteractive"
         class="absolute top-2.5 left-2.5 pointer-events-none text-[10px] text-slate-300 bg-slate-950/80 backdrop-blur-xs px-2.5 py-1 rounded-md border border-slate-800 z-10"
       >
-        Drag to rotate 360° · Shift + Scroll to zoom
+        {{ t('glb.dragHint') }}
       </div>
     </div>
 
@@ -691,12 +692,12 @@ onUnmounted(() => {
           <Palette class="w-4 h-4 text-indigo-400" /> Refine Textures & Style
         </h3>
         <p class="text-[11px] text-slate-400 mb-4">
-          Describe your desired style (e.g., Cyberpunk, wood texture, red metal). Leave blank for AI auto-styling.
+          {{ t('glb.refineHint') }}
         </p>
         <input
           v-model="customRefinePrompt"
           type="text"
-          placeholder="e.g., glowing blue material, vintage..."
+          :placeholder="t('glb.refinePlaceholder')"
           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 mb-4"
           @keydown.enter="submitRefine"
         />
@@ -712,10 +713,20 @@ onUnmounted(() => {
             class="px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600 hover:bg-indigo-500 text-white transition cursor-pointer flex items-center gap-1.5"
           >
             <Palette class="w-3.5 h-3.5" />
-            Start Refine
+            {{ t('glb.startRefine') }}
           </button>
         </div>
       </div>
     </div>
   </div>
 </template>
+
+<style scoped>
+/* <kbd> inside the translated "Shift + scroll" hint */
+.glb-kbd :deep(kbd) {
+  background: rgb(51 65 85);
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  color: rgb(165 180 252);
+}
+</style>

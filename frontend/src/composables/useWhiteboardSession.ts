@@ -4,6 +4,7 @@ import { useRoomStore } from '../stores/room';
 import type { MessageItem } from '../types';
 import { isOwnBoard } from '../utils/chat';
 import { logEvent } from '../services/researchLog';
+import { t } from '../i18n';
 
 /** Methods exposed by the whiteboard component that the room view relies on. */
 export interface WhiteboardHandle {
@@ -61,7 +62,7 @@ export function useWhiteboardSession(
   // Whiteboards are editable only while the session runs, and never by the observing researcher
   const blockedByLock = () => {
     const reason = lockReason();
-    if (reason) roomStore.pushToast('Whiteboard unavailable', reason, 'info');
+    if (reason) roomStore.pushToast(t('wb.unavailable'), reason, 'info');
     return Boolean(reason);
   };
 
@@ -79,11 +80,11 @@ export function useWhiteboardSession(
     }
     if (blockedByLock()) return;
     if (msg.metadata?.isPrivate && !isOwnBoard(msg, authStore.uid)) {
-      roomStore.pushToast('Access Restricted', 'This whiteboard is set to private by its creator.', 'warning');
+      roomStore.pushToast(t('wb.restrictedTitle'), t('wb.restrictedText'), 'warning');
       return;
     }
     if (isWhiteboardOpen.value && activeBoardId.value === msg.id) {
-      roomStore.pushToast('Whiteboard Active', 'This whiteboard is currently open.', 'info');
+      roomStore.pushToast(t('wb.activeTitle'), t('wb.activeText'), 'info');
       return;
     }
     await flushOpenBoard();
@@ -103,7 +104,7 @@ export function useWhiteboardSession(
     const msg = findMessage(activeBoardId.value);
     if (isPrivate && msg && !isOwnBoard(msg, authStore.uid) && isWhiteboardOpen.value && !observing()) {
       closeWhiteboard();
-      roomStore.pushToast('Board Made Private', 'The creator made this whiteboard private.', 'info');
+      roomStore.pushToast(t('wb.madePrivateTitle'), t('wb.madePrivateText'), 'info');
     }
   });
 

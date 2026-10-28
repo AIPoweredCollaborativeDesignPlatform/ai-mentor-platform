@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '../../i18n';
 import { computed, ref } from 'vue';
 import {
   AlertCircle, CheckCircle2, ChevronDown, ChevronUp, Copy, CornerUpLeft, Download, Eye, EyeOff,
@@ -85,7 +86,7 @@ const hasReactions = computed(() => Object.values(msg.value.reactions || {}).som
 const copyContent = () => {
   if (!msg.value.content) return;
   navigator.clipboard.writeText(msg.value.content);
-  roomStore.pushToast('Copied', 'Message copied to clipboard', 'success');
+  roomStore.pushToast(t('msg.copiedTitle'), t('msg.copiedText'), 'success');
 };
 
 // Failed explicit requests are posted as "⚠️ AI Mentor: ..." (see functions/mentorAnalyze) and can be regenerated
@@ -153,15 +154,15 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
           class="w-52 h-32 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col items-center justify-center p-3 text-center text-xs text-slate-400 select-none shadow"
         >
           <EyeOff class="w-5 h-5 text-slate-500 mb-1.5" />
-          <span class="font-medium text-slate-300">This image has been hidden from assets</span>
+          <span class="font-medium text-slate-300">{{ t('msg.imageHidden') }}</span>
         </div>
         <div
           v-else-if="msg.fileData!.type === 'image'"
           class="cursor-pointer group rounded-2xl overflow-hidden"
           @click="emit('preview-media', msg.fileData!.url)"
-          title="Click to expand"
+          :title="t('msg.clickExpand')"
         >
-          <img :src="msg.fileData!.url" alt="Attachment" class="w-full h-auto max-h-72 object-cover group-hover:scale-105 transition duration-300 rounded-2xl" loading="lazy" />
+          <img :src="msg.fileData!.url" :alt="t('msg.attachment')" class="w-full h-auto max-h-72 object-cover group-hover:scale-105 transition duration-300 rounded-2xl" loading="lazy" />
         </div>
         <div v-else class="rounded-2xl overflow-hidden">
           <video :src="msg.fileData!.url" controls class="w-full max-h-72 rounded-2xl" preload="metadata"></video>
@@ -182,7 +183,7 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
         ]"
       >
         <div v-if="mentionsMe" class="inline-flex items-center gap-1 mb-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 select-none">
-          <span>@ You were mentioned</span>
+          <span>{{ t('msg.mentioned') }}</span>
         </div>
 
         <div v-if="msg.replyTo" class="mb-2 px-2.5 py-1 rounded-lg bg-black/35 border-l-2 border-sky-400 text-xs text-slate-300 select-none min-w-0 max-w-full overflow-hidden">
@@ -198,7 +199,7 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
             class="mt-1 inline-flex items-center gap-0.5 text-xs text-sky-400 hover:text-sky-300 font-medium underline cursor-pointer"
           >
             <component :is="expanded ? ChevronUp : ChevronDown" class="w-3 h-3" />
-            {{ expanded ? 'Show less' : 'Show more' }}
+            {{ expanded ? t('msg.showLess') : t('msg.showMore') }}
           </button>
         </div>
 
@@ -207,9 +208,9 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
           <div class="flex items-center justify-between gap-2 mb-2 px-1 text-[11px] font-semibold text-sky-300">
             <div class="flex items-center gap-1.5">
               <Sparkles class="w-3.5 h-3.5 text-sky-400" />
-              <span>Interactive Poll & Decisions</span>
+              <span>{{ t('msg.poll') }}</span>
             </div>
-            <span class="text-[10px] text-slate-400 font-normal">{{ Object.keys(msg.pollVotes || {}).length }} voted</span>
+            <span class="text-[10px] text-slate-400 font-normal">{{ t('msg.voted', { count: Object.keys(msg.pollVotes || {}).length }) }}</span>
           </div>
 
           <div class="space-y-1.5">
@@ -264,14 +265,14 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
               class="inline-flex items-center gap-1 text-[11px] text-sky-400 hover:text-sky-300 font-medium cursor-pointer transition px-1 py-0.5"
             >
               <Plus class="w-3.5 h-3.5" />
-              <span>Add custom idea / vote option</span>
+              <span>{{ t('msg.addOption') }}</span>
             </button>
             <div v-else class="flex items-center gap-1.5 mt-1">
               <input
                 v-model="customOption"
                 @keydown.enter.prevent="addCustomOption"
                 type="text"
-                placeholder="Type your own option idea..."
+                :placeholder="t('msg.optionPlaceholder')"
                 class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500"
                 autofocus
               />
@@ -281,7 +282,7 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
                 :disabled="!customOption.trim()"
                 class="px-2.5 py-1 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition shadow"
               >
-                Add & Vote
+                {{ t('msg.addVote') }}
               </button>
               <button type="button" @click="showCustomOption = false" class="p-1 text-slate-400 hover:text-slate-200 rounded-lg hover:bg-slate-800 cursor-pointer">
                 <X class="w-3.5 h-3.5" />
@@ -296,13 +297,13 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
             v-if="msg.fileData.type === 'image'"
             class="rounded-xl overflow-hidden max-w-sm cursor-pointer group shadow"
             @click="!isHidden && emit('preview-media', msg.fileData!.url)"
-            :title="isHidden ? 'This image has been hidden from assets' : 'Click to expand'"
+            :title="isHidden ? t('msg.imageHidden') : t('msg.clickExpand')"
           >
             <div v-if="isHidden" :class="hiddenNotice">
               <EyeOff class="w-4 h-4 text-slate-500 shrink-0" />
-              <span>This image has been hidden from assets</span>
+              <span>{{ t('msg.imageHidden') }}</span>
             </div>
-            <img v-else :src="msg.fileData.url" alt="Image attachment" class="w-full h-auto max-h-64 object-cover group-hover:scale-105 transition duration-300 rounded-xl" loading="lazy" />
+            <img v-else :src="msg.fileData.url" :alt="t('msg.imageAttachment')" class="w-full h-auto max-h-64 object-cover group-hover:scale-105 transition duration-300 rounded-xl" loading="lazy" />
           </div>
 
           <div v-else-if="msg.fileData.type === 'video'" class="rounded-xl overflow-hidden max-w-sm shadow">
@@ -324,11 +325,11 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
                 v-if="isPdf"
                 @click="emit('open-pdf', msg.fileData!.name, msg.fileData!.url)"
                 class="inline-flex items-center justify-center gap-1 px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold shadow-xs transition shrink-0"
-                title="Preview PDF"
+                :title="t('msg.previewPdf')"
               >
-                <Eye class="w-3.5 h-3.5" /> Preview
+                <Eye class="w-3.5 h-3.5" /> {{ t('msg.preview') }}
               </button>
-              <a :href="msg.fileData.url" :download="msg.fileData.name" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition shrink-0" title="Download document">
+              <a :href="msg.fileData.url" :download="msg.fileData.name" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition shrink-0" :title="t('msg.downloadDoc')">
                 <Download class="w-4 h-4" />
               </a>
             </div>
@@ -340,7 +341,7 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
 
         <div v-if="isAsset('parametric_3d', 'mesh_3d') && isHidden" :class="['mt-2 max-w-sm', hiddenNotice]">
           <EyeOff class="w-4 h-4 text-slate-500 shrink-0" />
-          <span>This 3D model has been hidden from assets</span>
+          <span>{{ t('msg.modelHidden') }}</span>
         </div>
         <ParametricViewer3D v-else-if="isAsset('parametric_3d')" :assetData="msg.assetPayload" />
         <ModelViewerGLB v-else-if="isAsset('mesh_3d')" :assetData="msg.assetPayload" :message="msg" :isResizing="isResizing" :readOnly="isMeetingClosed" @refine="refineModel" />
@@ -356,7 +357,7 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
             @click="emit('open-document', msg.assetPayload?.title, msg.assetPayload?.content)"
             class="px-3 py-1 bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium rounded-lg transition shrink-0 ml-2"
           >
-            View Document
+            {{ t('msg.viewDocument') }}
           </button>
         </div>
 
@@ -364,7 +365,7 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
         <template v-if="msg.type === 'whiteboard_state'">
           <div v-if="isHidden" :class="['mt-2 max-w-[250px]', hiddenNotice]">
             <EyeOff class="w-4 h-4 text-slate-500 shrink-0" />
-            <span>This whiteboard preview has been hidden from assets</span>
+            <span>{{ t('msg.boardHidden') }}</span>
           </div>
           <div
             v-else
@@ -380,7 +381,7 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
                 <div class="w-10 h-10 rounded-full bg-slate-800 border border-slate-700/60 flex items-center justify-center mb-1.5 shadow-sm">
                   <Lock class="w-5 h-5 text-slate-400" />
                 </div>
-                <span class="text-xs font-semibold text-slate-300 tracking-wide">Private Whiteboard</span>
+                <span class="text-xs font-semibold text-slate-300 tracking-wide">{{ t('msg.privateBoard') }}</span>
               </div>
               <div v-else class="text-slate-600 flex flex-col items-center">
                 <Palette class="w-8 h-8 opacity-40" />
@@ -391,7 +392,7 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
                 class="absolute top-1.5 right-1.5 z-10 px-1.5 py-0.5 rounded-full bg-emerald-500/90 text-white text-[9px] font-bold shadow flex items-center gap-1 animate-pulse"
               >
                 <span class="w-1.5 h-1.5 rounded-full bg-white"></span>
-                <span>Live</span>
+                <span>{{ t('msg.live') }}</span>
               </div>
               <div v-else class="absolute top-1.5 right-1.5 z-10 px-1.5 py-0.5 rounded-full bg-slate-800/90 text-slate-400 text-[9px] font-medium border border-slate-700/60 shadow flex items-center gap-1">
                 <span>{{ msg.metadata?.isPrivate ? 'Private' : 'Ended' }}</span>
@@ -400,16 +401,16 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
               <div class="absolute inset-0 flex items-center justify-center bg-indigo-950/60 opacity-0 group-hover:opacity-100 transition z-10">
                 <span class="bg-indigo-600 hover:bg-indigo-500 text-white px-2.5 py-1 rounded-lg text-xs font-bold shadow-lg flex items-center gap-1.5 transition">
                   <Palette class="w-3.5 h-3.5" />
-                  {{ msg.metadata?.isPrivate ? 'Open Private Board' : (isLiveBoard ? 'Join Live Board' : 'Open Whiteboard') }}
+                  {{ msg.metadata?.isPrivate ? t('msg.openPrivate') : (isLiveBoard ? t('msg.joinLive') : t('msg.openBoard')) }}
                 </span>
               </div>
             </div>
 
             <div class="px-2.5 py-1.5 bg-slate-950 border-t border-slate-800/80 flex items-center justify-between text-[10px]">
-              <span class="text-slate-300 font-medium truncate max-w-[140px]">{{ msg.metadata?.creatorName || msg.senderName }}'s Board</span>
-              <span v-if="msg.metadata?.isPrivate" class="text-slate-500 font-medium text-[9px] shrink-0">Private</span>
-              <span v-else-if="isLiveBoard" class="text-emerald-400 font-semibold text-[9px] shrink-0">Active</span>
-              <span v-else class="text-slate-500 text-[9px] shrink-0">Ended</span>
+              <span class="text-slate-300 font-medium truncate max-w-[140px]">{{ t('msg.boardOf', { name: msg.metadata?.creatorName || msg.senderName }) }}</span>
+              <span v-if="msg.metadata?.isPrivate" class="text-slate-500 font-medium text-[9px] shrink-0">{{ t('msg.private') }}</span>
+              <span v-else-if="isLiveBoard" class="text-emerald-400 font-semibold text-[9px] shrink-0">{{ t('msg.active') }}</span>
+              <span v-else class="text-slate-500 text-[9px] shrink-0">{{ t('msg.ended') }}</span>
             </div>
           </div>
         </template>
@@ -449,10 +450,10 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
           {{ emoji }}
         </button>
         <div class="h-3.5 w-px bg-slate-700/80 mx-0.5"></div>
-        <button @click.stop="emit('reply', msg)" class="p-1 rounded-full text-slate-400 hover:text-sky-300 hover:bg-slate-800 transition cursor-pointer" title="Reply">
+        <button @click.stop="emit('reply', msg)" class="p-1 rounded-full text-slate-400 hover:text-sky-300 hover:bg-slate-800 transition cursor-pointer" :title="t('msg.reply')">
           <CornerUpLeft class="w-3.5 h-3.5" />
         </button>
-        <button @click.stop="copyContent" class="p-1 rounded-full text-slate-400 hover:text-emerald-300 hover:bg-slate-800 transition cursor-pointer" title="Copy message">
+        <button @click.stop="copyContent" class="p-1 rounded-full text-slate-400 hover:text-emerald-300 hover:bg-slate-800 transition cursor-pointer" :title="t('msg.copy')">
           <Copy class="w-3.5 h-3.5" />
         </button>
       </div>
@@ -465,14 +466,14 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
         >
           <Loader2 v-if="isRetrying" class="w-3.5 h-3.5 animate-spin" />
           <RefreshCw v-else class="w-3.5 h-3.5 text-sky-300" />
-          <span>{{ isRetrying ? 'Retrying...' : 'Retry' }}</span>
+          <span>{{ isRetrying ? t('msg.retrying') : t('msg.retry') }}</span>
         </button>
       </div>
 
       <div v-if="isMine && msg.status === 'failed'" class="flex items-center gap-1 mt-0.5 text-[10px]">
-        <button @click="roomStore.retrySendMessage(msg)" class="text-rose-400 hover:underline flex items-center gap-1 font-medium cursor-pointer" title="Click to retry sending">
+        <button @click="roomStore.retrySendMessage(msg)" class="text-rose-400 hover:underline flex items-center gap-1 font-medium cursor-pointer" :title="t('msg.retrySend')">
           <AlertCircle class="w-3 h-3 text-rose-400" />
-          <span>Failed to send. Click to retry.</span>
+          <span>{{ t('msg.sendFailed') }}</span>
         </button>
       </div>
     </div>

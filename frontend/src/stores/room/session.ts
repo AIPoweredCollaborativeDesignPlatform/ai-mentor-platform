@@ -10,10 +10,10 @@ import {
   type Unsubscribe
 } from 'firebase/firestore';
 import { db } from '../../firebase/config';
-import { currentLocale } from '../../i18n';
+import { currentLocale, t } from '../../i18n';
 import type { MessageItem, Participant, ParticipantStatus, RoomData, TypingUser } from '../../types';
 import { roomCollection, roomDocRef, roomRef, type RoomContext } from './context';
-import { createStudyRoom, joinStudyRoom, peekStudyRoom } from '../../services/session';
+import { createStudyRoom, joinStudyRoom, peekStudyRoom, type RoomPeek } from '../../services/session';
 
 const HEARTBEAT_MS = 10000;
 const PRESENCE_SWEEP_MS = 5000;
@@ -70,7 +70,7 @@ export function useRoomSession(ctx: RoomContext) {
     currentRoom.value = null;
   };
 
-  const checkRoomExists = async (pin: string): Promise<{ exists: boolean; roomName?: string; isHost?: boolean }> => {
+  const checkRoomExists = async (pin: string): Promise<RoomPeek> => {
     // Without a ready auth token the call is rejected, which would look like "room not found"
     await authStore.waitForAuthReady().catch(() => {});
     for (let attempt = 1; attempt <= 3; attempt++) {
@@ -117,7 +117,7 @@ export function useRoomSession(ctx: RoomContext) {
       upsertMyRoomIndex(roomId, {
         roomId,
         pin: data.pin || roomId.replace('room_', ''),
-        roomName: data.roomName || `Meeting (${data.pin})`,
+        roomName: data.roomName || t('room.meetingPin', { pin: data.pin }),
         roomEmoji: data.roomEmoji || '💡',
         hostUid: data.hostUid,
         lastActive: (data as any).lastActive || data.createdAt || Date.now(),
@@ -156,13 +156,13 @@ export function useRoomSession(ctx: RoomContext) {
           if (p.uid === authStore.uid || p.status === 'pending' || p.status === 'observer' || p.uid === currentRoom.value?.hostUid) return;
           const old = oldParts[p.uid];
           if (old) {
-            if (!old.isOnline && p.isOnline) pushToast('Participant Joined', `${p.displayName} is back online`, 'info');
-            else if (old.isOnline && !p.isOnline) pushToast('Participant Left', `${p.displayName} went offline`, 'info');
-            else if (old.status === 'approved' && p.status === 'kicked') pushToast('Participant Removed', `${p.displayName} was removed by host`, 'warning');
+            if (!old.isOnline && p.isOnline) pushToast(t('toast.joinedTitle'), t('toast.backOnline', { name: p.displayName }), 'info');
+            else if (old.isOnline && !p.isOnline) pushToast(t('toast.leftTitle'), t('toast.wentOffline', { name: p.displayName }), 'info');
+            else if (old.status === 'approved' && p.status === 'kicked') pushToast(t('toast.removedTitle'), t('toast.removedText', { name: p.displayName }), 'warning');
           } else if (p.status === 'approved' && change.type === 'added') {
             const joinedAt = p.joinedAt || 0;
             if (myApprovedAt && joinedAt >= myApprovedAt - 2000 && now - joinedAt < 20000) {
-              pushToast('Participant Joined', `${p.displayName} joined the meeting`, 'info');
+              pushToast(t('toast.joinedTitle'), t('toast.joinedText', { name: p.displayName }), 'info');
             }
           }
         });
@@ -195,9 +195,9 @@ export function useRoomSession(ctx: RoomContext) {
         notifiedPending.add(p.uid);
         const isRecent = p.joinedAt ? Date.now() - p.joinedAt < 10 * 60 * 1000 : false;
         if (!isInitialLoad || isRecent) {
-          pushToast('New join request', `${p.displayName} is waiting for approval`, 'info', [
-            { label: 'Approve', type: 'primary', onClick: () => approveParticipant(p.uid) },
-            { label: 'Decline', type: 'danger', onClick: () => rejectParticipant(p.uid) }
+          pushToast(t('toast.requestTitle'), t('toast.requestText', { name: p.displayName }), 'info', [
+            { label: t('toast.approve'), type: 'primary', onClick: () => approveParticipant(p.uid) },
+            { label: t('toast.decline'), type: 'danger', onClick: () => rejectParticipant(p.uid) }
           ]);
         }
       });
@@ -335,13 +335,13 @@ export function useRoomSession(ctx: RoomContext) {
   const approveParticipant = async (uid: string) => {
     if (!hostGuard()) return;
     await updateParticipant(uid, { status: 'approved', isOnline: true }, 'approve');
-    pushToast('Member approved', 'The participant has been granted access', 'success');
+    pushToast(t('toast.approvedTitle'), t('toast.approvedText'), 'success');
   };
 
   const rejectParticipant = async (uid: string) => {
     if (!hostGuard()) return;
     await updateParticipant(uid, { status: 'rejected' }, 'reject');
-    pushToast('Request declined', 'The join request has been declined', 'warning');
+    pushToast(t('toast.declinedTitle'), t('toast.declinedText'), 'warning');
   };
 
   const muteParticipant = async (uid: string, muted: boolean) => {

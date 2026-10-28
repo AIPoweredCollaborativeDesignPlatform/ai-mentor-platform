@@ -6,6 +6,7 @@ import { useAuthStore } from './auth';
 import { useMentorStore } from './mentor';
 import { roomDocRef, roomRef, type PushToast, type RoomContext } from './room/context';
 import { endStudySession } from '../services/session';
+import { t } from '../i18n';
 import { useRoomSession } from './room/session';
 import { useRoomMessages } from './room/messages';
 import { useRoomWhiteboard } from './room/whiteboard';
@@ -64,7 +65,7 @@ export const useRoomStore = defineStore('room', () => {
     try {
       await endStudySession(currentRoom.value.roomId);
     } catch (err: any) {
-      pushToast('Could not end the session', err?.message || 'Please try again.', 'error');
+      pushToast(t('toast.endFailed'), err?.message || t('common.tryAgain'), 'error');
     }
   };
 
@@ -77,7 +78,7 @@ export const useRoomStore = defineStore('room', () => {
       await updateDoc(roomDocRef(currentRoom.value.roomId, 'participants', authStore.uid), { displayName: newName, avatar: newAvatar });
       // The observing researcher stays invisible: no notice in the chat
       if (!((isHost.value || myStatus.value === 'observer') && currentRoom.value.session)) {
-        await messages.postSystemMessage(`${oldName} updated profile to ${newName} ${newAvatar}`, '✏️');
+        await messages.postSystemMessage(t('room.profileUpdated', { old: oldName, name: newName, avatar: newAvatar }), '✏️');
       }
     } catch (e) {
       console.error(e);
@@ -86,7 +87,7 @@ export const useRoomStore = defineStore('room', () => {
 
   const updateRoomInfo = async (name: string, emoji: string) => {
     if (!currentRoom.value) return;
-    const cleanName = name.trim() || 'Meeting';
+    const cleanName = name.trim() || t('room.defaultName');
     const cleanEmoji = emoji.trim() || '💡';
     const changed = currentRoom.value.roomName !== cleanName || currentRoom.value.roomEmoji !== cleanEmoji;
     currentRoom.value.roomName = cleanName;
@@ -100,7 +101,7 @@ export const useRoomStore = defineStore('room', () => {
         await messages.sendCustomMessage({
           senderUid: 'system',
           senderName: 'System',
-          content: `Room details updated to ${cleanEmoji} ${cleanName}`
+          content: t('room.detailsUpdated', { emoji: cleanEmoji, name: cleanName })
         }).catch(() => {});
       }
     } catch (err) {

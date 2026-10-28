@@ -21,8 +21,10 @@ export async function joinStudyRoom(roomId: string, displayName: string, avatar:
 }
 
 /** Room documents are readable by members only; join pages ask the server whether a PIN exists. */
-export async function peekStudyRoom(roomId: string): Promise<{ exists: boolean; roomName?: string; isHost?: boolean }> {
-  const fn = httpsCallable<{ roomId: string }, { exists: boolean; roomName?: string; isHost?: boolean }>(functions, 'peekStudyRoom');
+export type RoomPeek = { exists: boolean; roomName?: string; isHost?: boolean; language?: 'en' | 'zh-TW'; consentText?: string };
+
+export async function peekStudyRoom(roomId: string): Promise<RoomPeek> {
+  const fn = httpsCallable<{ roomId: string }, RoomPeek>(functions, 'peekStudyRoom');
   return (await fn({ roomId })).data;
 }
 

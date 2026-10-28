@@ -11,6 +11,7 @@ import { useWhiteboardResize, useWhiteboardSession, type WhiteboardHandle } from
 import { useAiReadTracking } from '../composables/useAiReadTracking';
 import { setRecording, startResearchLog, stopResearchLog } from '../services/researchLog';
 import { reopenStudySession } from '../services/session';
+import { setRoomLocale, t } from '../i18n';
 
 import RoomHeader from '../components/room/RoomHeader.vue';
 import ChatMessage from '../components/room/ChatMessage.vue';
@@ -46,10 +47,10 @@ const participantCount = computed(() => roomStore.onlineParticipants.length);
 /** Why chat and whiteboards are locked for me right now, or null when I can take part. */
 const lockReason = computed(() => {
   const s = session.value;
-  if (!s) return roomStore.currentRoom?.roomStatus === 'ended' ? 'This meeting has been closed. Chat is in read-only mode.' : null;
-  if (s.phase === 'ended') return 'This session has ended.';
-  if (isObserving.value) return 'Observer view: read-only.';
-  if (s.phase === 'waiting') return `Waiting for others to join (${participantCount.value}/${s.expected})...`;
+  if (!s) return roomStore.currentRoom?.roomStatus === 'ended' ? t('room.closedReadOnly') : null;
+  if (s.phase === 'ended') return t('room.sessionEnded');
+  if (isObserving.value) return t('room.observerReadOnly');
+  if (s.phase === 'waiting') return t('room.waitingOthers', { count: participantCount.value, expected: s.expected });
   return null;
 });
 
@@ -64,12 +65,12 @@ const timeLeft = computed(() => {
 
 const isReopening = ref(false);
 const reopen = async () => {
-  if (!window.confirm('Reopen this session? Participants can chat and use whiteboards again; the Drive upload waits until it ends again.')) return;
+  if (!window.confirm(t('room.reopenConfirm'))) return;
   isReopening.value = true;
   try {
     await reopenStudySession(roomId);
   } catch (err: any) {
-    roomStore.pushToast('Could not reopen the session', err?.message || 'Please try again.', 'error');
+    roomStore.pushToast(t('room.reopenFailed'), err?.message || t('common.tryAgain'), 'error');
   } finally {
     isReopening.value = false;
   }
@@ -83,6 +84,9 @@ const confirmEnd = async () => {
   isEnding.value = false;
   showEndConfirm.value = false;
 };
+
+// The room language (set by the experiment profile) drives the whole UI while inside the room
+watch(() => roomStore.currentRoom?.language, lang => lang && setRoomLocale(lang), { immediate: true });
 
 // Browser events are not recorded after the session ended (resumes on Reopen)
 watch(() => session.value?.phase, phase => setRecording(phase !== 'ended'));
@@ -200,7 +204,7 @@ watch(() => roomStore.currentRoom?.messages.length, (count = 0) => {
       playNotificationSound();
       if (isMentioning(latest, authStore.displayName, authStore.uid)) {
         roomStore.pushToast(
-          latest.senderUid === 'ai_mentor' ? '✨ AI Mentor tagged you' : `💬 ${latest.senderName} tagged you`,
+          t('room.taggedBy', { icon: latest.senderUid === 'ai_mentor' ? '✨' : '💬', name: latest.senderName }),
           latest.content.slice(0, 100),
           'info'
         );
@@ -219,15 +223,15 @@ watch(() => [roomStore.currentRoom?.participants?.[authStore.uid], authStore.dis
 });
 
 watch(() => roomStore.currentRoom?.participants?.[authStore.uid]?.isMuted, (muted, wasMuted) => {
-  if (muted === true && wasMuted === false) roomStore.pushToast('Microphone Muted', 'You have been muted by the host.', 'warning');
+  if (muted === true && wasMuted === false) roomStore.pushToast(t('room.mutedTitle'), t('room.mutedText'), 'warning');
 });
 
 watch(() => roomStore.myStatus, status => {
   if (status !== 'kicked') return;
   alertModal.value = {
     isOpen: true,
-    title: 'Removed from Meeting',
-    message: 'You have been removed from the meeting by the host.',
+    title: t('room.removedTitle'),
+    message: t('room.removedText'),
     type: 'warning',
     onConfirm: () => {
       alertModal.value.isOpen = false;
@@ -264,7 +268,7 @@ onMounted(async () => {
 
   const check = await roomStore.checkRoomExists(pin);
   if (!check.exists) {
-    roomStore.pushToast('Meeting Not Found', `Meeting room ${pin} does not exist or has been deleted.`, 'error');
+    roomStore.pushToast(t('room.notFoundTitle'), t('room.notFoundText', { pin }), 'error');
     router.replace(authStore.isGoogleLinked ? '/dashboard' : '/');
     return;
   }
@@ -299,6 +303,7 @@ onBeforeRouteLeave(async (_to, _from, next) => {
 });
 
 onUnmounted(() => {
+  setRoomLocale(null);
   window.removeEventListener('beforeunload', handleUnload);
   window.removeEventListener('beforeunload', handleWhiteboardBeforeUnload);
   window.removeEventListener('pagehide', handleUnload);
@@ -317,7 +322,7 @@ onUnmounted(() => {
 <template>
   <div v-if="isVerifyingAccess" class="h-[100dvh] flex flex-col items-center justify-center bg-slate-950 text-slate-400">
     <div class="w-10 h-10 border-2 border-sky-500 border-t-transparent rounded-full animate-spin mb-3"></div>
-    <p class="text-xs">Verifying credentials & permissions...</p>
+    <p class="text-xs">{{ t('room.verifying') }}</p>
   </div>
 
   <div v-else class="h-[100dvh] flex flex-col bg-slate-950 text-slate-100 overflow-hidden">
@@ -338,32 +343,32 @@ onUnmounted(() => {
       :class="session!.phase === 'ended' ? 'bg-amber-950/70 border-amber-500/30 text-amber-200' : 'bg-slate-900 border-slate-800 text-slate-300'"
     >
       <template v-if="isObserving">
-        <span class="inline-flex items-center gap-1 text-violet-300 font-medium"><Eye class="w-3.5 h-3.5" /> Observer</span>
-        <span class="inline-flex items-center gap-1"><Users class="w-3.5 h-3.5" /> {{ participantCount }} online<template v-if="session!.maxOnline"> / max {{ session!.maxOnline }}</template></span>
-        <span v-if="session!.phase === 'waiting'" class="text-slate-400 truncate">Starts at {{ session!.expected }} participants</span>
+        <span class="inline-flex items-center gap-1 text-violet-300 font-medium"><Eye class="w-3.5 h-3.5" /> {{ t('room.observer') }}</span>
+        <span class="inline-flex items-center gap-1"><Users class="w-3.5 h-3.5" /> {{ session!.maxOnline ? t('room.onlineMax', { count: participantCount, max: session!.maxOnline }) : t('room.online', { count: participantCount }) }}</span>
+        <span v-if="session!.phase === 'waiting'" class="text-slate-400 truncate">{{ t('room.startsAt', { count: session!.expected }) }}</span>
         <span v-else-if="session!.phase === 'running'" class="inline-flex items-center gap-1" :class="timeLeft === '0:00' ? 'text-amber-300' : ''">
-          <Clock class="w-3.5 h-3.5" /> {{ timeLeft ? (timeLeft === '0:00' ? 'Time is up' : `${timeLeft} left`) : 'No time limit' }}
+          <Clock class="w-3.5 h-3.5" /> {{ timeLeft ? (timeLeft === '0:00' ? t('room.timeIsUp') : t('room.timeLeft', { time: timeLeft })) : t('room.noTimeLimit') }}
         </span>
-        <span v-else>Session ended</span>
+        <span v-else>{{ t('room.sessionEndedShort') }}</span>
         <button
           v-if="canControlSession && session!.phase === 'ended'"
           @click="reopen"
           :disabled="isReopening"
           class="ml-auto inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-[11px] font-semibold transition disabled:opacity-50"
         >
-          {{ isReopening ? 'Reopening...' : 'Reopen' }}
+          {{ isReopening ? t('room.reopening') : t('room.reopen') }}
         </button>
         <button
           v-if="canControlSession && session!.phase !== 'ended'"
           @click="showEndConfirm = true"
           class="ml-auto inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-700 hover:bg-rose-600 text-white text-[11px] font-semibold transition"
         >
-          <Power class="w-3.5 h-3.5" /> End
+          <Power class="w-3.5 h-3.5" /> {{ t('room.end') }}
         </button>
       </template>
       <span v-else class="mx-auto inline-flex items-center gap-1.5 truncate">
         <Loader2 v-if="session!.phase === 'waiting'" class="w-3.5 h-3.5 animate-spin shrink-0" />
-        {{ session!.phase === 'ended' ? 'This session has ended. Thank you for taking part.' : lockReason }}
+        {{ session!.phase === 'ended' ? t('room.thanks') : lockReason }}
       </span>
     </div>
 
@@ -422,7 +427,7 @@ onUnmounted(() => {
         v-if="isWhiteboardOpen"
         class="hidden sm:flex w-2.5 hover:w-3 bg-slate-900 hover:bg-indigo-500/80 active:bg-indigo-600 transition-all cursor-col-resize shrink-0 z-30 items-center justify-center select-none group border-x border-slate-800"
         @mousedown="startWhiteboardResize"
-        title="Drag to resize whiteboard (drag to right edge to close)"
+        :title="t('room.resizeHandle')"
       >
         <div class="h-8 w-1 rounded-full bg-slate-600 group-hover:bg-white transition-colors"></div>
       </div>
@@ -477,14 +482,14 @@ onUnmounted(() => {
 
     <div v-if="showEndConfirm" class="fixed inset-0 z-[90] flex items-center justify-center p-4 bg-black/75">
       <div class="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-6 shadow-2xl text-center">
-        <h3 class="text-base font-bold text-rose-400 mb-2">End this session?</h3>
+        <h3 class="text-base font-bold text-rose-400 mb-2">{{ t('room.endConfirmTitle') }}</h3>
         <p class="text-xs text-slate-400 mb-5 leading-relaxed">
-          Chat and whiteboards become read-only for everyone and nobody new can join. This cannot be undone.
+          {{ t('room.endConfirmText') }}
         </p>
         <div class="flex gap-2">
-          <button @click="showEndConfirm = false" class="flex-1 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition">Cancel</button>
+          <button @click="showEndConfirm = false" class="flex-1 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition">{{ t('common.cancel') }}</button>
           <button @click="confirmEnd" :disabled="isEnding" class="flex-1 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold transition shadow disabled:opacity-50">
-            {{ isEnding ? 'Ending...' : 'End session' }}
+            {{ isEnding ? t('room.ending') : t('room.endSession') }}
           </button>
         </div>
       </div>

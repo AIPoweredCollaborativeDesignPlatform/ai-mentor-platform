@@ -1,5 +1,7 @@
 import { getFirestore } from 'firebase-admin/firestore';
 import { assignProfileToRoom, loadProfile } from './engine.js';
+import { loadDefaultProfile } from './profiles.js';
+import { roomLanguage, str } from './i18n.js';
 
 /**
  * Room creation and the 4-digit PIN registry. Rooms are created only here (firestore.rules forbids
@@ -49,12 +51,12 @@ export async function createRoom(uid, { roomName, roomEmoji, language, mentorCon
   const emoji = String(roomEmoji || '').trim().slice(0, 8) || '💡';
   const name = String(roomName || '').trim().slice(0, 60) || `Meeting ${pin}`;
 
-  // Before the room doc exists, so the onRoomCreated default-profile fallback finds it already assigned
-  if (profileId) {
-    const profile = await loadProfile(profileId);
-    if (!profile.id) throw new Error('Profile not found');
-    await assignProfileToRoom(roomId, profile, by);
-  }
+  // The profile (chosen or default) sets the room language: UI, AI replies, system messages.
+  // It is assigned right after the room doc is written; the onRoomCreated fallback then finds it done
+  // (or, if the fallback ran first, this assignment replaces the default).
+  const profile = profileId ? await loadProfile(profileId) : await loadDefaultProfile();
+  if (profileId && !profile.id) throw new Error('Profile not found');
+  const lang = roomLanguage(profile.language || language);
 
   const roomDoc = db().doc(`rooms/${roomId}`);
   const batch = db().batch();
@@ -65,7 +67,7 @@ export async function createRoom(uid, { roomName, roomEmoji, language, mentorCon
     participantUids: asParticipant ? [] : [uid],
     createdAt: now, lastActive: now, roomStatus: 'active',
     mentorConfig: mentorConfig || null, assetsCount: 0,
-    appVersion: String(appVersion || ''), language: language || 'zh-TW'
+    appVersion: String(appVersion || ''), language: lang
   });
   if (!asParticipant) {
     batch.set(roomDoc.collection('participants').doc(uid), {
@@ -75,10 +77,11 @@ export async function createRoom(uid, { roomName, roomEmoji, language, mentorCon
   }
   batch.set(roomDoc.collection('messages').doc(`msg_${now}`), {
     senderUid: 'system', senderName: 'System', senderAvatar: '🏛️', type: 'text',
-    content: `${emoji} Room "${name}" created · PIN: ${pin}`, timestamp: now
+    content: str('roomCreated', lang, { emoji, name, pin }), timestamp: now
   });
   batch.update(db().doc(`roomPins/${roomId}`), { createdAt: now });
   await batch.commit();
+  await assignProfileToRoom(roomId, profile, profileId ? by : 'system-default');
   return { roomId, pin, roomName: name, roomEmoji: emoji, hostUid: asParticipant ? '' : uid };
 }
 

@@ -1,4 +1,5 @@
 // Client copy of the profile shape used by functions/src/profiles.js (keep the two in sync).
+import { t, type MessageKey } from '../i18n';
 
 export type AiMode = 'none' | 'reactive' | 'proactive';
 
@@ -8,6 +9,8 @@ export interface AiProfile {
   description: string;
   version: number;
   mode: AiMode;
+  /** Room language: participant UI, AI replies and system messages */
+  language: 'zh-TW' | 'en';
   shadowAssessment: boolean;
   displayName: { 'zh-TW': string; en: string };
   persona: string;
@@ -24,8 +27,9 @@ export interface AiProfile {
   session: {
     expectedParticipants: number;
     maxParticipants: number;
-    openingText: string;
-    taskDescription: string;
+    /** Per language; the room language picks one */
+    openingText: Localized;
+    taskDescription: Localized;
     /** 0 = no time limit */
     taskMinutes: number;
     /** Minutes before the end at which the AI writes a reminder */
@@ -37,31 +41,45 @@ export interface AiProfile {
   updatedBy?: string;
 }
 
-export const MODE_LABELS: Record<AiMode, string> = {
-  none: '無 AI（對照組，參與者看不到 AI）',
-  reactive: 'Reactive（只在被 @ 時回應）',
-  proactive: 'Proactive（主動判斷並介入）'
+export type Localized = { 'zh-TW': string; en: string };
+
+export const MODES: AiMode[] = ['none', 'reactive', 'proactive'];
+const MODE_KEYS: Record<AiMode, [MessageKey, MessageKey]> = {
+  none: ['mode.none', 'mode.noneShort'],
+  reactive: ['mode.reactive', 'mode.reactiveShort'],
+  proactive: ['mode.proactive', 'mode.proactiveShort']
 };
+export const modeLabel = (mode: AiMode, short = false) => t(MODE_KEYS[mode]?.[short ? 1 : 0] || 'mode.proactive');
 
 const base = (): AiProfile => ({
   name: '',
   description: '',
   version: 0,
   mode: 'proactive',
+  language: 'zh-TW',
   shadowAssessment: true,
   displayName: { 'zh-TW': 'AI 導師', en: 'AI Mentor' },
   persona: 'A calm, neutral design mentor who supports the team\'s own decisions, keeps track of what was agreed, and speaks briefly.',
   triggers: { pauseSeconds: 8, minNewMessages: 3, maxMessagesBetweenChecks: 12, stallSeconds: 90, cooldownSeconds: 60 },
   memory: { updateEveryMessages: 15, updateOnWhiteboardShare: true },
   modules: { enable3D: true, enableMoodboard: true, enableFactRetrieval: true, enableSummary: true, enableWhiteboardAi: true },
-  session: { expectedParticipants: 3, maxParticipants: 3, openingText: '', taskDescription: '', taskMinutes: 30, reminderMinutes: [5] },
+  session: { expectedParticipants: 3, maxParticipants: 3, openingText: { 'zh-TW': '', en: '' }, taskDescription: { 'zh-TW': '', en: '' }, taskMinutes: 30, reminderMinutes: [5] },
   rationale: {}
 });
 
 export const newProfile = (overrides: Partial<AiProfile> = {}): AiProfile => ({ ...base(), ...overrides });
 
 /** Profiles saved before a field existed get its default (mirrors the server-side merge). */
-export const withDefaults = (p: AiProfile): AiProfile => ({ ...base(), ...p, session: { ...base().session, ...(p.session || {}) } });
+// Older profiles stored one opening text / task description for both languages
+const localizedOf = (v: unknown): Localized => {
+  if (typeof v === 'string') return { 'zh-TW': v, en: v };
+  const l = (v || {}) as Partial<Localized>;
+  return { 'zh-TW': l['zh-TW'] || '', en: l.en || '' };
+};
+export const withDefaults = (p: AiProfile): AiProfile => {
+  const session = { ...base().session, ...(p.session || {}) };
+  return { ...base(), ...p, session: { ...session, openingText: localizedOf(session.openingText), taskDescription: localizedOf(session.taskDescription) } };
+};
 
 /** Starting set for a study; timing values are placeholders until set from the literature. */
 export const SEED_PROFILES: AiProfile[] = [
@@ -72,20 +90,20 @@ export const SEED_PROFILES: AiProfile[] = [
 
 export interface FieldMeta {
   path: string;
-  label: string;
-  unit?: string;
-  help: string;
+  label: MessageKey;
+  unit?: MessageKey;
+  help: MessageKey;
   min?: number;
   max?: number;
 }
 
 export const TIMING_FIELDS: FieldMeta[] = [
-  { path: 'triggers.pauseSeconds', label: '停頓多久後判斷', unit: '秒', help: '最後一則訊息後安靜多久，才進行一次自動判斷（避免打斷正在進行的對話）。', min: 0, max: 120 },
-  { path: 'triggers.minNewMessages', label: '至少累積幾則新訊息', unit: '則', help: '停頓觸發判斷前，自上次判斷以來至少要有幾則新訊息。', min: 1, max: 50 },
-  { path: 'triggers.maxMessagesBetweenChecks', label: '最多每幾則判斷一次', unit: '則', help: '對話一直不停時，強制判斷的間隔。設 0 表示不強制。', min: 0, max: 100 },
-  { path: 'triggers.stallSeconds', label: '停滯判定', unit: '秒', help: '對話沉默多久視為停滯並做一次判斷。設 0 表示關閉。', min: 0, max: 600 },
-  { path: 'triggers.cooldownSeconds', label: '介入後冷卻', unit: '秒', help: '主動介入後，至少隔多久才可再次主動介入（被 @ 不受限）。', min: 0, max: 900 },
-  { path: 'memory.updateEveryMessages', label: '長期記憶更新頻率', unit: '則', help: '每累積幾則訊息，更新一次 AI 的長期記憶（摘要、決策、成員檔案）。設 0 表示不更新。', min: 0, max: 200 }
+  { path: 'triggers.pauseSeconds', label: 'field.pause', unit: 'unit.seconds', help: 'field.pauseHelp', min: 0, max: 120 },
+  { path: 'triggers.minNewMessages', label: 'field.minNew', unit: 'unit.messages', help: 'field.minNewHelp', min: 1, max: 50 },
+  { path: 'triggers.maxMessagesBetweenChecks', label: 'field.maxBetween', unit: 'unit.messages', help: 'field.maxBetweenHelp', min: 0, max: 100 },
+  { path: 'triggers.stallSeconds', label: 'field.stall', unit: 'unit.seconds', help: 'field.stallHelp', min: 0, max: 600 },
+  { path: 'triggers.cooldownSeconds', label: 'field.cooldown', unit: 'unit.seconds', help: 'field.cooldownHelp', min: 0, max: 900 },
+  { path: 'memory.updateEveryMessages', label: 'field.memory', unit: 'unit.messages', help: 'field.memoryHelp', min: 0, max: 200 }
 ];
 
 export const getPath = (obj: any, path: string) => path.split('.').reduce((o, k) => o?.[k], obj);

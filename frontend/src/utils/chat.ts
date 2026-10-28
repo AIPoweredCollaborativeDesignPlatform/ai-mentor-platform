@@ -1,6 +1,7 @@
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import type { MessageItem } from '../types';
+import { intlLocale, t } from '../i18n';
 
 export const AI_TYPING_UIDS = ['ai_mentor', 'ai_mentor_3d'];
 
@@ -47,7 +48,7 @@ export function isMentioning(msg: MessageItem, displayName: string, uid: string)
   return content.includes(`@${displayName.toLowerCase().trim()}`) || content.includes(`@${uid.toLowerCase()}`);
 }
 
-export const formatTime = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+export const formatTime = (ts: number) => new Date(ts).toLocaleTimeString(intlLocale(), { hour: '2-digit', minute: '2-digit' });
 
 export function formatDate(ts: number): string {
   const d = new Date(ts);
@@ -55,9 +56,9 @@ export function formatDate(ts: number): string {
 }
 
 export function formatTypingText(users: { displayName: string }[]): string {
-  if (users.length === 1) return `${users[0].displayName} is typing...`;
-  if (users.length === 2) return `${users[0].displayName} and ${users[1].displayName} are typing...`;
-  return `${users[0].displayName} and ${users.length - 1} others are typing...`;
+  if (users.length === 1) return t('chat.typingOne', { name: users[0].displayName });
+  if (users.length === 2) return t('chat.typingTwo', { a: users[0].displayName, b: users[1].displayName });
+  return t('chat.typingMany', { a: users[0].displayName, count: users.length - 1 });
 }
 
 /** Old versions created extra whiteboard "pointer" messages referencing the real asset via metadata.assetId. */

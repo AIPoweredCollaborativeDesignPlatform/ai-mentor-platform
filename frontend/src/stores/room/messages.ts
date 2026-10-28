@@ -1,6 +1,7 @@
 import { addDoc, increment, updateDoc } from 'firebase/firestore';
 import type { MessageItem } from '../../types';
 import { roomCollection, roomDocRef, roomRef, stripUndefined, tempId, type RoomContext } from './context';
+import { t } from '../../i18n';
 
 type PollVote = { uid: string; name: string; avatar: string; option: string };
 
@@ -62,7 +63,7 @@ export function useRoomMessages(ctx: RoomContext, setMyTyping: (typing: boolean)
   const sendTextMessage = (text: string, replyTo?: { id: string; senderName: string; text: string }) =>
     postMessage(
       { content: text.trim(), ...(replyTo ? { replyTo } : {}) },
-      { preview: text.trim().slice(0, 100), failToast: ['Send Failed', 'Could not sync message to server. Click to retry.'] }
+      { preview: text.trim().slice(0, 100), failToast: [t('msg.sendFailedTitle'), t('msg.sendFailedText')] }
     );
 
   const sendFileMessage = async (
@@ -73,7 +74,7 @@ export function useRoomMessages(ctx: RoomContext, setMyTyping: (typing: boolean)
       { type: 'file', content: caption || '', fileData },
       {
         preview: caption ? caption.slice(0, 100) : `📎 ${fileData.name}`,
-        failToast: ['Attachment Error', 'Attachment could not be saved to room database.']
+        failToast: [t('msg.attachErrorTitle'), t('msg.attachErrorText')]
       }
     );
   };
@@ -85,10 +86,10 @@ export function useRoomMessages(ctx: RoomContext, setMyTyping: (typing: boolean)
       const { status, id, ...payload } = msg;
       await addDoc(roomCollection(currentRoom.value.roomId, 'messages'), payload);
       msg.status = 'delivered';
-      pushToast('Sent', 'Message delivered successfully.', 'success');
+      pushToast(t('msg.sentTitle'), t('msg.sentText'), 'success');
     } catch (e) {
       msg.status = 'failed';
-      pushToast('Retry Failed', 'Still unable to reach database. Check your network.', 'error');
+      pushToast(t('toast.retryFailed'), t('msg.retryFailedText'), 'error');
     }
   };
 
@@ -165,7 +166,7 @@ export function useRoomMessages(ctx: RoomContext, setMyTyping: (typing: boolean)
 
   const myVote = (option: string): PollVote => ({
     uid: authStore.uid,
-    name: authStore.displayName || 'Participant',
+    name: authStore.displayName || t('common.participant'),
     avatar: authStore.avatar || '🦊',
     option
   });

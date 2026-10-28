@@ -22,7 +22,8 @@ const args = new Set(process.argv.slice(2));
 const bump = args.has('--major') ? 'major' : args.has('--minor') ? 'minor' : 'patch';
 const dry = args.has('--dry');
 
-const run = (cmd, cwd = ROOT) => execSync(cmd, { cwd, stdio: 'inherit' });
+// Loading functions/ (Anthropic SDK + Admin SDK) can exceed the CLI's 10s discovery timeout on this machine
+const run = (cmd, cwd = ROOT) => execSync(cmd, { cwd, stdio: 'inherit', env: { ...process.env, FUNCTIONS_DISCOVERY_TIMEOUT: '120' } });
 const read = (cmd, cwd = ROOT) => execSync(cmd, { cwd, encoding: 'utf-8' }).trim();
 const step = (msg) => console.log(`\n\x1b[36m▶ ${msg}\x1b[0m`);
 

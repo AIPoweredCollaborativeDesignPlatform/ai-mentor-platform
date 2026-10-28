@@ -93,7 +93,12 @@ watch(idx, async () => {
   if (top < box.scrollTop || top + row.offsetHeight > box.scrollTop + box.clientHeight) box.scrollTop = top - box.clientHeight / 2;
 });
 
-// The chat panel never scrolls by itself; the researcher scrolls it
+// The chat box follows new messages by scrolling itself only (the page stays put)
+const chatRef = ref<HTMLElement | null>(null);
+watch(() => state.value.messages.length, async () => {
+  await nextTick();
+  if (chatRef.value) chatRef.value.scrollTop = chatRef.value.scrollHeight;
+});
 const votersOf = (m: ReplayMessage, option: string) => Object.values(m.pollVotes || {}).filter(v => v?.option === option);
 const aliasOfUid = (uid: string) => members.value.get(uid)?.alias || '?';
 const isUrl = (u?: string) => Boolean(u && /^(https?:|data:image)/.test(u));
@@ -162,7 +167,7 @@ onMounted(async () => {
         <!-- Chat at t -->
         <section class="rounded-2xl border border-slate-800 bg-slate-900/70 flex flex-col h-[440px]">
           <h2 class="px-3 py-2 text-xs font-semibold text-slate-300 border-b border-slate-800">聊天（{{ state.messages.filter(m => !m.deleted).length }}）</h2>
-          <div class="flex-1 overflow-y-auto p-3 space-y-2 text-xs">
+          <div ref="chatRef" class="flex-1 overflow-y-auto p-3 space-y-2 text-xs">
             <div v-for="m in state.messages" :key="m.id" :class="m.deleted ? 'opacity-40 line-through' : ''">
               <div class="text-[10px] text-slate-500">
                 <b :class="ROLE_CLASS[m.senderUid?.startsWith('ai_mentor') ? 'ai' : m.senderUid === 'system' ? 'system' : 'participant']">

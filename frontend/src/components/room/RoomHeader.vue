@@ -85,7 +85,7 @@ const pillButton = 'inline-flex items-center gap-1 text-[11px] px-2 py-1.5 round
         <div class="text-[10px] sm:text-[11px] text-slate-400 flex items-center gap-1.5 sm:gap-2">
           <span class="flex items-center gap-1">
             <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-            {{ roomStore.onlineParticipants.length }} / {{ roomStore.approvedParticipants.length }} Online
+            {{ t('header.onlineCount', { n: roomStore.onlineParticipants.length, total: roomStore.approvedParticipants.length }) }}
           </span>
           <span v-if="roomStore.isHost" class="text-amber-400 font-medium">{{ t('header.host') }}</span>
         </div>
@@ -152,7 +152,7 @@ const pillButton = 'inline-flex items-center gap-1 text-[11px] px-2 py-1.5 round
         :title="t('header.assets')"
       >
         <Box class="w-3.5 h-3.5" />
-        <span class="hidden sm:inline">Assets</span>
+        <span class="hidden sm:inline">{{ t('header.assetsBtn') }}</span>
       </button>
 
       <button
@@ -162,7 +162,7 @@ const pillButton = 'inline-flex items-center gap-1 text-[11px] px-2 py-1.5 round
         :title="t('header.settingsMembers')"
       >
         <Sliders class="w-3.5 h-3.5" />
-        <span class="hidden sm:inline">Settings</span>
+        <span class="hidden sm:inline">{{ t('header.settingsBtn') }}</span>
         <span
           v-if="roomStore.pendingParticipants.length > 0"
           class="absolute -top-1 -right-1 w-4 h-4 bg-amber-500 text-slate-950 font-bold text-[9px] rounded-full flex items-center justify-center animate-bounce shadow-md"

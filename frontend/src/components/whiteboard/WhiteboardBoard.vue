@@ -61,10 +61,11 @@ const others = ref<PresenceDoc[]>([]);
 const ai = reactive({ open: false, prompt: '', busy: false, error: '' });
 const toast = ref('');
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
-const showToast = (text: string) => {
+/** `sticky` keeps the toast until the next showToast (for progress messages). */
+const showToast = (text: string, sticky = false) => {
   toast.value = text;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (toast.value = ''), 2500);
+  if (!sticky) toastTimer = setTimeout(() => (toast.value = ''), 2500);
 };
 
 const containerRef = ref<HTMLDivElement | null>(null);
@@ -970,7 +971,7 @@ const deleteSelection = () => deleteObjects(selection.value);
 // ---------- images ----------
 async function insertImageFile(file: File, at?: fabric.Point) {
   if (!file.type.startsWith('image/')) return;
-  showToast(t('wb.uploadingImage'));
+  showToast(t('wb.uploadingImage'), true);
   try {
     await ensureBoard();
     const blob = await downscaleImage(file);
@@ -1044,7 +1045,7 @@ async function sketchToSvg() {
   const list = selection.value.filter(o => !(o instanceof fabric.Textbox));
   if (!list.length || ai.busy || !canvas) return;
   ai.busy = true;
-  showToast(t('wb.redrawing', { name: aiName.value }));
+  showToast(t('wb.redrawing', { name: aiName.value }), true);
   try {
     canvas.discardActiveObject();
     const png = await renderObjects(list, { maxW: 1024, maxH: 1024, format: 'png', background: '#ffffff' });
@@ -1052,17 +1053,19 @@ async function sketchToSvg() {
     const minX = Math.min(...rects.map(r => r.left)), minY = Math.min(...rects.map(r => r.top));
     const maxX = Math.max(...rects.map(r => r.left + r.width)), maxY = Math.max(...rects.map(r => r.top + r.height));
     const svg = await redrawSketchToSvg(png);
-    const img = await svgObject(svg, new fabric.Point((minX + maxX) / 2, (minY + maxY) / 2), Math.max(maxX - minX, maxY - minY, 120));
+    const side = Math.max(maxX - minX, maxY - minY, 120);
+    const img = await svgObject(svg, new fabric.Point((minX + maxX) / 2, (minY + maxY) / 2), side);
+    // Keep the original; place the redraw to its right
+    img.set({ left: (img.left || 0) + (maxX - minX) / 2 + img.getScaledWidth() / 2 + 40 });
+    img.setCoords();
 
-    // Replace the strokes with the vector drawing as one undoable step
-    const ids = [...list.map(o => o.id), img.id];
+    const ids = [img.id];
     const before = snapshotStates(ids);
-    list.forEach(o => removeLocal(o.id));
     insertByZ(prepare(img));
     record(before, ids);
     canvas.setActiveObject(img);
     canvas.requestRenderAll();
-    await persist([img], list.map(o => o.id));
+    await persist([img], []);
     showToast(t('wb.sketchConverted'));
   } catch (e: any) {
     showToast(e?.title || t('wb.sketchFailed'));

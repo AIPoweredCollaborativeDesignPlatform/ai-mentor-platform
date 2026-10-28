@@ -534,14 +534,14 @@ onUnmounted(() => {
                   class="text-[10px] px-2 py-0.5 rounded-full font-medium"
                   :class="p.isOnline !== false ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'bg-slate-800 text-slate-400 border border-slate-700'"
                 >
-                  👑 Host {{ p.isOnline !== false ? '' : '(Offline)' }}
+                  {{ t('host.hostBadge') }} {{ p.isOnline !== false ? '' : t('host.offlineSuffix') }}
                 </span>
                 <span
                   v-else
                   class="text-[10px] flex items-center gap-1 font-medium"
                   :class="p.isOnline !== false ? 'text-emerald-400' : 'text-slate-500'"
                 >
-                  {{ p.isOnline !== false ? '● Online' : '○ Offline' }}
+                  {{ p.isOnline !== false ? t('host.online') : t('host.offline') }}
                 </span>
 
                 <div v-if="!p.isHost" class="flex items-center gap-1">

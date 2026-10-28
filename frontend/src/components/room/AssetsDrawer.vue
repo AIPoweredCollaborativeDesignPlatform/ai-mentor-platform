@@ -143,7 +143,7 @@ const openItem = (m: MessageItem) => {
           :title="t('assets.manageHidden')"
         >
           <Settings class="w-3.5 h-3.5" />
-          <span>{{ isManaging ? 'Done' : 'Manage' }}</span>
+          <span>{{ isManaging ? t('assets.done') : t('assets.manage') }}</span>
         </button>
         <button @click="emit('close')" class="p-2 rounded-xl hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition cursor-pointer">
           <X class="w-4 h-4" />

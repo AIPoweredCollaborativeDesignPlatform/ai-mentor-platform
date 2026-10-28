@@ -1,0 +1,216 @@
+<script setup lang="ts">
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
+import { ArrowLeft, Loader2, Pause, Play } from 'lucide-vue-next';
+import { useAuthStore } from '../stores/auth';
+import BoardReplayCanvas from '../components/admin/BoardReplayCanvas.vue';
+import {
+  KIND_GROUPS, describe, fmtOffset, groupOf, indexAt, loadEvents, membersOf, stateAt, type ResearchEvent
+} from '../utils/replay';
+
+/** Admin-only replay of one room from its research event log (/#/admin/replay/:roomId). */
+const route = useRoute();
+const authStore = useAuthStore();
+const roomId = route.params.roomId as string;
+const isAdmin = computed(() => authStore.isGoogleLinked && authStore.email === 'bb900114@gmail.com');
+
+const events = ref<ResearchEvent[]>([]);
+const loading = ref(true);
+const error = ref('');
+
+const t0 = computed(() => events.value[0]?.at || 0);
+const tEnd = computed(() => events.value.at(-1)?.at || 0);
+const t = ref(0);
+const members = computed(() => membersOf(events.value));
+const who = (e: { uid: string | null; role: string }) => {
+  if (e.role === 'ai') return 'AI';
+  if (e.role === 'system') return '系統';
+  const m = e.uid ? members.value.get(e.uid) : undefined;
+  return m ? m.alias : e.role === 'unknown' ? '—' : e.role;
+};
+
+const idx = computed(() => indexAt(events.value, t.value));
+const state = computed(() => stateAt(events.value, idx.value));
+
+// ---------- Boards ----------
+const boardIds = computed(() => [...state.value.boards.keys()]);
+const boardId = ref<string | null>(null);
+watch(boardIds, ids => {
+  if (!boardId.value || !ids.includes(boardId.value)) boardId.value = ids[0] || null;
+});
+// Follow the board that was last changed, unless one was picked by hand
+const followBoard = ref(true);
+watch(idx, i => {
+  if (!followBoard.value) return;
+  for (let j = i; j >= 0 && j > i - 50; j--) {
+    const e = events.value[j];
+    if (e?.kind.startsWith('board_object_')) {
+      boardId.value = e.data.boardId;
+      return;
+    }
+  }
+});
+const boardObjects = computed(() => (boardId.value ? [...(state.value.boards.get(boardId.value)?.values() || [])] : []));
+const pickBoard = (id: string) => {
+  boardId.value = id;
+  followBoard.value = false;
+};
+
+// ---------- Playback ----------
+const playing = ref(false);
+const speed = ref(10);
+let timer: ReturnType<typeof setInterval> | undefined;
+const TICK_MS = 100;
+const togglePlay = () => {
+  playing.value = !playing.value;
+  clearInterval(timer);
+  if (!playing.value) return;
+  if (t.value >= tEnd.value) t.value = t0.value;
+  timer = setInterval(() => {
+    t.value = Math.min(tEnd.value, t.value + TICK_MS * speed.value);
+    if (t.value >= tEnd.value) {
+      playing.value = false;
+      clearInterval(timer);
+    }
+  }, TICK_MS);
+};
+onUnmounted(() => clearInterval(timer));
+
+// ---------- Event list ----------
+const groups = ref<Record<string, boolean>>(Object.fromEntries(KIND_GROUPS.map(g => [g.id, g.id !== 'board'])));
+const listed = computed(() => events.value.map((e, i) => ({ e, i })).filter(({ e }) => groups.value[groupOf(e.kind)]));
+const jumpTo = (e: ResearchEvent) => (t.value = e.at);
+const listRef = ref<HTMLElement | null>(null);
+watch(idx, async () => {
+  await nextTick();
+  listRef.value?.querySelector('[data-current="true"]')?.scrollIntoView({ block: 'nearest' });
+});
+
+const chatRef = ref<HTMLElement | null>(null);
+watch(() => state.value.messages.length, async () => {
+  await nextTick();
+  if (chatRef.value) chatRef.value.scrollTop = chatRef.value.scrollHeight;
+});
+
+const ROLE_CLASS: Record<string, string> = {
+  participant: 'text-sky-300',
+  researcher: 'text-violet-300',
+  ai: 'text-amber-300',
+  system: 'text-slate-400',
+  unknown: 'text-slate-500'
+};
+
+onMounted(async () => {
+  await authStore.waitForAuthReady().catch(() => {});
+  if (!isAdmin.value) {
+    loading.value = false;
+    return;
+  }
+  try {
+    events.value = await loadEvents(roomId);
+    t.value = t0.value;
+  } catch (e: any) {
+    error.value = e?.message || String(e);
+  } finally {
+    loading.value = false;
+  }
+});
+</script>
+
+<template>
+  <div class="min-h-[100dvh] bg-slate-950 text-slate-100">
+    <header class="h-14 border-b border-slate-800 bg-slate-900/90 px-4 flex items-center gap-3">
+      <router-link to="/admin" class="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400"><ArrowLeft class="w-4 h-4" /></router-link>
+      <h1 class="font-semibold text-sm">重播 <span class="font-mono text-sky-400">{{ roomId }}</span></h1>
+      <span v-if="events.length" class="text-[11px] text-slate-500">{{ events.length }} 個事件 · 長度 {{ fmtOffset(tEnd - t0) }}</span>
+      <div class="ml-auto flex flex-wrap gap-2 text-[11px]">
+        <span v-for="m in members.values()" :key="m.uid" class="px-2 py-0.5 rounded-full bg-slate-800 border border-slate-700">
+          <b>{{ m.alias }}</b> {{ m.nickname }}
+        </span>
+      </div>
+    </header>
+
+    <div v-if="!isAdmin && !loading" class="text-center text-sm text-slate-400 mt-24">需要研究管理者帳號。</div>
+    <div v-else-if="loading" class="flex items-center justify-center gap-2 text-xs text-slate-400 mt-24"><Loader2 class="w-4 h-4 animate-spin" />讀取事件…</div>
+    <div v-else-if="error" class="text-center text-sm text-rose-300 mt-24">{{ error }}</div>
+    <div v-else-if="!events.length" class="text-center text-sm text-slate-400 mt-24">這個房間沒有事件紀錄（P4a 之前建立的房間不會有）。</div>
+
+    <main v-else class="p-4 space-y-3 max-w-7xl mx-auto">
+      <!-- Transport -->
+      <div class="flex items-center gap-3 p-3 rounded-2xl border border-slate-800 bg-slate-900/70">
+        <button @click="togglePlay" class="p-2 rounded-lg bg-sky-600 hover:bg-sky-500" :title="playing ? '暫停' : '播放'">
+          <Pause v-if="playing" class="w-4 h-4" /><Play v-else class="w-4 h-4" />
+        </button>
+        <select v-model.number="speed" class="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs">
+          <option :value="1">1×</option><option :value="5">5×</option><option :value="10">10×</option><option :value="30">30×</option><option :value="60">60×</option>
+        </select>
+        <span class="font-mono text-xs w-14 text-right">{{ fmtOffset(t - t0) }}</span>
+        <input type="range" class="flex-1 accent-sky-500" :min="t0" :max="tEnd" :step="100" v-model.number="t" />
+        <span class="font-mono text-xs text-slate-500 w-14">{{ fmtOffset(tEnd - t0) }}</span>
+      </div>
+
+      <div class="grid lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-3">
+        <!-- Chat at t -->
+        <section class="rounded-2xl border border-slate-800 bg-slate-900/70 flex flex-col h-[440px]">
+          <h2 class="px-3 py-2 text-xs font-semibold text-slate-300 border-b border-slate-800">聊天（{{ state.messages.filter(m => !m.deleted).length }}）</h2>
+          <div ref="chatRef" class="flex-1 overflow-y-auto p-3 space-y-2 text-xs">
+            <div v-for="m in state.messages" :key="m.id" :class="m.deleted ? 'opacity-40 line-through' : ''">
+              <div class="text-[10px] text-slate-500">
+                <b :class="ROLE_CLASS[m.senderUid?.startsWith('ai_mentor') ? 'ai' : m.senderUid === 'system' ? 'system' : 'participant']">
+                  {{ who({ uid: m.senderUid, role: m.senderUid?.startsWith('ai_mentor') ? 'ai' : m.senderUid === 'system' ? 'system' : 'participant' }) }}
+                </b>
+                {{ m.senderName }} · {{ fmtOffset(m.timestamp - t0) }}
+              </div>
+              <div class="whitespace-pre-wrap text-slate-200">{{ m.type === 'whiteboard_state' ? '🖼 白板卡片' : m.content }}</div>
+              <div v-if="m.reactions && Object.values(m.reactions).some(u => u.length)" class="text-[10px] text-slate-400">
+                <span v-for="(uids, emoji) in m.reactions" :key="emoji" v-show="uids.length" class="mr-1.5">{{ emoji }}{{ uids.length }}</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Board at t -->
+        <section class="rounded-2xl border border-slate-800 bg-slate-900/70 flex flex-col h-[440px]">
+          <div class="px-3 py-2 border-b border-slate-800 flex items-center gap-2 overflow-x-auto">
+            <h2 class="text-xs font-semibold text-slate-300 shrink-0">白板</h2>
+            <button
+              v-for="id in boardIds"
+              :key="id"
+              @click="pickBoard(id)"
+              class="px-2 py-0.5 rounded-lg text-[10px] font-mono shrink-0 border"
+              :class="id === boardId ? 'border-sky-400 bg-sky-500/15 text-sky-200' : 'border-slate-700 text-slate-400'"
+            >{{ id }}</button>
+            <label class="ml-auto flex items-center gap-1 text-[10px] text-slate-400 shrink-0"><input type="checkbox" v-model="followBoard" />跟隨最新變更</label>
+          </div>
+          <div class="flex-1 flex items-center justify-center overflow-hidden p-2">
+            <BoardReplayCanvas v-if="boardId" :objects="boardObjects" :width="640" :height="380" />
+            <p v-else class="text-xs text-slate-500">此時間點還沒有白板內容</p>
+          </div>
+        </section>
+      </div>
+
+      <!-- Timeline -->
+      <section class="rounded-2xl border border-slate-800 bg-slate-900/70">
+        <div class="px-3 py-2 border-b border-slate-800 flex flex-wrap items-center gap-3 text-[11px]">
+          <h2 class="text-xs font-semibold text-slate-300">時間軸</h2>
+          <label v-for="g in KIND_GROUPS" :key="g.id" class="flex items-center gap-1 text-slate-300"><input type="checkbox" v-model="groups[g.id]" />{{ g.label }}</label>
+        </div>
+        <div ref="listRef" class="max-h-72 overflow-y-auto text-[11px] font-mono">
+          <button
+            v-for="{ e, i } in listed"
+            :key="e.id"
+            :data-current="i === idx"
+            @click="jumpTo(e)"
+            class="w-full text-left px-3 py-1 flex gap-3 hover:bg-slate-800/60"
+            :class="[i === idx ? 'bg-sky-500/15' : '', i > idx ? 'opacity-40' : '']"
+          >
+            <span class="text-slate-500 w-12 shrink-0">{{ fmtOffset(e.at - t0) }}</span>
+            <span class="w-8 shrink-0 font-bold" :class="ROLE_CLASS[e.role]">{{ who(e) }}</span>
+            <span class="w-4 shrink-0 text-slate-600" :title="e.source">{{ e.source === 'client' ? '◦' : '•' }}</span>
+            <span class="truncate text-slate-300 font-sans">{{ describe(e) }}</span>
+          </button>
+        </div>
+      </section>
+    </main>
+  </div>
+</template>

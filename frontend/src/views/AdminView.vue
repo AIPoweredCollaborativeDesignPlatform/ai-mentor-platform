@@ -345,6 +345,7 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
               <option v-for="p in profiles" :key="p.id" :value="p.id">{{ p.name }} v{{ p.version }}</option>
             </select>
             <button @click="assign(r)" :disabled="!pendingChoice[r.roomId]" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-xs font-semibold disabled:opacity-40">指派</button>
+            <router-link v-if="r.session" :to="`/admin/replay/${r.roomId}`" class="px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs">重播</router-link>
           </div>
         </div>
 

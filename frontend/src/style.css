@@ -172,15 +172,14 @@
 .mention-ai { color: var(--mention-ai-fg); background: var(--mention-ai-bg); }
 .mention-me { color: var(--mention-me-fg); background: var(--mention-me-bg); }
 
-/* Day/night switch (theme.ts setTheme): one uniform colour fade for the whole page, overriding every
-   component's own transition for the moment of the switch */
-html.theme-anim,
-html.theme-anim *,
-html.theme-anim *::before,
-html.theme-anim *::after,
-html.theme-anim *::placeholder {
-  transition-property: background-color, color, border-color, outline-color, fill, stroke, box-shadow, text-decoration-color, caret-color !important;
-  transition-duration: 300ms !important;
-  transition-timing-function: ease !important;
-  transition-delay: 0s !important;
+/* Day/night switch (theme.ts setTheme): the old and new page cross-fade as two whole snapshots */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 300ms;
+  animation-timing-function: ease;
+}
+html.theme-switching *,
+html.theme-switching *::before,
+html.theme-switching *::after {
+  transition: none !important;
 }

@@ -70,6 +70,11 @@ export async function assignRoomProfile(roomId: string, profileId: string) {
   return (await fn({ roomId, profileId })).data;
 }
 
+/** Moves the room out of every list (data is kept); functions/index.js adminDeleteRoom. */
+export async function deleteStudyRoom(roomId: string) {
+  await httpsCallable<{ roomId: string }, { ok: boolean }>(functions, 'adminDeleteRoom')({ roomId });
+}
+
 // ---------- Google Drive export (functions/src/drive.js) ----------
 export interface RoomExport {
   status: 'pending' | 'uploading' | 'done' | 'error' | 'needs_auth' | 'reopened';

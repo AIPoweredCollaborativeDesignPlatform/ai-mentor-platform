@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import { ArrowLeft, Loader2, RefreshCw } from 'lucide-vue-next';
+import { ArrowLeft, Loader2, RefreshCw, Trash2 } from 'lucide-vue-next';
 import { useAuthStore } from '../stores/auth';
 import { useRoomStore } from '../stores/room';
 import ProfileEditor from '../components/admin/ProfileEditor.vue';
@@ -9,7 +9,7 @@ import {
   type AiProfile, type CostInputs, type Prices
 } from '../utils/aiProfiles';
 import {
-  assignRoomProfile, exportRoomNow, getDriveAuthUrl, getDriveStatus, getSystemConfig, listProfiles, listStudyRooms, loadUsage,
+  assignRoomProfile, deleteStudyRoom, exportRoomNow, getDriveAuthUrl, getDriveStatus, getSystemConfig, listProfiles, listStudyRooms, loadUsage,
   listObservers, listRoomPins, saveProfile, saveSystemConfig, setObserver, type DriveStatus, type StudyObserver, type RoomPins, type StudyRoom, type UsageRow
 } from '../services/admin';
 import { DEFAULT_CONSENT_TEXT, DEFAULT_CONSENT_TEXT_ZH } from '../constants/consent';
@@ -319,6 +319,16 @@ const endOrReopen = async (room: StudyRoom, end: boolean) => {
     roomStore.pushToast(end ? t('adm.endFailed') : t('adm.reopenFailed'), e?.message || String(e), 'error');
   }
 };
+const removeRoom = async (room: StudyRoom) => {
+  if (!window.confirm(t('adm.deleteConfirm', { pin: room.pin, name: room.roomName || '' }))) return;
+  try {
+    await deleteStudyRoom(room.roomId);
+    rooms.value = rooms.value.filter(r => r.roomId !== room.roomId);
+  } catch (e: any) {
+    const running = e?.code === 'functions/failed-precondition';
+    roomStore.pushToast(t('adm.deleteFailed'), running ? t('adm.deleteRunning') : e?.message || String(e), 'error');
+  }
+};
 const UPLOAD_LABELS: Record<string, { text: MessageKey; cls: string }> = {
   pending: { text: 'adm.upPending', cls: 'text-slate-300' },
   uploading: { text: 'adm.upUploading', cls: 'text-sky-300' },
@@ -450,6 +460,14 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
             </button>
             <button v-if="r.session && r.session.phase !== 'ended'" @click="endOrReopen(r, true)" class="px-3 py-1.5 rounded-lg border border-rose-800 text-rose-200 hover:bg-rose-900/40 text-xs">{{ t('common.end') }}</button>
             <button v-else-if="r.session" @click="endOrReopen(r, false)" class="px-3 py-1.5 rounded-lg border border-emerald-800 text-emerald-200 hover:bg-emerald-900/40 text-xs">{{ t('common.reopen') }}</button>
+            <button
+              @click="removeRoom(r)"
+              :disabled="r.session?.phase === 'running'"
+              :title="r.session?.phase === 'running' ? t('adm.deleteRunning') : t('adm.deleteHint')"
+              class="p-1.5 rounded-lg border border-slate-700 text-rose-300 hover:bg-rose-900/40 disabled:opacity-40 disabled:hover:bg-transparent"
+            >
+              <Trash2 class="w-3.5 h-3.5" />
+            </button>
             </template>
             <router-link v-if="r.session" :to="`/admin/replay/${r.roomId}`" class="px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs">{{ t('adm.replay') }}</router-link>
           </div>

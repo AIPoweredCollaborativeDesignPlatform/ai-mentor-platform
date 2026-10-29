@@ -217,6 +217,20 @@ export const updateStudyRoomDetails = onCall({ maxInstances: 10 }, async request
   }
 });
 
+/** Admin room list "Delete": marks the room deleted (it leaves the lists and can no longer be joined);
+ *  messages, boards, logs and the Drive export are kept for the study. A running session must be ended first. */
+export const adminDeleteRoom = onCall({ maxInstances: 2 }, async request => {
+  requireAdmin(request);
+  const roomId = String(request.data?.roomId || '');
+  if (!ROOM_ID.test(roomId)) throw new HttpsError('invalid-argument', 'Missing roomId');
+  const ref = getFirestore().doc(`rooms/${roomId}`);
+  const room = (await ref.get()).data();
+  if (!room) throw new HttpsError('not-found', 'Room not found');
+  if (room.session?.phase === 'running') throw new HttpsError('failed-precondition', 'End the session first');
+  await ref.update({ deletedAt: Date.now(), deletedBy: request.auth.token.email });
+  return { ok: true };
+});
+
 export const listRoomPins = onCall({ maxInstances: 2 }, async request => {
   if (!isObserverToken(request.auth?.token)) throw new HttpsError('permission-denied', 'Study staff only');
   return listPins();

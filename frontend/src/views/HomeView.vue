@@ -341,18 +341,19 @@ const handleGoogleSignIn = async () => {
           <button
             @click="handleCreateRoom"
             :disabled="isLoading"
-            class="flex-1 flex flex-col justify-between p-4 rounded-xl bg-sky-600 hover:bg-sky-500 text-white shadow-lg transition text-left group disabled:opacity-50 min-h-[110px] cursor-pointer"
+            class="flex-1 flex flex-col justify-between p-4 rounded-xl bg-sky-500 hover:bg-sky-600 text-white shadow-lg transition text-left group disabled:opacity-50 min-h-[110px] cursor-pointer"
           >
+            <!-- sky-500/600 and white are the same in both themes, so this block does not change with day/night -->
             <div>
-              <div class="p-2 bg-white/10 rounded-lg w-fit mb-2">
-                <Users class="w-4 h-4 text-ink" />
+              <div class="p-2 bg-white/15 rounded-lg w-fit mb-2">
+                <Users class="w-4 h-4 text-white" />
               </div>
               <h3 class="font-bold text-sm mb-0.5">{{ t('home.createMeeting') }}</h3>
-              <p class="text-[11px] text-sky-100 opacity-90">
+              <p class="text-[11px] text-white/85">
                 {{ t('home.createHint') }}
               </p>
             </div>
-            <div class="mt-3 flex items-center gap-1 text-xs font-semibold text-ink group-hover:translate-x-1 transition">
+            <div class="mt-3 flex items-center gap-1 text-xs font-semibold text-white group-hover:translate-x-1 transition">
               {{ isLoading ? t('home.creating') : t('home.createNow') }} <ArrowRight class="w-3.5 h-3.5" />
             </div>
           </button>

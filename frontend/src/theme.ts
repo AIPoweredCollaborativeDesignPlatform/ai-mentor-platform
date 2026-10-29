@@ -1,4 +1,4 @@
-import { ref } from 'vue';
+import { nextTick, ref } from 'vue';
 
 /** Day/night theme (P7). Day is the default; the choice is kept in this browser. index.html applies it before the app loads. */
 export type Theme = 'light' | 'dark';
@@ -15,19 +15,39 @@ const read = (): Theme => {
 
 export const currentTheme = ref<Theme>(read());
 
-// While switching, every element gets the same colour transition (style.css `html.theme-anim`), overriding
-// each component's own transition so the whole page fades together
-const SWITCH_MS = 300;
-let switchTimer: ReturnType<typeof setTimeout> | undefined;
+// Always the latest choice, so a late callback from an earlier (skipped) switch cannot undo a newer one
+let target: Theme = currentTheme.value;
+const apply = async () => {
+  currentTheme.value = target;
+  document.documentElement.dataset.theme = target;
+  await nextTick(); // let Vue redraw theme-dependent bits (the toggle icon) before the new snapshot
+};
 
 export function setTheme(theme: Theme) {
-  currentTheme.value = theme;
+  // The whole page cross-fades as one picture (style.css ::view-transition), so text, icons and
+  // backgrounds can never fade at different speeds. Browsers without view transitions switch at once.
+  // Components' own colour transitions are switched off meanwhile, so nothing fades on its own.
+  // If the browser never paints a frame (background or throttled tab), the switch is applied directly.
+  type ViewTransition = { finished: Promise<void>; skipTransition: () => void };
+  const doc = document as Document & { startViewTransition?: (cb: () => Promise<void>) => ViewTransition };
   const root = document.documentElement;
-  // A colour fade, not motion, so it also runs under prefers-reduced-motion
-  root.classList.add('theme-anim');
-  clearTimeout(switchTimer);
-  switchTimer = setTimeout(() => root.classList.remove('theme-anim'), SWITCH_MS + 50);
-  root.dataset.theme = theme;
+  target = theme;
+  root.classList.add('theme-switching');
+  const done = () => root.classList.remove('theme-switching');
+  if (doc.startViewTransition) {
+    const vt = doc.startViewTransition(apply);
+    const guard = setTimeout(() => {
+      vt.skipTransition();
+      apply();
+      done();
+    }, 800);
+    vt.finished.finally(() => {
+      clearTimeout(guard);
+      done();
+    });
+  } else {
+    apply().then(() => requestAnimationFrame(done));
+  }
   try {
     localStorage.setItem(STORAGE_KEY, theme);
   } catch {

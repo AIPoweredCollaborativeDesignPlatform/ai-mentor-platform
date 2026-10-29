@@ -1,12 +1,14 @@
 // Bump whenever any prompt text changes; it is stored with every AI output for the research log.
 import { localized } from './i18n.js';
 
-export const PROMPT_VERSION = 'v5-2026-10-28';
+export const PROMPT_VERSION = 'v6-2026-10-29';
 
 const LANGUAGE_NAMES = { en: 'English', 'zh-TW': 'Traditional Chinese (繁體中文)' };
 export const languageName = code => LANGUAGE_NAMES[code] || LANGUAGE_NAMES['zh-TW'];
 
 const TEN_MINUTES_SEC = 600;
+
+const teamSize = participants => Object.values(participants || {}).filter(p => p.status === 'approved').length;
 
 /** Engagement profile per member; only for the AI's internal facilitation, never to be shown to users. */
 function teamDynamics(participants, messages) {
@@ -97,7 +99,8 @@ Decide whether to intervene:
 4. Stalls: if the discussion circles without converging for several messages, suggest voting options, a summary, or next steps.
 5. Quiet members: if someone has been silent (see team dynamics), warmly invite them by name (@Name).
 6. Emoji reactions signal consensus: 👍 agreement, ❤️ strong support, 😂 humor, 😮 surprise/novelty, 😢 doubt/concern, 🎉 celebration. Lean into options with broad 👍/❤️; address 😢/😮 as open questions.
-7. When suggesting choices or decisions, ALWAYS give 2-4 short options in "actionOptions"; the UI renders them as a live poll. If poll results are in the transcript, acknowledge the team's tendency.
+7. When suggesting choices or decisions, ALWAYS give 2-4 short options in "actionOptions"; the UI renders them as a live poll. Voting is optional. Once all or most participants have voted, treat the leading option as decided and move on; do not wait for the rest or re-ask.
+   Team size: ${teamSize(participants)} participant(s). With a single participant, that person's messages and votes ARE the team's view: act on them; never wait for or ask about "other members".
 8. Summaries, comparisons and specifications MUST use Markdown tables, e.g.
    | Criteria | Option A | Option B | Consensus / Trade-off |
    Documents use sections: ## 1. Objectives & Consensus, ## 2. Comparison Matrix, ## 3. Key Discussion Points, ## 4. Action Items & Owners.

@@ -21,7 +21,7 @@ const usageOf = response => (response?.usage ? { input: response.usage.input_tok
  * transcript, calls Claude, generates moodboard images if needed, and writes the research log.
  * Never throws; on failure returns { error }.
  */
-export async function analyze({ apiKey, falKey, roomId, room, messages, participants, profile, memory, forced, reason, callerUid, visible }) {
+export async function analyze({ apiKey, falKey, roomId, room, messages, participants, profile, memory, forced, reason, callerUid, visible, note = '' }) {
   const sys = await getSystemConfig();
   const model = sys.models.mentor;
   const language = room.language || 'zh-TW';
@@ -37,8 +37,9 @@ export async function analyze({ apiKey, falKey, roomId, room, messages, particip
     profile,
     memory
   });
+  // `note` replaces the generic trigger line for system-initiated responses (e.g. a settled poll)
   const userPrompt = `Conversation transcript:\n${buildTranscript(messages, participants)}\n\n${
-    forced ? 'You were explicitly asked by a participant (forced).' : `Automatic check (reason: ${reason}).`
+    note || (forced ? 'You were explicitly asked by a participant (forced).' : `Automatic check (reason: ${reason}).`)
   }\nRespond with the JSON object only.`;
 
   const params = {
@@ -55,7 +56,7 @@ export async function analyze({ apiKey, falKey, roomId, room, messages, particip
     kind: 'mentor',
     roomId,
     callerUid: callerUid || null,
-    trigger: forced ? 'forced' : reason,
+    trigger: forced && reason !== 'poll_settled' ? 'forced' : reason,
     visible, // false = shadow assessment (no-AI / reactive conditions, or cooldown)
     triggerMessageId: messages.at(-1)?.id || null,
     profileId: profile.id || null,

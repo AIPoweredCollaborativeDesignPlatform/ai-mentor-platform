@@ -6,8 +6,6 @@
 :root {
   color-scheme: light;
   --c-ink: 11 13 18;
-  --wb-canvas: #f9fafb;
-  --wb-dot: #d1d5db;
   --scroll-thumb: rgba(107, 114, 128, 0.35);
   --scroll-thumb-hover: rgba(107, 114, 128, 0.55);
   --mention-member-fg: #1d4ed8;
@@ -76,8 +74,6 @@
 :root[data-theme='dark'] {
   color-scheme: dark;
   --c-ink: 255 255 255;
-  --wb-canvas: #202020;
-  --wb-dot: #3a3a3a;
   --scroll-thumb: rgba(148, 148, 148, 0.30);
   --scroll-thumb-hover: rgba(148, 148, 148, 0.50);
   --mention-member-fg: #93c5fd;

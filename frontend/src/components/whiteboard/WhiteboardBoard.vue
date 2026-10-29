@@ -22,7 +22,7 @@ import { createBoardSync, type BoardSync, type ObjectDoc, type PresenceDoc, type
 import { createHistory, type ObjectState } from '../../whiteboard/history';
 import { downscaleImage, renderObjects, renderSnapshot, renderThumbnail } from '../../whiteboard/exporting';
 import { convertLegacyBoard } from '../../whiteboard/legacy';
-import { Connector, attachTargetAt, createConnector, dragEnd, layoutConnector, setConnectorLookup } from '../../whiteboard/connectors';
+import { Connector, attachTargetAt, createConnector, distToSegment, dragEnd, layoutConnector, setConnectorLookup } from '../../whiteboard/connectors';
 import { recognizeStroke, type QuickShape } from '../../whiteboard/quickshape';
 import { attachPinchZoom } from '../../whiteboard/touch';
 import { logEvent } from '../../services/researchLog';
@@ -47,7 +47,12 @@ const tool = ref<Tool>('select');
 watch(tool, (next, prev) => logEvent('whiteboard_tool', { boardId: props.boardId, tool: next, previous: prev }));
 const COLORS = ['#0f172a', '#ef4444', '#f97316', '#eab308', '#22c55e', '#0ea5e9', '#6366f1', '#a855f7', '#ec4899', '#ffffff'];
 const color = ref(COLORS[0]);
-const penWidth = ref(4);
+const PEN_WIDTHS = [
+  { value: 2, dot: 4, label: 'wb.widthS' },
+  { value: 4, dot: 6, label: 'wb.widthM' },
+  { value: 8, dot: 9, label: 'wb.widthL' }
+] as const;
+const penWidth = ref<number>(4);
 const shapeFilled = ref(false);
 const stickyColor = ref(STICKY_COLORS[0]);
 const isolated = shallowRef<(fabric.Group & BoardObject) | null>(null); // group being edited from inside
@@ -408,14 +413,35 @@ function sizeOverlay() {
   o.style.height = `${r.height}px`;
 }
 
+// ---------- tool cursors ----------
+const ERASER_RADIUS = 10; // screen pixels; the eraser cursor shows exactly this circle
+const svgCursor = (svg: string, x: number, y: number, fallback: string) =>
+  `url("data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" ${svg}</svg>`)}") ${x} ${y}, ${fallback}`;
+const PENCIL = 'M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497zM15 5l4 4';
+const D = ERASER_RADIUS * 2 + 4;
+const CURSORS: Record<Tool, string> = {
+  select: 'default',
+  hand: 'grab',
+  // Pencil whose tip is the drawing point (white halo keeps it visible on dark strokes)
+  pen: svgCursor(`width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="${PENCIL}" stroke="white" stroke-width="4"/><path d="${PENCIL}" stroke="#0f172a" stroke-width="1.75"/>`, 2, 22, 'crosshair'),
+  eraser: svgCursor(`width="${D}" height="${D}"><circle cx="${D / 2}" cy="${D / 2}" r="${ERASER_RADIUS}" fill="rgba(255,255,255,0.5)" stroke="white" stroke-width="3"/><circle cx="${D / 2}" cy="${D / 2}" r="${ERASER_RADIUS}" fill="none" stroke="#0f172a" stroke-width="1.25"/>`, D / 2, D / 2, 'cell'),
+  text: 'text',
+  sticky: svgCursor(`width="24" height="24" viewBox="0 0 24 24"><rect x="2" y="2" width="15" height="15" rx="2" fill="#fde68a" stroke="#0f172a" stroke-width="1.25"/><path d="M19 15v6M16 18h6" stroke="#0f172a" stroke-width="1.5" stroke-linecap="round"/>`, 2, 2, 'copy'),
+  rect: 'crosshair',
+  ellipse: 'crosshair',
+  arrow: 'crosshair'
+};
+
 function applyTool() {
   if (!canvas) return;
   const t = tool.value;
   canvas.isDrawingMode = t === 'pen';
   canvas.selection = t === 'select';
   canvas.skipTargetFind = t !== 'select';
-  canvas.defaultCursor = t === 'hand' ? 'grab' : t === 'select' ? 'default' : 'crosshair';
+  canvas.defaultCursor = CURSORS[t];
+  canvas.freeDrawingCursor = CURSORS.pen;
   canvas.hoverCursor = t === 'select' ? 'move' : canvas.defaultCursor;
+  canvas.setCursor(canvas.defaultCursor);
   if (t !== 'select') canvas.discardActiveObject();
   const brush = canvas.freeDrawingBrush as fabric.PencilBrush;
   brush.color = color.value === '#ffffff' ? '#0f172a' : color.value;
@@ -438,7 +464,7 @@ function updateSelection() {
 let panning: { x: number; y: number } | null = null;
 let spaceDown = false;
 let drawingShape: { obj: BoardObject; start: fabric.Point } | null = null;
-let erasing: { ids: Set<string>; before: Map<string, ObjectState> } | null = null;
+let erasing: { ids: Set<string>; before: Map<string, ObjectState>; last?: fabric.Point } | null = null;
 let transformBefore: Map<string, ObjectState> | null = null;
 let liveWriteAt = 0;
 // A new note/text starts editing only after the click's mouseup, which would otherwise end the editing
@@ -447,7 +473,8 @@ let drawingConnector: (Connector & BoardObject) | null = null;
 // A second finger turned the touch into a pinch: whatever the first finger started is dropped
 let gestureCancelled = false;
 // QuickShape: holding the pen still at the end of a stroke turns it into a clean shape
-const QUICK_HOLD_MS = 500;
+// Long enough that a short pause mid-sketch does not straighten the stroke by accident
+const QUICK_HOLD_MS = 900;
 let quickTimer: ReturnType<typeof setTimeout> | undefined;
 let quickAnchor: { x: number; y: number } | null = null;
 let quick: { shape: QuickShape; preview: fabric.FabricObject } | null = null;
@@ -602,7 +629,7 @@ function onMouseUp() {
   }
   if (panning) {
     panning = null;
-    canvas.setCursor(tool.value === 'hand' ? 'grab' : 'default');
+    canvas.setCursor(CURSORS[tool.value]);
     return;
   }
   if (drawingShape) {
@@ -640,21 +667,60 @@ function onMouseUp() {
   flushPendingRemote();
 }
 
+/**
+ * The eraser is a circle (ERASER_RADIUS screen pixels, shown as the cursor) swept along the pointer's path,
+ * so fast strokes and tiny objects are still caught. Strokes are hit-tested against their actual line,
+ * not their bounding box.
+ */
 function eraseAt(opt: fabric.TPointerEventInfo) {
   if (!canvas || !erasing) return;
   const p = scenePoint(opt.e);
-  const vp = canvas.getViewportPoint(opt.e);
-  const objs = [...canvas.getObjects()].reverse() as BoardObject[];
-  for (const obj of objs) {
+  const r = ERASER_RADIUS / canvas.getZoom();
+  const from = erasing.last || p;
+  erasing.last = p;
+  const steps = Math.max(1, Math.ceil(Math.hypot(p.x - from.x, p.y - from.y) / (r / 2)));
+  const samples = Array.from({ length: steps + 1 }, (_, i) => new fabric.Point(from.x + ((p.x - from.x) * i) / steps, from.y + ((p.y - from.y) * i) / steps));
+  let removed = false;
+  for (const obj of [...canvas.getObjects()] as BoardObject[]) {
     if (!isBoardObject(obj) || erasing.ids.has(obj.id) || obj.locked) continue;
-    if (!obj.containsPoint(p)) continue;
-    if (obj instanceof fabric.Path && canvas.isTargetTransparent(obj, vp.x, vp.y)) continue;
+    if (!samples.some(q => eraserHits(obj, q, r))) continue;
     erasing.before.set(obj.id, stateOf(obj));
     erasing.ids.add(obj.id);
     removeLocal(obj.id);
-    canvas.requestRenderAll();
-    break;
+    removed = true;
   }
+  if (removed) canvas.requestRenderAll();
+}
+
+function eraserHits(obj: BoardObject, q: fabric.Point, r: number) {
+  const box = obj.getBoundingRect(); // scene coordinates in Fabric v7
+  if (q.x < box.left - r || q.x > box.left + box.width + r || q.y < box.top - r || q.y > box.top + box.height + r) return false;
+  if (obj instanceof Connector) return distToSegment(q, obj.getEnd(0), obj.getEnd(1)) <= r + obj.strokeWidth / 2;
+  const outline = strokeOutline(obj);
+  if (!outline) return true; // notes, text, images, shapes, groups: anywhere on their box
+  const reach = r + ((obj.strokeWidth || 1) * Math.max(obj.scaleX || 1, obj.scaleY || 1)) / 2;
+  if (outline.length === 1) return Math.hypot(q.x - outline[0].x, q.y - outline[0].y) <= reach;
+  for (let i = 1; i < outline.length; i++) if (distToSegment(q, outline[i - 1], outline[i]) <= reach) return true;
+  return false;
+}
+
+/** Scene-space points along a freehand stroke or quick-shape polygon (null for other objects). */
+function strokeOutline(obj: BoardObject): fabric.Point[] | null {
+  const m = obj.calcTransformMatrix();
+  const off = (obj as any).pathOffset || { x: 0, y: 0 };
+  const toScene = (x: number, y: number) => new fabric.Point(x - off.x, y - off.y).transform(m);
+  if (obj instanceof fabric.Polygon) {
+    const pts = obj.points.map(pt => toScene(pt.x, pt.y));
+    return pts.length ? [...pts, pts[0]] : null;
+  }
+  if (obj instanceof fabric.Path) {
+    const pts: fabric.Point[] = [];
+    for (const cmd of obj.path as any[]) {
+      for (let i = 1; i + 1 < cmd.length; i += 2) pts.push(toScene(cmd[i], cmd[i + 1]));
+    }
+    return pts.length ? pts : null;
+  }
+  return null;
 }
 
 function flattenPoints(points: fabric.Point[]) {
@@ -1163,14 +1229,28 @@ const gridStyle = computed(() => {
   void viewTick.value;
   const vpt = canvas?.viewportTransform;
   if (!vpt) return {};
-  const size = 22 * vpt[0];
+  // Zoomed out, every other dot row is dropped so the grid never turns into a grey wash
+  let size = 22 * vpt[0];
+  while (size < 16) size *= 2;
   return { backgroundSize: `${size}px ${size}px`, backgroundPosition: `${vpt[4]}px ${vpt[5]}px` };
 });
 
+let lastVpt = '';
 function drawOverlay() {
   viewTick.value++;
   const o = overlayEl.value;
   if (!o || !canvas) return;
+  // The top layer (pen stroke in progress, QuickShape preview) is drawn in screen pixels: after a pan or
+  // zoom anything left on it would hang at the old position as a ghost, so it is cleared unless a stroke
+  // is being drawn right now
+  const vpt = canvas.viewportTransform.join(',');
+  if (vpt !== lastVpt) {
+    lastVpt = vpt;
+    if (!(canvas as any)._isCurrentlyDrawing) {
+      if (quick) resetQuickShape();
+      canvas.clearContext(canvas.contextTop);
+    }
+  }
   const ctx = o.getContext('2d')!;
   const dpr = window.devicePixelRatio || 1;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1426,7 +1506,16 @@ const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(()
         </template>
         <template v-if="tool === 'pen'">
           <div class="w-px h-5 bg-slate-800"></div>
-          <input v-model.number="penWidth" type="range" min="1" max="24" class="w-20 accent-indigo-500" :title="t('wb.strokeWidth')" />
+          <button
+            v-for="w in PEN_WIDTHS"
+            :key="w.value"
+            class="wb-chip inline-flex items-center gap-1"
+            :class="{ 'wb-chip-active': penWidth === w.value }"
+            :title="t('wb.strokeWidth')"
+            @click="penWidth = w.value"
+          >
+            <span class="rounded-full bg-current" :style="{ width: `${w.dot}px`, height: `${w.dot}px` }"></span>{{ t(w.label) }}
+          </button>
         </template>
         <template v-if="tool === 'rect' || tool === 'ellipse' || selectionKinds.fillable">
           <div class="w-px h-5 bg-slate-800"></div>
@@ -1514,9 +1603,10 @@ const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(()
 </template>
 
 <style scoped>
+/* The board itself stays light in both themes (ink colours are chosen for a light surface) */
 .wb-grid {
-  background-color: var(--wb-canvas);
-  background-image: radial-gradient(var(--wb-dot) 1px, transparent 1px);
+  background-color: #f9fafb;
+  background-image: radial-gradient(#d1d5db 1px, transparent 1px);
   background-size: 22px 22px;
 }
 .wb-btn {

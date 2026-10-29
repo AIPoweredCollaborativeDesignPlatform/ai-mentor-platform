@@ -2,7 +2,7 @@ import { Readable } from 'node:stream';
 import { initializeApp } from 'firebase-admin/app';
 import { defineSecret } from 'firebase-functions/params';
 import { HttpsError, onCall, onRequest } from 'firebase-functions/v2/https';
-import { onDocumentCreated, onDocumentDeleted, onDocumentWritten } from 'firebase-functions/v2/firestore';
+import { onDocumentCreated, onDocumentDeleted, onDocumentUpdated, onDocumentWritten } from 'firebase-functions/v2/firestore';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getSystemConfig } from './src/config.js';
@@ -11,7 +11,7 @@ import { PROMPT_VERSION, VISION_PROMPT, sketchToSvgPrompt, textToSvgPrompt } fro
 import { refineMeshy } from './src/mesh3d.js';
 import { logAiCall } from './src/log.js';
 import { FRIENDLY_ERRORS } from './src/mentor.js';
-import { assignProfileToRoom, ensureRoomAi, handleNewMessage, loadProfile, postAiMessage, runCheck } from './src/engine.js';
+import { assignProfileToRoom, ensureRoomAi, handleNewMessage, handlePollVote, loadProfile, postAiMessage, runCheck } from './src/engine.js';
 import { endSession, joinRoom, maybeStartSession, reopenSession, runSessionJob, sessionTick } from './src/session.js';
 import { logBoardObjectChange, logMessageChange } from './src/events.js';
 import { authUrl, exportRoom, handleCallback, runDueExports } from './src/drive.js';
@@ -91,6 +91,12 @@ export const onRoomMessage = onDocumentCreated(
     if (!msg) return;
     await handleNewMessage(event.params.roomId, event.params.messageId, msg, engineSecrets());
   }
+);
+
+// Votes on the AI's polls: once a majority has voted, the AI follows up on the result (engine.js handlePollVote)
+export const onPollVote = onDocumentUpdated(
+  { document: 'rooms/{roomId}/messages/{messageId}', secrets: ALL_SECRETS, timeoutSeconds: 300, memory: '512MiB', cpu: 1, concurrency: 80, maxInstances: 10 },
+  event => handlePollVote(event.params.roomId, event.params.messageId, event.data?.before?.data(), event.data?.after?.data(), engineSecrets())
 );
 
 // New rooms from this site get the default profile snapshot immediately

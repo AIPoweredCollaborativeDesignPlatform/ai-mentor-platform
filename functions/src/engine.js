@@ -26,6 +26,8 @@ const TYPING_BEFORE_POST_MS = 2500;
 const CONTEXT_MESSAGES = 60;
 const AI_UIDS = new Set(['ai_mentor', 'ai_mentor_3d', 'system']);
 
+const isPrivateBoard = m => m.type === 'whiteboard_state' && m.metadata?.isPrivate !== false;
+
 const EMPTY_STATE = { msgsSinceCheck: 0, msgsSinceMemory: 0, lastCheckAt: 0, lastInterventionAt: 0, lastMessageId: null, lastMessageAt: 0, lastStallMessageId: null, lockUntil: 0 };
 
 /** Snapshots a profile into a room (frozen) and publishes the participant-safe view. */
@@ -67,8 +69,9 @@ export async function fetchContext(roomId) {
   ]);
   const messages = msgSnap.docs.reverse().map(d => {
     const m = d.data();
-    return { id: d.id, senderUid: m.senderUid, senderName: m.senderName, content: String(m.content || '').slice(0, 1500), timestamp: m.timestamp, reactions: m.reactions || {}, actionOptions: m.actionOptions || [], pollVotes: m.pollVotes || {} };
-  }).filter(m => m.senderUid !== 'system');
+    return { id: d.id, senderUid: m.senderUid, senderName: m.senderName, content: String(m.content || '').slice(0, 1500), timestamp: m.timestamp, reactions: m.reactions || {}, actionOptions: m.actionOptions || [], pollVotes: m.pollVotes || {}, privateBoard: isPrivateBoard(m) };
+    // Private whiteboard drafts are personal scratch space: the AI never sees their cards
+  }).filter(m => m.senderUid !== 'system' && !m.privateBoard);
   const room = roomSnap.data() || {};
   // In experiment rooms the researcher (host) is an invisible observer: the AI must not address them
   const hidden = room.session ? room.hostUid : null;
@@ -138,7 +141,7 @@ export async function postAiMessage(roomId, room, profile, { content, assetType 
 }
 
 /** Runs one check. `forced` = explicit mention or retry; otherwise reason is pause | stall | max_messages. */
-export async function runCheck(roomId, secrets, { reason, forced = false, callerUid = null, callerName = '', retryMessageId = null }) {
+export async function runCheck(roomId, secrets, { reason, forced = false, callerUid = null, callerName = '', retryMessageId = null, note = '' }) {
   const roomAi = await ensureRoomAi(roomId);
   const profile = roomAi.profile;
   const state = { ...EMPTY_STATE, ...(roomAi.state || {}) };
@@ -182,7 +185,8 @@ export async function runCheck(roomId, secrets, { reason, forced = false, caller
       forced,
       reason: shadow ? `${reason} (shadow${profile.mode === 'proactive' ? ', cooldown' : ''})` : reason,
       callerUid,
-      visible
+      visible,
+      note
     });
 
     const latestRoom = (await roomRef(roomId).get()).data() || {};
@@ -257,7 +261,8 @@ async function run3D(roomId, profile, secrets, { aiMessage, assetData, prompt, m
 
 /** Entry point for each new chat message (Firestore trigger). */
 export async function handleNewMessage(roomId, messageId, msg, secrets) {
-  if (AI_UIDS.has(msg.senderUid)) return;
+  // Opening a private whiteboard draft is not part of the conversation
+  if (AI_UIDS.has(msg.senderUid) || isPrivateBoard(msg)) return;
   const room = (await roomRef(roomId).get()).data();
   if (!room?.appVersion) return; // legacy site rooms keep their own client-side AI
   // Experiment rooms: the AI only acts while the session runs (rooms from before P4a have no session)
@@ -307,4 +312,43 @@ export async function handleNewMessage(roomId, messageId, msg, secrets) {
   if ((s.lastInterventionAt || 0) > s.lastMessageAt) return;
   await roomAiRef(roomId).set({ state: { lastStallMessageId: messageId } }, { merge: true });
   await runCheck(roomId, secrets, { reason: 'stall' });
+}
+
+/**
+ * Poll follow-up: when every participant, or a clear majority, has voted on one of the AI's polls, the AI
+ * takes the result as the team's direction and moves on (once per poll). Voting stays optional: a poll
+ * that never reaches the majority is simply left alone. A single participant's vote settles it.
+ */
+const POLL_SETTLE_WAIT_MS = 8000; // late votes still count
+
+export async function handlePollVote(roomId, messageId, before, after, secrets) {
+  if (after?.senderUid !== 'ai_mentor' || !after.actionOptions?.length) return;
+  const countVotes = m => Object.keys(m?.pollVotes || {}).length;
+  if (countVotes(after) <= countVotes(before)) return;
+
+  const room = (await roomRef(roomId).get()).data();
+  if (!room?.appVersion || (room.session && room.session.phase !== 'running')) return;
+  const hidden = room.session ? room.hostUid : null;
+  const members = (await roomRef(roomId).collection('participants').where('status', '==', 'approved').get())
+    .docs.filter(d => d.id !== hidden).length;
+  const needed = Math.floor(Math.max(members, 1) / 2) + 1;
+  if (countVotes(after) < needed) return;
+
+  const claimed = await db().runTransaction(async tx => {
+    const snap = await tx.get(roomAiRef(roomId));
+    const settled = snap.data()?.state?.settledPolls || [];
+    if (settled.includes(messageId)) return false;
+    tx.set(roomAiRef(roomId), { state: { settledPolls: [...settled, messageId].slice(-50) } }, { merge: true });
+    return true;
+  });
+  if (!claimed) return;
+
+  await sleep(POLL_SETTLE_WAIT_MS);
+  const poll = (await roomRef(roomId).collection('messages').doc(messageId).get()).data() || after;
+  const votes = Object.values(poll.pollVotes || {});
+  const tally = poll.actionOptions.map(opt => `"${opt}": ${votes.filter(v => v.option === opt).length}`).join(', ');
+  const note = `Poll result: your poll "${String(poll.content || '').slice(0, 200)}" now has ${votes.length} vote(s) from ${Math.max(members, 1)} participant(s) (${tally}). `
+    + 'Treat the leading option as the direction the team has chosen (if there is a tie, name the tie and help them break it). '
+    + 'Briefly confirm it and move the discussion forward with a concrete next step. Do not ask the same question again.';
+  await runCheck(roomId, secrets, { reason: 'poll_settled', forced: true, note });
 }

@@ -17,7 +17,6 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import {
-  ArrowLeft,
   LayoutDashboard,
   Clock,
   LogOut,
@@ -32,8 +31,7 @@ import {
 
 import { ref, onMounted } from 'vue';
 import { intlLocale, t } from '../i18n';
-import LocaleSwitch from '../components/LocaleSwitch.vue';
-import ThemeSwitch from '../components/ThemeSwitch.vue';
+import PageNav from '../components/PageNav.vue';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -596,14 +594,9 @@ const handleLogout = async () => {
 
     <div class="max-w-5xl mx-auto">
       <!-- Top Bar -->
-      <div class="flex items-center justify-between pb-4 mb-6 border-b border-slate-800 gap-2">
+      <!-- On phones the title sits below the fixed top-right PageNav -->
+      <div class="flex items-center justify-between pb-4 mb-6 mt-10 sm:mt-0 border-b border-slate-800 gap-2">
         <div class="flex items-center gap-2.5 sm:gap-3 min-w-0">
-          <router-link
-            to="/"
-            class="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition border border-slate-800 shrink-0"
-          >
-            <ArrowLeft class="w-5 h-5" />
-          </router-link>
           <div class="min-w-0">
             <h1 class="text-lg sm:text-xl font-bold text-ink flex items-center gap-2 truncate">
               <LayoutDashboard class="w-4 h-4 sm:w-5 sm:h-5 text-sky-400 shrink-0" />
@@ -617,27 +610,15 @@ const handleLogout = async () => {
           </div>
         </div>
 
-        <div class="flex items-center gap-2">
-          <button
-            @click="handleRefresh"
-            :disabled="isRefreshing"
-            class="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-xl border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 transition"
-            :title="t('dash.syncTitle')"
-          >
-            <RefreshCw class="w-3.5 h-3.5 text-sky-400" :class="{ 'animate-spin': isRefreshing }" />
+        <PageNav>
+          <button @click="handleRefresh" :disabled="isRefreshing" class="page-nav-btn" :title="t('dash.syncTitle')">
+            <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': isRefreshing }" />
             <span class="hidden sm:inline">{{ t('dash.sync') }}</span>
           </button>
-
-          <ThemeSwitch />
-          <LocaleSwitch />
-
-          <button
-            @click="handleLogout"
-            class="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 transition"
-          >
-            <LogOut class="w-4 h-4 text-rose-400" /> {{ t('dash.signOut') }}
+          <button @click="handleLogout" class="page-nav-btn">
+            <LogOut class="w-3.5 h-3.5 text-rose-400" /> <span class="hidden sm:inline">{{ t('dash.signOut') }}</span>
           </button>
-        </div>
+        </PageNav>
       </div>
 
       <!-- History Rooms -->

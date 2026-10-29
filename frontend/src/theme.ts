@@ -28,7 +28,7 @@ export function setTheme(theme: Theme) {
   // backgrounds can never fade at different speeds. Browsers without view transitions switch at once.
   // Components' own colour transitions are switched off meanwhile, so nothing fades on its own.
   // If the browser never paints a frame (background or throttled tab), the switch is applied directly.
-  type ViewTransition = { finished: Promise<void>; skipTransition: () => void };
+  type ViewTransition = { finished: Promise<void>; ready: Promise<void>; skipTransition: () => void };
   const doc = document as Document & { startViewTransition?: (cb: () => Promise<void>) => ViewTransition };
   const root = document.documentElement;
   target = theme;
@@ -36,6 +36,7 @@ export function setTheme(theme: Theme) {
   const done = () => root.classList.remove('theme-switching');
   if (doc.startViewTransition) {
     const vt = doc.startViewTransition(apply);
+    vt.ready.catch(() => {}); // rejects when the transition is skipped; the theme is applied anyway
     const guard = setTimeout(() => {
       vt.skipTransition();
       apply();

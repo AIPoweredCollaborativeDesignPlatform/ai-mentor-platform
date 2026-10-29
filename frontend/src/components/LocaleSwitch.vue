@@ -11,7 +11,7 @@ const toggle = () => setLocale(currentLocale.value === 'zh-TW' ? 'en' : 'zh-TW')
     v-if="!isRoomLocale"
     type="button"
     @click="toggle"
-    class="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-slate-700 text-[11px] text-slate-300 hover:bg-slate-800 transition"
+    class="inline-flex items-center gap-1 h-7 px-2 rounded-lg border border-slate-700 bg-slate-950 text-xs text-slate-300 hover:bg-slate-800 transition"
     :title="t('common.switchLanguage')"
   >
     <Languages class="w-3.5 h-3.5" />

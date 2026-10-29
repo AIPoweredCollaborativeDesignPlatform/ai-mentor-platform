@@ -11,7 +11,7 @@ const toggle = () => setTheme(currentTheme.value === 'dark' ? 'light' : 'dark');
   <button
     type="button"
     @click="toggle"
-    class="inline-flex items-center justify-center w-7 h-7 rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 transition"
+    class="inline-flex items-center justify-center w-7 h-7 rounded-lg border border-slate-700 bg-slate-950 text-slate-300 hover:bg-slate-800 transition"
     :title="currentTheme === 'dark' ? t('common.themeLight') : t('common.themeDark')"
     :aria-label="currentTheme === 'dark' ? t('common.themeLight') : t('common.themeDark')"
   >

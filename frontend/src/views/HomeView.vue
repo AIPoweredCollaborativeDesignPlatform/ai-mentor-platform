@@ -12,15 +12,13 @@ import {
   LayoutDashboard,
   Search,
   X,
-  Loader2,
-  Settings2
+  Loader2
 } from 'lucide-vue-next';
 import { computed, onMounted } from 'vue';
 import { listProfiles } from '../services/admin';
 import { modeLabel, type AiProfile } from '../utils/aiProfiles';
 import { t } from '../i18n';
-import LocaleSwitch from '../components/LocaleSwitch.vue';
-import ThemeSwitch from '../components/ThemeSwitch.vue';
+import PageNav from '../components/PageNav.vue';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -154,16 +152,7 @@ const handleGoogleSignIn = async () => {
 
 <template>
   <div class="min-h-[100dvh] flex flex-col items-center justify-center p-4 sm:p-6 bg-slate-950 overflow-y-auto relative">
-    <div class="absolute top-3 right-3 flex items-center gap-1.5">
-      <router-link
-        v-if="isStudyAdmin"
-        to="/admin"
-        class="inline-flex items-center gap-1 h-7 px-2 rounded-lg border border-slate-700 text-xs text-slate-300 hover:bg-slate-800 transition"
-      >
-        <Settings2 class="w-3.5 h-3.5" /> {{ t('common.adminPanel') }}
-      </router-link>
-      <ThemeSwitch /><LocaleSwitch />
-    </div>
+    <PageNav />
     <!-- Brand / Header -->
     <div class="text-center max-w-xl mb-5">
       <h1 class="text-xl sm:text-2xl font-black text-ink mb-1.5 tracking-tight flex items-center justify-center gap-2">

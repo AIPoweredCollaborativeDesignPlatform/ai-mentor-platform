@@ -60,7 +60,7 @@ npm run deploy:dry         # 只 build 驗證，不部署、不改版本
 
 - 溝通用繁體中文。**UI 文字一律放字典**：`frontend/src/i18n/en.ts`（key 來源）與 `zh-TW.ts`（型別檢查必須有每個 key），元件用 `t('key', { 參數 })`；不要在 .vue 寫死文字。預設語言繁中。UX 參考標準是 Canva。
 - **語言規則（P6）**：房間語言由設定檔 `language` 決定（指派時寫入 `rooms.language`，開場後不再變）；房內與加入頁介面、AI 回覆、伺服器系統訊息（`functions/src/i18n.js`）、同意書（`config/system.consentText`＝英文、`consentTextZh`＝中文）都跟房間語言。房外頁面與後台用右上角 `LocaleSwitch`（存在瀏覽器）。設定檔的開場文字／任務說明是 `{ 'zh-TW', en }`（舊設定檔的字串兩種語言都用）。
-- **日夜主題（P7）**：`tailwind.config.js` 把所有色階接到 `src/style.css` 的 CSS 變數；元件照舊寫「深色設計」的 class（slate-950 底、slate-100 字），日間自動反轉。只用 slate（中性灰）、sky（＝唯一強調藍；indigo／violet 等也對應到藍）、amber（警告）、emerald（成功）、rose（錯誤）。最深文字色用 `text-ink`，`text-white` 只用在實心彩色按鈕上。不要用漸層、毛玻璃、彩色陰影、裝飾 emoji。切換：`src/theme.ts`＋`ThemeSwitch.vue`，`index.html` 在載入前套用；切換時用 View Transition 整頁交叉淡化（期間關掉元件自己的 transition），不要再對個別元素加顏色過渡。日夜都不變的強調塊（如首頁建立房間）用 `sky-500/600`＋`text-white`（這兩階在兩種主題同值）。
+- **日夜主題（P7）**：`tailwind.config.js` 把所有色階接到 `src/style.css` 的 CSS 變數；元件照舊寫「深色設計」的 class（slate-950 底、slate-100 字），日間自動反轉。只用 slate（中性灰）、sky（＝唯一強調藍；indigo／violet 等也對應到藍）、amber（警告）、emerald（成功）、rose（錯誤）。最深文字色用 `text-ink`，`text-white` 只用在實心彩色按鈕上。不要用漸層、毛玻璃、彩色陰影、裝飾 emoji。切換：`src/theme.ts`＋`ThemeSwitch.vue`，`index.html` 在載入前套用；切換時用 View Transition 整頁交叉淡化（期間關掉元件自己的 transition），不要再對個別元素加顏色過渡。白板畫布固定淺色（不跟主題）。首頁／我的房間／後台右上角一律用 `components/PageNav.vue`（頁面自己的按鈕放 slot，class `page-nav-btn`）。日夜都不變的強調塊（如首頁建立房間）用 `sky-500/600`＋`text-white`（這兩階在兩種主題同值）。
 - Commit 訊息格式：`feat|fix(scope): 描述`；發佈 commit 由 deploy 腳本自動產生（`release: vX.Y.Z`）。
 - 研究用途（預計送 IRB）：任何讓 AI 讀到使用者 Gmail／Google 帳號資料的改動都禁止；成員剖析（Team Dynamics）只供 AI 內部參考，不可原樣輸出到聊天。
 - 只在本機 commit，未經使用者同意不 push 到 remote `AIPoweredCollaborativeDesignPlatform/ai-mentor-platform`。

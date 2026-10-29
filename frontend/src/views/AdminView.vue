@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import { ArrowLeft, Loader2, RefreshCw, Trash2 } from 'lucide-vue-next';
+import { Loader2, RefreshCw, Trash2 } from 'lucide-vue-next';
 import { useAuthStore } from '../stores/auth';
 import { useRoomStore } from '../stores/room';
 import ProfileEditor from '../components/admin/ProfileEditor.vue';
@@ -14,8 +14,7 @@ import {
 } from '../services/admin';
 import { DEFAULT_CONSENT_TEXT, DEFAULT_CONSENT_TEXT_ZH } from '../constants/consent';
 import { intlLocale, t, type MessageKey } from '../i18n';
-import LocaleSwitch from '../components/LocaleSwitch.vue';
-import ThemeSwitch from '../components/ThemeSwitch.vue';
+import PageNav from '../components/PageNav.vue';
 import { endStudySession, reopenStudySession } from '../services/session';
 
 // Mirrors functions/src/config.js DEFAULT_SYSTEM_CONFIG for display before config/system exists
@@ -347,12 +346,12 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
 <template>
   <div class="min-h-[100dvh] bg-slate-950 text-slate-100">
     <header class="h-14 border-b border-slate-800 bg-slate-900/90 px-4 flex items-center gap-3">
-      <router-link to="/" class="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400"><ArrowLeft class="w-4 h-4" /></router-link>
       <h1 class="font-bold">{{ t('adm.title') }}</h1>
-      <div class="ml-auto flex items-center gap-1.5"><ThemeSwitch /><LocaleSwitch /></div>
-      <button v-if="isAdmin" @click="loadAll" class="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400" :title="t('adm.refresh')">
-        <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
-      </button>
+      <PageNav>
+        <button v-if="isAdmin" @click="loadAll" class="page-nav-btn" :title="t('adm.refresh')">
+          <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': loading }" />
+        </button>
+      </PageNav>
     </header>
 
     <div v-if="!canView" class="max-w-md mx-auto mt-24 text-center text-sm text-slate-400 px-6">

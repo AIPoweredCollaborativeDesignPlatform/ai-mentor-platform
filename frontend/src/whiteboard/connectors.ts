@@ -56,16 +56,23 @@ export class Connector extends fabric.FabricObject {
 
   _render(ctx: CanvasRenderingContext2D) {
     const ax = -this.dx / 2, ay = -this.dy / 2, bx = this.dx / 2, by = this.dy / 2;
+    // The line stops inside an arrow head, so its round cap never pokes out past the tip
+    const len = Math.hypot(this.dx, this.dy);
+    const ux = len ? this.dx / len : 0, uy = len ? this.dy / len : 0;
+    const inset = (on: boolean) => (on ? headSize(len, this.strokeWidth) * 0.7 : 0);
+    const s = inset(this.arrowStart), e = inset(this.arrowEnd);
     ctx.save();
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.strokeStyle = this.stroke as string;
     ctx.fillStyle = this.stroke as string;
     ctx.lineWidth = this.strokeWidth;
-    ctx.beginPath();
-    ctx.moveTo(ax, ay);
-    ctx.lineTo(bx, by);
-    ctx.stroke();
+    if (len > s + e) {
+      ctx.beginPath();
+      ctx.moveTo(ax + ux * s, ay + uy * s);
+      ctx.lineTo(bx - ux * e, by - uy * e);
+      ctx.stroke();
+    }
     if (this.arrowEnd) drawHead(ctx, ax, ay, bx, by, this.strokeWidth);
     if (this.arrowStart) drawHead(ctx, bx, by, ax, ay, this.strokeWidth);
     ctx.restore();
@@ -80,10 +87,12 @@ export class Connector extends fabric.FabricObject {
 }
 fabric.classRegistry.setClass(Connector, 'connector');
 
+const headSize = (len: number, width: number) => Math.min(len * 0.6, 8 + width * 2.5);
+
 function drawHead(ctx: CanvasRenderingContext2D, fx: number, fy: number, tx: number, ty: number, width: number) {
   const len = Math.hypot(tx - fx, ty - fy);
   if (len < 1) return;
-  const size = Math.min(len * 0.6, 8 + width * 2.5);
+  const size = headSize(len, width);
   const ux = (tx - fx) / len, uy = (ty - fy) / len;
   const bx = tx - ux * size, by = ty - uy * size;
   const nx = -uy * size * 0.55, ny = ux * size * 0.55;

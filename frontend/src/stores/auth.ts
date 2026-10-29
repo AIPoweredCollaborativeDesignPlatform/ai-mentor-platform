@@ -43,7 +43,14 @@ export const useAuthStore = defineStore('auth', () => {
   // Study roles (functions/src/roles.js): the administrator is a fixed account, observers carry the
   // custom claim role: 'observer'. Rules enforce access; these only shape the UI.
   const ADMIN_EMAIL = 'bb900114@gmail.com';
-  const roleClaim = ref<string | null>(null);
+  // Remembered from the last check so staff controls show at once; syncMyRole confirms it after sign-in
+  const ROLE_KEY = 'ai_mentor_role';
+  const roleClaim = ref<string | null>(isGoogleLinked.value ? localStorage.getItem(ROLE_KEY) : null);
+  const setRole = (role: string | null) => {
+    roleClaim.value = role;
+    if (role) localStorage.setItem(ROLE_KEY, role);
+    else localStorage.removeItem(ROLE_KEY);
+  };
   const isAdmin = computed(() => isGoogleLinked.value && email.value === ADMIN_EMAIL);
   const isObserver = computed(() => isAdmin.value || roleClaim.value === 'observer');
 
@@ -53,9 +60,12 @@ export const useAuthStore = defineStore('auth', () => {
   const refreshRole = (user: User) => (rolePromise = loadRole(user));
   const loadRole = async (user: User) => {
     try {
+      // The cached ID token already carries the claim (no network); the server call then confirms it
+      const cached = await user.getIdTokenResult();
+      setRole((cached.claims.role as string) || null);
       const { data } = await httpsCallable<void, { role: string | null; changed: boolean }>(functions, 'syncMyRole')();
       const token = await user.getIdTokenResult(data.changed);
-      roleClaim.value = (token.claims.role as string) || null;
+      setRole((token.claims.role as string) || null);
     } catch (e) {
       console.warn('[Auth] Role check failed:', e);
     }
@@ -100,7 +110,7 @@ export const useAuthStore = defineStore('auth', () => {
         localStorage.setItem('ai_mentor_uid', user.uid);
         if (user.isAnonymous) {
           isGoogleLinked.value = false;
-          roleClaim.value = null;
+          setRole(null);
           localStorage.removeItem('ai_mentor_google_linked');
         } else {
           // Real Google account
@@ -257,7 +267,7 @@ export const useAuthStore = defineStore('auth', () => {
     }
     isGoogleLinked.value = false;
     email.value = '';
-    roleClaim.value = null;
+    setRole(null);
     localStorage.removeItem('ai_mentor_google_linked');
     localStorage.removeItem('ai_mentor_email');
     // Re-init anonymous guest

@@ -183,6 +183,7 @@ export default {
   "common.close": "Close",
   "common.confirm": "Confirm",
   "common.dashboard": "Dashboard",
+  "common.adminPanel": "Admin",
   "common.download": "Download",
   "common.end": "End",
   "common.loading": "Loading...",

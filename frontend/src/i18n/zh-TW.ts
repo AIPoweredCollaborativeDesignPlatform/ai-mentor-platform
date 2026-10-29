@@ -185,6 +185,7 @@ const zhTW: Record<keyof typeof en, string> = {
   "common.close": "關閉",
   "common.confirm": "確定",
   "common.dashboard": "我的房間",
+  "common.adminPanel": "後台",
   "common.download": "下載",
   "common.end": "結束",
   "common.loading": "載入中...",

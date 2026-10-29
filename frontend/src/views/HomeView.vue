@@ -12,7 +12,8 @@ import {
   LayoutDashboard,
   Search,
   X,
-  Loader2
+  Loader2,
+  Settings2
 } from 'lucide-vue-next';
 import { computed, onMounted } from 'vue';
 import { listProfiles } from '../services/admin';
@@ -26,8 +27,6 @@ const authStore = useAuthStore();
 const roomStore = useRoomStore();
 
 const pinInput = ref('');
-const inputName = ref(authStore.displayName);
-const selectedAvatar = ref(authStore.avatar);
 const roomNameInput = ref('');
 const errorMsg = ref('');
 const isLoading = ref(false);
@@ -54,32 +53,37 @@ const selectRoomEmoji = (em: string) => {
   isEmojiPickerOpen.value = false;
 };
 
-const avatarChoices = ['🦊', '🦉', '🎨', '🚀', '🔮', '📐', '🤖', '⚡'];
-
-const selectAvatar = (av: string) => {
-  selectedAvatar.value = av;
-};
-
-const handleSaveProfile = () => {
-  if (inputName.value.trim()) {
-    authStore.updateProfile(inputName.value.trim(), selectedAvatar.value);
+// Study staff (administrator and observers) pick the experiment condition when creating a room
+// (others get the default) and may create it as a participant instead of the researcher.
+// The role and the profile list are remembered from the last visit so these controls appear at once.
+const PROFILE_CACHE = 'ai_mentor_profiles_cache';
+const isStudyAdmin = computed(() => authStore.isObserver);
+const readCachedProfiles = (): AiProfile[] => {
+  try {
+    return JSON.parse(localStorage.getItem(PROFILE_CACHE) || '[]');
+  } catch {
+    return [];
   }
 };
-
-// Study staff (administrator and observers) pick the experiment condition when creating a room
-// (others get the default) and may create it as a participant instead of the researcher
-const isStudyAdmin = computed(() => authStore.isObserver);
-const profiles = ref<AiProfile[]>([]);
+const profiles = ref<AiProfile[]>(isStudyAdmin.value ? readCachedProfiles() : []);
 const selectedProfileId = ref('');
 const createAsParticipant = ref(false);
 onMounted(async () => {
   await authStore.waitForAuthReady().catch(() => {});
-  await authStore.waitForRole();
-  if (isStudyAdmin.value) profiles.value = await listProfiles().catch(() => []);
+  // The remembered role is good enough to fetch with (rules decide); otherwise confirm it first
+  if (!isStudyAdmin.value) await authStore.waitForRole();
+  if (!isStudyAdmin.value) return;
+  const list = await listProfiles().catch(() => null);
+  if (!list) return;
+  profiles.value = list;
+  try {
+    localStorage.setItem(PROFILE_CACHE, JSON.stringify(list.map(p => ({ id: p.id, name: p.name, mode: p.mode }))));
+  } catch {
+    // Storage blocked: the list just loads fresh next time
+  }
 });
 
 const handleCreateRoom = async () => {
-  handleSaveProfile();
   isLoading.value = true;
   try {
     const asParticipant = isStudyAdmin.value && createAsParticipant.value;
@@ -97,7 +101,6 @@ const handleCreateRoom = async () => {
 };
 
 const handleJoinRoom = async () => {
-  handleSaveProfile();
   const pin = pinInput.value.trim();
   // New rooms have 4 digits; older rooms keep their 6-digit PINs
   if (!/^(\d{4}|\d{6})$/.test(pin)) {
@@ -129,10 +132,7 @@ const handleGoogleSignIn = async () => {
   isGoogleSigningIn.value = true;
   authErrorMsg.value = '';
   try {
-    const res = await authStore.upgradeWithGoogle();
-    if (res?.success) {
-      inputName.value = authStore.displayName;
-    }
+    await authStore.upgradeWithGoogle();
   } catch (err: any) {
     if (err?.code !== 'auth/popup-closed-by-user' && err?.code !== 'auth/cancelled-popup-request') {
       let friendlyMsg = err?.message || t('home.googleFailed');
@@ -154,7 +154,16 @@ const handleGoogleSignIn = async () => {
 
 <template>
   <div class="min-h-[100dvh] flex flex-col items-center justify-center p-4 sm:p-6 bg-slate-950 overflow-y-auto relative">
-    <div class="absolute top-3 right-3 flex items-center gap-1.5"><ThemeSwitch /><LocaleSwitch /></div>
+    <div class="absolute top-3 right-3 flex items-center gap-1.5">
+      <router-link
+        v-if="isStudyAdmin"
+        to="/admin"
+        class="inline-flex items-center gap-1 h-7 px-2 rounded-lg border border-slate-700 text-xs text-slate-300 hover:bg-slate-800 transition"
+      >
+        <Settings2 class="w-3.5 h-3.5" /> {{ t('common.adminPanel') }}
+      </router-link>
+      <ThemeSwitch /><LocaleSwitch />
+    </div>
     <!-- Brand / Header -->
     <div class="text-center max-w-xl mb-5">
       <h1 class="text-xl sm:text-2xl font-black text-ink mb-1.5 tracking-tight flex items-center justify-center gap-2">
@@ -168,35 +177,10 @@ const handleGoogleSignIn = async () => {
 
     <!-- Main Card -->
     <div class="w-full max-w-lg bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-6 shadow-2xl">
-      <!-- Guest Profile Setup -->
+      <!-- Account (nickname and avatar are entered on the join page, together with the consent form) -->
       <section class="mb-5">
-        <div class="flex items-center gap-3 mb-3">
-          <div class="text-2xl p-1.5 bg-slate-800 rounded-xl border border-slate-700 shrink-0">
-            {{ selectedAvatar }}
-          </div>
-          <input
-            v-model="inputName"
-            type="text"
-            :placeholder="t('home.namePlaceholder')"
-            class="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-base sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500 transition min-h-[44px]"
-          />
-        </div>
-
-        <!-- Avatar Picker -->
-        <div class="flex items-center justify-between gap-0.5 p-1.5 bg-slate-950/60 rounded-xl border border-slate-800/80 mb-3">
-          <button
-            v-for="av in avatarChoices"
-            :key="av"
-            @click="selectAvatar(av)"
-            class="p-1.5 rounded-lg text-base hover:scale-125 transition"
-            :class="{ 'bg-sky-500/20 ring-2 ring-sky-400': selectedAvatar === av }"
-          >
-            {{ av }}
-          </button>
-        </div>
-
         <!-- Google Sign-in -->
-        <div v-if="!authStore.isGoogleLinked" class="pt-2 border-t border-slate-800/60">
+        <div v-if="!authStore.isGoogleLinked">
           <div class="flex items-center justify-between">
             <span class="text-xs text-slate-400">{{ t('home.signInHint') }}</span>
             <button
@@ -213,7 +197,7 @@ const handleGoogleSignIn = async () => {
             {{ authErrorMsg }}
           </p>
         </div>
-        <div v-else class="pt-2 border-t border-slate-800/60 flex items-center justify-between text-xs">
+        <div v-else class="flex items-center justify-between text-xs">
           <span class="text-emerald-400 flex items-center gap-1">
             {{ t('home.signedIn', { name: authStore.displayName || authStore.email?.split('@')[0] || t('common.user') }) }}
           </span>
@@ -342,7 +326,7 @@ const handleGoogleSignIn = async () => {
             </div>
           </div>
           <select
-            v-if="isStudyAdmin && profiles.length"
+            v-if="isStudyAdmin"
             v-model="selectedProfileId"
             class="mb-2 w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-sky-500"
             :title="t('home.profileTitle')"

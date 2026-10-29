@@ -214,7 +214,10 @@ export async function runCheck(roomId, secrets, { reason, forced = false, caller
         await postAiMessage(roomId, room, profile, { content: str('aiErrorPrefix', lang, { name, message }) }, retryMessageId);
       }
     } else if (visible && out.result.shouldIntervene && out.result.aiMessage) {
-      const { aiMessage, assetType, assetData, actionOptions } = out.result;
+      const { aiMessage, assetType, assetData } = out.result;
+      // Polls stay rare: none right after a settled poll, and none while one of the AI's last 3 messages had one
+      const recentPoll = messages.filter(m => m.senderUid === 'ai_mentor').slice(-3).some(m => m.actionOptions?.length);
+      const actionOptions = reason === 'poll_settled' || recentPoll ? [] : out.result.actionOptions;
       if (assetType === 'parametric_3d') {
         // The mesh is generated after the lock is released; the instant parametric preview is the fallback
         pending3D = { aiMessage, assetData, prompt: assetData?.prompt3D || assetData?.title || 'product prototype', meta: out.meta, room };
@@ -361,6 +364,6 @@ export async function handlePollVote(roomId, messageId, before, after, secrets) 
   const tally = poll.actionOptions.map(opt => `"${opt}": ${votes.filter(v => v.option === opt).length}`).join(', ');
   const note = `Poll result: your poll "${String(poll.content || '').slice(0, 200)}" now has ${votes.length} vote(s) from ${Math.max(members, 1)} participant(s) (${tally}). `
     + 'Treat the leading option as the direction the team has chosen (if there is a tie, name the tie and help them break it). '
-    + 'Briefly confirm it and move the discussion forward with a concrete next step. Do not ask the same question again.';
+    + 'Briefly confirm it and move the discussion forward by asking about the next step as an open question in plain text. Do not ask the same question again and do not start another poll.';
   await runCheck(roomId, secrets, { reason: 'poll_settled', forced: true, note });
 }

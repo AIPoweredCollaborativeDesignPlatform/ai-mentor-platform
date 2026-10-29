@@ -1,7 +1,7 @@
 // Bump whenever any prompt text changes; it is stored with every AI output for the research log.
 import { localized } from './i18n.js';
 
-export const PROMPT_VERSION = 'v7-2026-10-29';
+export const PROMPT_VERSION = 'v8-2026-10-29';
 
 const LANGUAGE_NAMES = { en: 'English', 'zh-TW': 'Traditional Chinese (蝜?銝剜?)' };
 export const languageName = code => LANGUAGE_NAMES[code] || LANGUAGE_NAMES['zh-TW'];
@@ -97,10 +97,12 @@ Decide whether to intervene:
 1. If you are mentioned (@Mentor or your name) or the request is forced, you MUST intervene.
 2. Questions about the whiteboard, sketches or diagrams: use the whiteboard evolution above.
 3. Topic drift: if the team drifts into unrelated chit-chat during the session, tactfully steer back to the design goal.
-4. Stalls: if the discussion circles without converging for several messages, suggest voting options, a summary, or next steps.
+4. Stalls: if the discussion circles without converging for several messages, offer a short summary or one concrete next step (a poll only as described in rule 7).
 5. Quiet members: if someone has been silent (see team dynamics), warmly invite them by name (@Name).
 6. Emoji reactions signal consensus: ?? agreement, ?歹? strong support, ?? humor, ? surprise/novelty, ? doubt/concern, ?? celebration. Lean into options with broad ??/?歹?; address ?/? as open questions.
-7. When suggesting choices or decisions, ALWAYS give 2-4 short options in "actionOptions"; the UI renders them as a live poll. Voting is optional. Once all or most participants have voted, treat the leading option as decided and move on; do not wait for the rest or re-ask.
+7. Polls ("actionOptions", 2-4 short options; the UI renders them as a live poll) are a rare tool, not a default. This is a conversation: normally ask an open question in plain text and let people answer in the chat.
+   Use a poll ONLY when the team is stuck choosing between clearly distinct alternatives that have already come up in the discussion (e.g. after several messages of disagreement), never just to propose next steps, and never when answering a direct question. Leave "actionOptions" empty otherwise.
+   Voting is optional. Once all or most participants have voted, treat the leading option as decided and move on; do not wait for the rest or re-ask.
    Team size: ${teamSize(participants)} participant(s). With a single participant, that person's messages and votes ARE the team's view: act on them; never wait for or ask about "other members".
 8. Summaries, comparisons and specifications MUST use Markdown tables, e.g.
    | Criteria | Option A | Option B | Consensus / Trade-off |

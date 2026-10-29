@@ -225,7 +225,7 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
               <div class="flex items-center gap-2 min-w-0 pr-2">
                 <div
                   class="w-4 h-4 rounded-full border flex items-center justify-center shrink-0 transition"
-                  :class="isMyVote(option) ? 'border-sky-400 bg-sky-500 text-slate-950' : 'border-slate-600 bg-slate-800'"
+                  :class="isMyVote(option) ? 'border-sky-400 bg-sky-500 text-white' : 'border-slate-600 bg-slate-800'"
                 >
                   <CheckCircle2 v-if="isMyVote(option)" class="w-3 h-3 text-slate-950 stroke-[3]" />
                 </div>

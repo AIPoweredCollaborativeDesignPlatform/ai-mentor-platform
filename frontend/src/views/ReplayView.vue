@@ -191,7 +191,7 @@ onMounted(async () => {
     <main v-else class="p-4 space-y-3 max-w-7xl mx-auto">
       <!-- Transport -->
       <div class="flex items-center gap-3 p-3 rounded-2xl border border-slate-800 bg-slate-900/70">
-        <button @click="togglePlay" class="p-2 rounded-lg bg-sky-600 hover:bg-sky-500" :title="playing ? tr('rp.pause') : tr('rp.play')">
+        <button @click="togglePlay" class="p-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white" :title="playing ? tr('rp.pause') : tr('rp.play')">
           <Pause v-if="playing" class="w-4 h-4" /><Play v-else class="w-4 h-4" />
         </button>
         <select v-model.number="speed" class="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs">

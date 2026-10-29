@@ -212,6 +212,7 @@ const COST_INPUT_FIELDS: { key: keyof CostInputs; label: MessageKey }[] = [
   { key: 'sessionMinutes', label: 'adm.costMinutes' },
   { key: 'messagesPerMinute', label: 'adm.costMsgs' },
   { key: 'mentionsPerSession', label: 'adm.costMentions' },
+  { key: 'settledPollsPerSession', label: 'adm.costPolls' },
   { key: 'stallsPerSession', label: 'adm.costStalls' },
   { key: 'moodboardsPerSession', label: 'adm.costMoodboards' },
   { key: 'models3DPerSession', label: 'adm.costModels' },
@@ -379,7 +380,7 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
         </div>
         <template v-else>
           <div class="flex flex-wrap items-center gap-2">
-            <button @click="editing = newProfile({ name: t('adm.newProfileName') })" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-xs font-semibold">{{ t('adm.newProfile') }}</button>
+            <button @click="editing = newProfile({ name: t('adm.newProfileName') })" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold">{{ t('adm.newProfile') }}</button>
             <button v-if="!profiles.length" @click="seedProfiles" :disabled="seeding" class="px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs">{{ t('adm.seed') }}</button>
             <span class="text-[11px] text-slate-500">{{ t('adm.newRoomDefault', { name: profileName(system.defaultProfileId) }) }}</span>
           </div>
@@ -423,8 +424,9 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
             <div v-if="drive?.rootFolderId && drive.rootInConfiguredFolder === false" class="text-amber-300/90">{{ t('adm.driveRoot') }}</div>
             <a v-if="drive?.rootFolderId" :href="`https://drive.google.com/drive/folders/${drive.rootFolderId}`" target="_blank" rel="noopener" class="text-sky-400 hover:underline">{{ t('adm.openDriveFolder') }}</a>
           </div>
-          <button v-if="isAdmin" @click="connectDrive" class="px-3 py-1.5 rounded-lg text-xs font-semibold" :class="drive?.status === 'ok' ? 'border border-slate-700 hover:bg-slate-800' : 'bg-sky-600 hover:bg-sky-500'">
-            {{ !drive ? t('adm.driveConnect') : drive.status === 'ok' ? t('adm.driveReconnect') : t('adm.driveReauth') }}
+          <!-- Only when there is no working connection; a connected Drive needs no button -->
+          <button v-if="isAdmin && drive?.status !== 'ok'" @click="connectDrive" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-500 text-white">
+            {{ !drive ? t('adm.driveConnect') : t('adm.driveReauth') }}
           </button>
         </div>
 
@@ -453,7 +455,7 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
               <option value="" disabled>{{ t('adm.chooseProfile') }}</option>
               <option v-for="p in profiles" :key="p.id" :value="p.id">{{ p.name }} v{{ p.version }}</option>
             </select>
-            <button @click="assign(r)" :disabled="!pendingChoice[r.roomId]" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-xs font-semibold disabled:opacity-40">{{ t('adm.assign') }}</button>
+            <button @click="assign(r)" :disabled="!pendingChoice[r.roomId]" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold disabled:opacity-40">{{ t('adm.assign') }}</button>
             <button v-if="r.session" @click="uploadNow(r)" :disabled="exporting[r.roomId]" class="px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs disabled:opacity-40">
               {{ exporting[r.roomId] ? t('adm.uploading') : t('adm.uploadDrive') }}
             </button>
@@ -588,7 +590,7 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
           <p v-if="!observers.length" class="text-[11px] text-slate-500">{{ t('adm.noObservers') }}</p>
           <form @submit.prevent="changeObserver(observerEmail, true)" class="flex items-center gap-2">
             <input v-model="observerEmail" type="email" placeholder="name@gmail.com" class="flex-1 bg-slate-950 border border-slate-700 rounded px-2 py-1.5" />
-            <button :disabled="observerBusy || !observerEmail.trim()" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-xs font-semibold disabled:opacity-40">{{ t('adm.add') }}</button>
+            <button :disabled="observerBusy || !observerEmail.trim()" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold disabled:opacity-40">{{ t('adm.add') }}</button>
           </form>
         </div>
         <label class="block space-y-1 text-xs">
@@ -600,7 +602,7 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
           <span class="text-[11px] text-slate-500">{{ t('adm.consentNote') }}</span>
         </label>
         <p class="text-[11px] text-amber-300/80">{{ t('adm.noModelChange') }}</p>
-        <button @click="saveSystem" :disabled="savingSystem" class="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-xs font-semibold disabled:opacity-40">{{ savingSystem ? t('pe.saving') : t('adm.saveSystem') }}</button>
+        <button @click="saveSystem" :disabled="savingSystem" class="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold disabled:opacity-40">{{ savingSystem ? t('pe.saving') : t('adm.saveSystem') }}</button>
       </section>
     </main>
   </div>

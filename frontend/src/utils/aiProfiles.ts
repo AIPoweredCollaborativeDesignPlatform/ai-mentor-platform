@@ -125,6 +125,8 @@ export interface CostInputs {
   sessionMinutes: number;
   messagesPerMinute: number;
   mentionsPerSession: number;
+  /** AI polls that reach a majority; each one makes the AI follow up (engine.js handlePollVote) */
+  settledPollsPerSession: number;
   stallsPerSession: number;
   moodboardsPerSession: number;
   models3DPerSession: number;
@@ -140,6 +142,7 @@ export const DEFAULT_COST_INPUTS: CostInputs = {
   sessionMinutes: 35,
   messagesPerMinute: 4,
   mentionsPerSession: 6,
+  settledPollsPerSession: 3,
   stallsPerSession: 3,
   moodboardsPerSession: 1,
   models3DPerSession: 1,
@@ -165,7 +168,7 @@ export function estimateCost(profile: AiProfile, inputs: CostInputs, prices: Pri
   const runsChecks = profile.mode === 'proactive' || profile.shadowAssessment;
   const t = profile.triggers;
   const autoChecks = runsChecks ? Math.ceil(messages / Math.max(1, t.minNewMessages)) + (t.stallSeconds ? inputs.stallsPerSession : 0) : 0;
-  const mentionChecks = profile.mode === 'none' ? 0 : inputs.mentionsPerSession;
+  const mentionChecks = profile.mode === 'none' ? 0 : inputs.mentionsPerSession + (inputs.settledPollsPerSession || 0);
   const checks = autoChecks + mentionChecks;
   const memoryUpdates = profile.memory.updateEveryMessages ? Math.floor(messages / profile.memory.updateEveryMessages) : 0;
   const visibleAssets = profile.mode === 'none' ? 0 : 1;

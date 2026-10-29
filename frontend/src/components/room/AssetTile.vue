@@ -167,7 +167,7 @@ const onClick = () => {
   <button
     v-if="managing"
     @click.stop="emit('toggle-hide')"
-    class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-ink text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5"
+    class="absolute top-1 right-1 z-30 px-1.5 py-0.5 rounded text-white text-[9px] font-bold shadow-md transition cursor-pointer flex items-center gap-0.5"
     :class="hidden ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-rose-600 hover:bg-rose-500'"
     :title="hidden ? t('tile.unhide') : t('tile.hide')"
   >

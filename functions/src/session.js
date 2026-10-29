@@ -28,7 +28,7 @@ export const ONLINE_MS = 30_000;
 const IDLE_END_MS = 10 * 60_000;
 const WAITING_TICK_MAX_AGE_MS = 7 * 24 * 3600_000;
 
-const isOnline = (p, now) => p.status === 'approved' && p.isOnline !== false && (p.lastSeen || p.joinedAt || 0) > now - ONLINE_MS;
+export const isOnline = (p, now) => p.status === 'approved' && p.isOnline !== false && (p.lastSeen || p.joinedAt || 0) > now - ONLINE_MS;
 
 async function onlineParticipants(roomId, hostUid, now = Date.now()) {
   const snap = await roomRef(roomId).collection('participants').where('status', '==', 'approved').get();

@@ -21,7 +21,7 @@ const usageOf = response => (response?.usage ? { input: response.usage.input_tok
  * transcript, calls Claude, generates moodboard images if needed, and writes the research log.
  * Never throws; on failure returns { error }.
  */
-export async function analyze({ apiKey, falKey, roomId, room, messages, participants, profile, memory, forced, reason, callerUid, visible, note = '' }) {
+export async function analyze({ apiKey, falKey, roomId, room, messages, participants, profile, memory, forced, reason, callerUid, visible, note = '', rosterNote = '' }) {
   const sys = await getSystemConfig();
   const model = sys.models.mentor;
   const language = room.language || 'zh-TW';
@@ -38,7 +38,7 @@ export async function analyze({ apiKey, falKey, roomId, room, messages, particip
     memory
   });
   // `note` replaces the generic trigger line for system-initiated responses (e.g. a settled poll)
-  const userPrompt = `Conversation transcript:\n${buildTranscript(messages, participants)}\n\n${
+  const userPrompt = `Conversation transcript:\n${buildTranscript(messages, participants)}\n\n${rosterNote ? `${rosterNote}\n` : ''}${
     note || (forced ? 'You were explicitly asked by a participant (forced).' : `Automatic check (reason: ${reason}).`)
   }\nRespond with the JSON object only.`;
 

@@ -144,9 +144,7 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
       <!-- Sender line: mine = [time] [name], others = [name] [time] [AI badge] -->
       <div class="flex items-center gap-1.5 mb-0.5 text-[11px] text-slate-400" :class="isMine ? 'flex-row-reverse' : ''">
         <span class="font-medium text-slate-300 truncate">{{ msg.senderName }}</span>
-        <span class="text-[9px] text-slate-500/70 font-mono tracking-wider">{{ formatTime(msg.timestamp) }}</span>
-        <span v-if="isAi" class="text-[10px] bg-slate-800 text-slate-400 border border-slate-700 px-1.5 py-0.2 rounded">AI</span>
-      </div>
+        <span class="text-[9px] text-slate-500/70 font-mono tracking-wider">{{ formatTime(msg.timestamp) }}</span>      </div>
 
       <!-- Frameless image/video without caption -->
       <div v-if="isFramelessMedia" class="rounded-2xl overflow-hidden max-w-sm shadow-md hover:shadow-xl transition">
@@ -163,7 +161,7 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
           @click="emit('preview-media', msg.fileData!.url)"
           :title="t('msg.clickExpand')"
         >
-          <img :src="msg.fileData!.url" :alt="t('msg.attachment')" class="w-full h-auto max-h-72 object-cover group-hover:scale-105 transition duration-300 rounded-2xl" loading="lazy" />
+          <img :src="msg.fileData!.url" :alt="t('msg.attachment')" class="w-full h-auto max-h-72 object-cover pointer-events-none group-hover:scale-105 transition duration-300 rounded-2xl" loading="lazy" />
         </div>
         <div v-else class="rounded-2xl overflow-hidden">
           <video :src="msg.fileData!.url" controls class="w-full max-h-72 rounded-2xl" preload="metadata"></video>
@@ -304,7 +302,7 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
               <EyeOff class="w-4 h-4 text-slate-500 shrink-0" />
               <span>{{ t('msg.imageHidden') }}</span>
             </div>
-            <img v-else :src="msg.fileData.url" :alt="t('msg.imageAttachment')" class="w-full h-auto max-h-64 object-cover group-hover:scale-105 transition duration-300 rounded-xl" loading="lazy" />
+            <img v-else :src="msg.fileData.url" :alt="t('msg.imageAttachment')" class="w-full h-auto max-h-64 object-cover pointer-events-none group-hover:scale-105 transition duration-300 rounded-xl" loading="lazy" />
           </div>
 
           <div v-else-if="msg.fileData.type === 'video'" class="rounded-xl overflow-hidden max-w-sm shadow">
@@ -377,7 +375,7 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
             @click="emit('open-whiteboard', msg)"
           >
             <div class="relative w-full aspect-[4/3] bg-slate-950 flex items-center justify-center overflow-hidden">
-              <img v-if="!msg.metadata?.isPrivate && msg.fileData?.url" :src="msg.fileData.url" class="w-full h-full object-cover transition duration-300 group-hover:scale-105" />
+              <img v-if="!msg.metadata?.isPrivate && msg.fileData?.url" :src="msg.fileData.url" class="w-full h-full object-cover transition duration-300 pointer-events-none group-hover:scale-105" />
               <div v-else-if="msg.metadata?.isPrivate" class="w-full h-full bg-slate-900 flex flex-col items-center justify-center text-slate-400 select-none p-4 text-center">
                 <div class="w-10 h-10 rounded-full bg-slate-800 border border-slate-700/60 flex items-center justify-center mb-1.5 shadow-sm">
                   <Lock class="w-5 h-5 text-slate-400" />

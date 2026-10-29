@@ -5,6 +5,7 @@ import { generate3D } from './mesh3d.js';
 import { getSystemConfig } from './config.js';
 import { loadDefaultProfile, loadProfile, publicAiView } from './profiles.js';
 import { logAiCall } from './log.js';
+import { isOnline } from './session.js';
 
 /**
  * Server-side AI activity manager: one decision-maker per room.
@@ -78,7 +79,7 @@ export async function fetchContext(roomId) {
   // Observers are invisible too
   const participants = Object.fromEntries(partSnap.docs.filter(d => d.id !== hidden && d.data().status !== 'observer').map(d => {
     const p = d.data();
-    return [d.id, { uid: d.id, displayName: p.displayName, isHost: !!p.isHost, status: p.status }];
+    return [d.id, { uid: d.id, displayName: p.displayName, isHost: !!p.isHost, status: p.status, online: isOnline(p, Date.now()) }];
   }));
   return { room, messages, participants };
 }
@@ -173,6 +174,14 @@ export async function runCheck(roomId, secrets, { reason, forced = false, caller
 
   try {
     const { room, messages, participants } = await fetchContext(roomId);
+    // Who is in the room now, and who joined / left since the previous check
+    const roster = Object.values(participants).filter(p => p.status === 'approved' && p.online).map(p => p.displayName || 'Participant').sort();
+    const prev = state.roster;
+    const joined = prev ? roster.filter(n => !prev.includes(n)) : [];
+    const left = prev ? prev.filter(n => !roster.includes(n)) : [];
+    const rosterNote = `Online now (${roster.length}): ${roster.join(', ') || 'nobody'}.`
+      + (joined.length ? ` Joined since your last check: ${joined.join(', ')}.` : '')
+      + (left.length ? ` Left or went offline since your last check: ${left.join(', ')}.` : '');
     const out = await analyze({
       apiKey: secrets.anthropic,
       falKey: secrets.fal,
@@ -186,12 +195,13 @@ export async function runCheck(roomId, secrets, { reason, forced = false, caller
       reason: shadow ? `${reason} (shadow${profile.mode === 'proactive' ? ', cooldown' : ''})` : reason,
       callerUid,
       visible,
-      note
+      note,
+      rosterNote
     });
 
     const latestRoom = (await roomRef(roomId).get()).data() || {};
     const aborted = (latestRoom.aiAbortAt || 0) > startedAt;
-    const stateUpdate = { msgsSinceCheck: 0, lastCheckAt: Date.now() };
+    const stateUpdate = { msgsSinceCheck: 0, lastCheckAt: Date.now(), roster };
     const memoryUpdate = {};
 
     if (aborted) {

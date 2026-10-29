@@ -205,7 +205,7 @@ watch(() => roomStore.currentRoom?.messages.length, (count = 0) => {
       if (isMentioning(latest, authStore.displayName, authStore.uid)) {
         roomStore.pushToast(
           t('room.taggedBy', { icon: latest.senderUid === 'ai_mentor' ? '✨' : '💬', name: latest.senderName }),
-          latest.content.slice(0, 100),
+          '', // title only; the message itself is in the chat
           'info'
         );
       }

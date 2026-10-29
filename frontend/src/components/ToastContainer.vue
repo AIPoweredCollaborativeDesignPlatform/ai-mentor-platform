@@ -27,7 +27,7 @@ const roomStore = useRoomStore();
           
           <div class="flex-1 flex flex-col">
             <h4 class="text-sm font-bold text-ink">{{ toast.title }}</h4>
-            <p class="text-[11px] text-slate-300">{{ toast.description }}</p>
+            <p v-if="toast.description" class="text-[11px] text-slate-300">{{ toast.description }}</p>
           </div>
           
           <button @click="roomStore.removeToast(toast.id)" class="text-ink/50 hover:text-ink transition mt-0.5">

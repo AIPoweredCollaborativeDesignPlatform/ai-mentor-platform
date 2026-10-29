@@ -187,9 +187,11 @@ export const createStudyRoom = onCall({ maxInstances: 10 }, async request => {
   requireAuth(request);
   const d = request.data || {};
   const observer = isObserverToken(request.auth.token);
-  if ((d.profileId || d.asParticipant) && !observer) throw new HttpsError('permission-denied', 'Study staff only');
+  if (d.profileId && !observer) throw new HttpsError('permission-denied', 'Study staff only');
+  // Only study staff can create a room as its invisible host; everyone else takes part in their own room
+  const asParticipant = observer ? d.asParticipant === true : true;
   try {
-    return await createRoom(request.auth.uid, { ...d, asParticipant: d.asParticipant === true, profileId: d.profileId || null }, request.auth.token.email || request.auth.uid);
+    return await createRoom(request.auth.uid, { ...d, asParticipant, profileId: d.profileId || null }, request.auth.token.email || request.auth.uid);
   } catch (err) {
     throw new HttpsError('internal', err?.message || String(err));
   }

@@ -8,7 +8,8 @@ export const languageName = code => LANGUAGE_NAMES[code] || LANGUAGE_NAMES['zh-T
 
 const TEN_MINUTES_SEC = 600;
 
-const teamSize = participants => Object.values(participants || {}).filter(p => p.status === 'approved').length;
+// People in the room right now (engine.js fetchContext marks `online`)
+const teamSize = participants => Object.values(participants || {}).filter(p => p.status === 'approved' && p.online !== false).length;
 
 /** Engagement profile per member; only for the AI's internal facilitation, never to be shown to users. */
 function teamDynamics(participants, messages) {

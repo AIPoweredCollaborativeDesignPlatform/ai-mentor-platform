@@ -78,6 +78,8 @@ export interface RoomData {
   roomName?: string;
   roomEmoji?: string;
   hostUid: string;
+  /** Who created the room (also when it has no host because the creator joined as a participant) */
+  createdBy?: string;
   createdAt: number;
   roomStatus?: 'active' | 'ended';
   mentorConfig: MentorConfig;

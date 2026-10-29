@@ -265,7 +265,7 @@ export function useRoomSession(ctx: RoomContext) {
   // ---------- Create / join ----------
   /**
    * The server picks a random never-used 4-digit PIN and creates the room (functions/src/rooms.js).
-   * `asParticipant` (administrator / observers): the room has no researcher; the creator then joins
+   * `asParticipant` (always, except staff who choose): the room has no host; the creator then joins
    * through the waiting room like everyone else. `profileId`: condition chosen at creation (staff only).
    */
   const createRoom = async (roomName?: string, roomEmoji?: string, opts: { asParticipant?: boolean; profileId?: string } = {}) => {
@@ -283,7 +283,8 @@ export function useRoomSession(ctx: RoomContext) {
       profileId: opts.profileId || null
     });
     const { roomId, pin } = created;
-    if (!opts.asParticipant) {
+    // The server decides: only study staff can be a room's (invisible) host; everyone else joins their own room
+    if (created.hostUid) {
       myStatus.value = 'approved';
       upsertMyRoomIndex(roomId, {
         roomId,

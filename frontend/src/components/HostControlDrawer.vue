@@ -269,7 +269,7 @@ onUnmounted(() => {
               <h4 class="font-semibold text-sm text-slate-100">{{ t('drawer.roomDetails') }}</h4>
             </div>
             <span
-              v-if="roomStore.isHost"
+              v-if="roomStore.canEditRoomDetails"
               class="text-[10px] font-medium px-2 py-0.5 rounded-full bg-sky-500/20 text-sky-300 border border-sky-500/30 flex items-center gap-1"
             >
               {{ t('drawer.hostEdit') }}
@@ -287,15 +287,15 @@ onUnmounted(() => {
             <div class="relative shrink-0">
               <button
                 type="button"
-                @click="roomStore.isHost ? (isEmojiPickerOpen = !isEmojiPickerOpen) : null"
-                :disabled="!roomStore.isHost"
+                @click="roomStore.canEditRoomDetails ? (isEmojiPickerOpen = !isEmojiPickerOpen) : null"
+                :disabled="!roomStore.canEditRoomDetails"
                 class="w-13 h-13 rounded-2xl bg-slate-900 border-2 transition-all flex items-center justify-center text-2xl sm:text-3xl shadow-inner group relative"
-                :class="roomStore.isHost ? 'border-slate-700 hover:border-sky-400 cursor-pointer hover:scale-105 active:scale-95' : 'border-slate-800 cursor-default opacity-90'"
-                :title="roomStore.isHost ? t('drawer.changeAvatar') : t('drawer.roomAvatar')"
+                :class="roomStore.canEditRoomDetails ? 'border-slate-700 hover:border-sky-400 cursor-pointer hover:scale-105 active:scale-95' : 'border-slate-800 cursor-default opacity-90'"
+                :title="roomStore.canEditRoomDetails ? t('drawer.changeAvatar') : t('drawer.roomAvatar')"
               >
                 <span>{{ editRoomEmoji || '💡' }}</span>
                 <span
-                  v-if="roomStore.isHost"
+                  v-if="roomStore.canEditRoomDetails"
                   class="absolute -bottom-1 -right-1 p-1 bg-sky-600 group-hover:bg-sky-500 text-white rounded-full shadow-md transition"
                   :title="t('drawer.changeEmoji')"
                 >
@@ -312,7 +312,7 @@ onUnmounted(() => {
               <div class="flex items-center gap-1.5">
                 <input
                   v-model="editRoomName"
-                  :disabled="!roomStore.isHost"
+                  :disabled="!roomStore.canEditRoomDetails"
                   @keydown.enter.prevent="handleSaveRoomInfo"
                   type="text"
                   :placeholder="t('drawer.roomNamePlaceholder')"
@@ -320,7 +320,7 @@ onUnmounted(() => {
                   class="flex-1 bg-slate-900 border border-slate-700 disabled:opacity-60 disabled:cursor-not-allowed rounded-xl px-3 py-1.5 text-xs text-ink placeholder-slate-500 focus:outline-none focus:border-sky-500 transition min-w-0"
                 />
                 <button
-                  v-if="roomStore.isHost"
+                  v-if="roomStore.canEditRoomDetails"
                   type="button"
                   @click="handleSaveRoomInfo"
                   :disabled="isSavingRoomInfo || (!editRoomName.trim() && !editRoomEmoji)"
@@ -336,7 +336,7 @@ onUnmounted(() => {
 
           <!-- Inline Searchable Room Emoji Picker -->
           <div
-            v-if="isEmojiPickerOpen && roomStore.isHost"
+            v-if="isEmojiPickerOpen && roomStore.canEditRoomDetails"
             class="p-3 bg-slate-900/95 border border-sky-500/40 rounded-2xl space-y-2.5 animate-in fade-in zoom-in-95 shadow-xl"
           >
             <div class="flex items-center justify-between pb-1 border-b border-slate-800">

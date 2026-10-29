@@ -394,7 +394,7 @@ export default {
   "home.asParticipantTitle": "Unchecked: you are the host, an invisible observer who can end / reopen. Checked: you join like any participant (nickname, consent) and count toward the room size",
   "home.chooseEmblem": "Choose Room Emblem",
   "home.createFailed": "Could not create the room",
-  "home.createHint": "You'll be the host with a 4-digit PIN",
+  "home.createHint": "You host it and take part in the discussion; you get a 4-digit PIN",
   "home.createMeeting": "Create Meeting",
   "home.createNow": "Create Now",
   "home.creating": "Creating...",

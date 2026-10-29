@@ -12,9 +12,10 @@ import {
   LayoutDashboard,
   Search,
   X,
-  Loader2
+  Loader2,
+  LogOut
 } from 'lucide-vue-next';
-import { computed, onMounted } from 'vue';
+import { computed, onMounted, watch } from 'vue';
 import { listProfiles } from '../services/admin';
 import { modeLabel, type AiProfile } from '../utils/aiProfiles';
 import { t } from '../i18n';
@@ -66,30 +67,44 @@ const readCachedProfiles = (): AiProfile[] => {
 const profiles = ref<AiProfile[]>(isStudyAdmin.value ? readCachedProfiles() : []);
 const selectedProfileId = ref('');
 const createAsParticipant = ref(false);
-onMounted(async () => {
+let profilesLoaded = false;
+const loadProfiles = async () => {
+  if (profilesLoaded || !isStudyAdmin.value) return;
   await authStore.waitForAuthReady().catch(() => {});
-  // The remembered role is good enough to fetch with (rules decide); otherwise confirm it first
-  if (!isStudyAdmin.value) await authStore.waitForRole();
-  if (!isStudyAdmin.value) return;
   const list = await listProfiles().catch(() => null);
-  if (!list) return;
+  if (!list) return; // retried when the role is confirmed or the menu is opened
+  profilesLoaded = true;
   profiles.value = list;
   try {
     localStorage.setItem(PROFILE_CACHE, JSON.stringify(list.map(p => ({ id: p.id, name: p.name, mode: p.mode }))));
   } catch {
     // Storage blocked: the list just loads fresh next time
   }
+};
+onMounted(async () => {
+  // The remembered role is good enough to fetch with (rules decide)
+  loadProfiles();
+  await authStore.waitForRole();
+  loadProfiles();
 });
+// Signing in on this page (or the role arriving later) makes the staff controls appear: load the list then
+watch(isStudyAdmin, loadProfiles);
+
+const handleLogout = async () => {
+  await authStore.logoutGoogle();
+  profiles.value = [];
+  profilesLoaded = false;
+};
 
 const handleCreateRoom = async () => {
   isLoading.value = true;
   try {
-    const asParticipant = isStudyAdmin.value && createAsParticipant.value;
     const newRoom = await roomStore.createRoom(roomNameInput.value, selectedRoomEmoji.value, {
-      asParticipant,
+      asParticipant: !isStudyAdmin.value || createAsParticipant.value,
       profileId: (isStudyAdmin.value && selectedProfileId.value) || undefined
     });
-    router.push(asParticipant ? `/waiting/${newRoom.roomId}?as=participant` : `/room/${newRoom.roomId}`);
+    // No host: the creator fills in nickname and consent like everyone else
+    router.push(newRoom.hostUid ? `/room/${newRoom.roomId}` : `/waiting/${newRoom.roomId}?as=participant`);
   } catch (err: any) {
     console.error(err);
     roomStore.pushToast(t('home.createFailed'), err?.message || t('common.tryAgain'), 'error');
@@ -152,7 +167,11 @@ const handleGoogleSignIn = async () => {
 
 <template>
   <div class="min-h-[100dvh] flex flex-col items-center justify-center p-4 sm:p-6 bg-slate-950 overflow-y-auto relative">
-    <PageNav />
+    <PageNav>
+      <button v-if="authStore.isGoogleLinked" @click="handleLogout" class="page-nav-btn">
+        <LogOut class="w-3.5 h-3.5 text-rose-400" /> <span class="hidden sm:inline">{{ t('dash.signOut') }}</span>
+      </button>
+    </PageNav>
     <!-- Brand / Header -->
     <div class="text-center max-w-xl mb-5">
       <h1 class="text-xl sm:text-2xl font-black text-ink mb-1.5 tracking-tight flex items-center justify-center gap-2">
@@ -317,6 +336,7 @@ const handleGoogleSignIn = async () => {
           <select
             v-if="isStudyAdmin"
             v-model="selectedProfileId"
+            @focus="loadProfiles"
             class="mb-2 w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-sky-500"
             :title="t('home.profileTitle')"
           >

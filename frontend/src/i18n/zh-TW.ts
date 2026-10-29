@@ -396,7 +396,7 @@ const zhTW: Record<keyof typeof en, string> = {
   "home.asParticipantTitle": "不勾：你是會議發起人，在房內隱形觀察、可結束／重開。勾選：你像一般參與者一樣填暱稱與同意書進房、計入人數",
   "home.chooseEmblem": "選擇房間圖示",
   "home.createFailed": "無法建立房間",
-  "home.createHint": "你會成為會議發起人，取得 4 位數 PIN",
+  "home.createHint": "你是會議發起人，也和大家一起討論；取得 4 位數 PIN",
   "home.createMeeting": "建立房間",
   "home.createNow": "立即建立",
   "home.creating": "建立中...",

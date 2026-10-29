@@ -339,8 +339,10 @@ export async function handlePollVote(roomId, messageId, before, after, secrets) 
   const room = (await roomRef(roomId).get()).data();
   if (!room?.appVersion || (room.session && room.session.phase !== 'running')) return;
   const hidden = room.session ? room.hostUid : null;
+  // Majority of the people actually in the room now (someone who dropped out does not block the result)
+  const now = Date.now();
   const members = (await roomRef(roomId).collection('participants').where('status', '==', 'approved').get())
-    .docs.filter(d => d.id !== hidden).length;
+    .docs.filter(d => d.id !== hidden && isOnline(d.data(), now)).length;
   const needed = Math.floor(Math.max(members, 1) / 2) + 1;
   if (countVotes(after) < needed) return;
 

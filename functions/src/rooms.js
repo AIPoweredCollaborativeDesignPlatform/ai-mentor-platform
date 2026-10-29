@@ -40,9 +40,9 @@ async function reservePin(uid) {
 }
 
 /**
- * Creates a study room. The creator is the researcher (host) unless `asParticipant` (administrator
- * and observers only): then the room has no researcher, the creator joins like everyone else
- * (nickname + consent) and End / Reopen are left to the administrator.
+ * Creates a study room. With `asParticipant` (always for everyone except study staff, who choose) the
+ * room has no host: the creator joins like everyone else (nickname + consent), may still rename it
+ * (createdBy), and End / Reopen are left to the administrator. Otherwise the creator is the invisible host.
  */
 export async function createRoom(uid, { roomName, roomEmoji, language, mentorConfig, appVersion, displayName, avatar, asParticipant = false, profileId = null }, by) {
   const pin = await reservePin(uid);
@@ -148,7 +148,7 @@ export async function updateRoomDetails(roomId, uid, isAdmin, { roomName, roomEm
   const ref = db().doc(`rooms/${roomId}`);
   const room = (await ref.get()).data();
   if (!room) throw new Error('Room not found');
-  if (room.hostUid !== uid && !isAdmin) throw new Error('Only the room host can change the room details');
+  if (room.hostUid !== uid && room.createdBy !== uid && !isAdmin) throw new Error('Only the room creator can change the room details');
   const name = String(roomName || '').trim().slice(0, 60) || room.roomName;
   const emoji = String(roomEmoji || '').trim().slice(0, 8) || room.roomEmoji || '💡';
   if (name === room.roomName && emoji === room.roomEmoji) return { roomName: name, roomEmoji: emoji, changed: false };

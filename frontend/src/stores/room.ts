@@ -30,6 +30,8 @@ export const useRoomStore = defineStore('room', () => {
   window.addEventListener('offline', () => { isOnline.value = false; });
 
   const isHost = computed(() => currentRoom.value?.hostUid === authStore.uid);
+  // Room name / emoji: the host, whoever created the room (also as a participant), or the administrator
+  const canEditRoomDetails = computed(() => isHost.value || (!!authStore.uid && currentRoom.value?.createdBy === authStore.uid) || authStore.isAdmin);
   const participantsList = computed(() => (currentRoom.value ? Object.values(currentRoom.value.participants) : []));
   // The researcher (host) is an invisible observer: never listed or counted
   const approvedParticipants = computed(() => participantsList.value.filter(p => p.status === 'approved' && p.uid !== currentRoom.value?.hostUid));
@@ -100,6 +102,7 @@ export const useRoomStore = defineStore('room', () => {
     currentRoom,
     myStatus,
     isHost,
+    canEditRoomDetails,
     isOnline,
     toasts,
     approvedParticipants,

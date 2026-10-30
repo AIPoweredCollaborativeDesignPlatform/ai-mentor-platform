@@ -169,6 +169,12 @@
   textarea {
     font-size: 16px !important;
   }
+  /* Checkboxes and radios big enough for a finger */
+  input[type='checkbox'],
+  input[type='radio'] {
+    width: 1.125rem;
+    height: 1.125rem;
+  }
 }
 
 /* Scrollbars */

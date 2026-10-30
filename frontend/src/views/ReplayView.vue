@@ -54,6 +54,7 @@ const showBoard = (id: string) => {
   boardId.value = id;
   followBoard.value = false;
 };
+const boardId = ref<string | null>(null);
 // Final objects, used only for objects whose stored event was cut short (older recordings)
 const finalBoards = ref<Record<string, Map<string, ReplayObject>>>({});
 watch(() => boardId.value, async id => {
@@ -61,7 +62,6 @@ watch(() => boardId.value, async id => {
   const needs = [...(state.value.boards.get(id)?.values() || [])].some(o => wasTruncated(o.fabric));
   if (needs) finalBoards.value = { ...finalBoards.value, [id]: await loadFinalBoard(roomId, id).catch(() => new Map()) };
 });
-const boardId = ref<string | null>(null);
 watch(boardIds, ids => {
   if (!boardId.value || !ids.includes(boardId.value)) boardId.value = ids[0] || null;
 });
@@ -150,6 +150,20 @@ const ROLE_CLASS: Record<string, string> = {
   unknown: 'text-slate-500'
 };
 
+// Board canvas follows its box, so it fits a phone as well as a desktop
+const boardBox = ref<HTMLElement | null>(null);
+const boardSize = ref({ w: 0, h: 0 });
+const boardObserver = new ResizeObserver(([entry]) => {
+  const w = Math.floor(entry.contentRect.width);
+  const h = Math.floor(entry.contentRect.height);
+  if (w !== boardSize.value.w || h !== boardSize.value.h) boardSize.value = { w, h };
+});
+watch(boardBox, (el, old) => {
+  if (old) boardObserver.unobserve(old);
+  if (el) boardObserver.observe(el);
+});
+onUnmounted(() => boardObserver.disconnect());
+
 onMounted(async () => {
   await authStore.waitForAuthReady().catch(() => {});
   await authStore.waitForRole();
@@ -171,7 +185,7 @@ onMounted(async () => {
 <template>
   <div class="min-h-[100dvh] bg-slate-950 text-slate-100 pt-safe px-safe">
     <header class="min-h-14 py-2 border-b border-slate-800 bg-slate-900/90 px-4 flex flex-wrap items-center gap-x-3 gap-y-1">
-      <router-link to="/admin" class="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400"><ArrowLeft class="w-4 h-4" /></router-link>
+      <router-link to="/admin" class="p-1.5 pointer-coarse:p-2.5 rounded-lg hover:bg-slate-800 text-slate-400"><ArrowLeft class="w-4 h-4" /></router-link>
       <h1 class="font-semibold text-sm">{{ tr('rp.title') }} <span class="font-mono text-sky-400">{{ roomId }}</span></h1>
       <span v-if="events.length" class="text-[11px] text-slate-500">{{ tr('rp.eventsLength', { count: events.length, length: fmtOffset(tEnd - t0) }) }}</span>
       <ThemeSwitch class="ml-auto" />
@@ -190,21 +204,21 @@ onMounted(async () => {
 
     <main v-else class="p-3 sm:p-4 space-y-3 max-w-7xl mx-auto">
       <!-- Transport -->
-      <div class="flex items-center gap-2 sm:gap-3 p-3 rounded-2xl border border-slate-800 bg-slate-900/70">
-        <button @click="togglePlay" class="p-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white" :title="playing ? tr('rp.pause') : tr('rp.play')">
+      <div class="sticky top-[env(safe-area-inset-top)] z-10 flex items-center gap-2 sm:gap-3 p-3 rounded-2xl border border-slate-800 bg-slate-900 shadow-lg">
+        <button @click="togglePlay" class="p-2 pointer-coarse:p-2.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white" :title="playing ? tr('rp.pause') : tr('rp.play')">
           <Pause v-if="playing" class="w-4 h-4" /><Play v-else class="w-4 h-4" />
         </button>
-        <select v-model.number="speed" class="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs">
+        <select v-model.number="speed" class="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 pointer-coarse:py-2 text-xs">
           <option :value="1">1×</option><option :value="5">5×</option><option :value="10">10×</option><option :value="30">30×</option><option :value="60">60×</option>
         </select>
-        <span class="font-mono text-xs w-14 text-right">{{ fmtOffset(t - t0) }}</span>
-        <input type="range" class="flex-1 accent-sky-500" :min="t0" :max="tEnd" :step="100" v-model.number="t" />
+        <span class="font-mono text-xs w-12 sm:w-14 text-right shrink-0">{{ fmtOffset(t - t0) }}</span>
+        <input type="range" class="flex-1 min-w-0 accent-sky-500 pointer-coarse:h-8" :min="t0" :max="tEnd" :step="100" v-model.number="t" />
         <span class="font-mono text-xs text-slate-500 w-14 hidden xs:inline">{{ fmtOffset(tEnd - t0) }}</span>
       </div>
 
       <div class="grid lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-3">
         <!-- Chat at t -->
-        <section class="rounded-2xl border border-slate-800 bg-slate-900/70 flex flex-col h-[440px]">
+        <section class="rounded-2xl border border-slate-800 bg-slate-900/70 flex flex-col h-[60dvh] min-h-[300px] lg:h-[440px]">
           <h2 class="px-3 py-2 text-xs font-semibold text-slate-300 border-b border-slate-800">{{ tr('rp.chat', { count: state.messages.filter(m => !m.deleted).length }) }}</h2>
           <div ref="chatRef" class="flex-1 overflow-y-auto p-3 space-y-2 text-xs">
             <div v-for="m in state.messages" :key="m.id" :class="m.deleted ? 'opacity-40 line-through' : ''">
@@ -238,7 +252,7 @@ onMounted(async () => {
                 </template>
                 <template v-else-if="m.assetType === 'moodboard'">
                   <div v-if="m.assetPayload?.keywords?.length" class="text-slate-400">{{ m.assetPayload.keywords.join(', ') }}</div>
-                  <div class="grid grid-cols-4 gap-1">
+                  <div class="grid grid-cols-3 xs:grid-cols-4 gap-1">
                     <div v-for="(img, k) in m.assetPayload?.images || []" :key="k" class="aspect-[4/3] rounded bg-slate-800 overflow-hidden" :title="img.prompt || img.title">
                       <img v-if="isUrl(img.url)" :src="img.url" class="w-full h-full object-cover" />
                       <span v-else class="block p-1 text-[9px] text-slate-500">{{ tr('rp.notGenerated') }}</span>
@@ -271,21 +285,21 @@ onMounted(async () => {
         </section>
 
         <!-- Board at t -->
-        <section class="rounded-2xl border border-slate-800 bg-slate-900/70 flex flex-col h-[440px]">
-          <div class="px-3 py-2 border-b border-slate-800 flex items-center gap-2 overflow-x-auto">
+        <section class="rounded-2xl border border-slate-800 bg-slate-900/70 flex flex-col h-[50dvh] min-h-[280px] lg:h-[440px]">
+          <div class="px-3 py-2 border-b border-slate-800 flex items-center gap-2 overflow-x-auto no-scrollbar">
             <h2 class="text-xs font-semibold text-slate-300 shrink-0">{{ tr('rp.boards') }}</h2>
             <button
               v-for="id in boardIds"
               :key="id"
               @click="pickBoard(id)"
-              class="px-2 py-0.5 rounded-lg text-[10px] font-mono shrink-0 border"
+              class="px-2 py-0.5 pointer-coarse:py-1.5 rounded-lg text-[10px] font-mono shrink-0 border"
               :class="id === boardId ? 'border-sky-400 bg-sky-500/15 text-sky-200' : 'border-slate-700 text-slate-400'"
               :title="id"
             >{{ boardLabel(id) }}</button>
             <label class="ml-auto flex items-center gap-1 text-[10px] text-slate-400 shrink-0"><input type="checkbox" v-model="followBoard" />{{ tr('rp.followBoard') }}</label>
           </div>
-          <div class="flex-1 flex items-center justify-center overflow-hidden p-2">
-            <BoardReplayCanvas v-if="boardId" :objects="boardObjects" :width="640" :height="380" />
+          <div ref="boardBox" class="flex-1 min-h-0 min-w-0 flex items-center justify-center overflow-hidden p-2">
+            <BoardReplayCanvas v-if="boardId && boardSize.w > 0" :objects="boardObjects" :width="boardSize.w" :height="boardSize.h" />
             <p v-else class="text-xs text-slate-500">{{ tr('rp.noBoardYet') }}</p>
           </div>
         </section>
@@ -293,19 +307,19 @@ onMounted(async () => {
 
       <!-- Timeline -->
       <section class="rounded-2xl border border-slate-800 bg-slate-900/70">
-        <div class="px-3 py-2 border-b border-slate-800 flex flex-wrap items-center gap-3 text-[11px]">
+        <div class="px-3 py-2 border-b border-slate-800 flex flex-wrap items-center gap-x-3 gap-y-2 text-[11px]">
           <h2 class="text-xs font-semibold text-slate-300">{{ tr('rp.timeline') }}</h2>
           <label class="flex items-center gap-1 text-slate-400"><input type="checkbox" v-model="followTimeline" />{{ tr('rp.followTimeline') }}</label>
           <label class="flex items-center gap-1 text-violet-300"><input type="checkbox" v-model="hideObserver" />{{ tr('rp.hideObserver') }}</label>
           <label v-for="g in KIND_GROUPS" :key="g.id" class="flex items-center gap-1 text-slate-300"><input type="checkbox" v-model="groups[g.id]" />{{ tr(g.label) }}</label>
         </div>
-        <div ref="listRef" class="relative max-h-72 overflow-y-auto text-[11px] font-mono">
+        <div ref="listRef" class="relative max-h-[50dvh] lg:max-h-72 overflow-y-auto text-[11px] font-mono">
           <button
             v-for="{ e, i } in listed"
             :key="e.id"
             :data-current="i === idx"
             @click="jumpTo(e)"
-            class="w-full text-left px-3 py-1 flex gap-3 hover:bg-slate-800/60"
+            class="w-full text-left px-3 py-1 pointer-coarse:py-2 flex gap-2 sm:gap-3 hover:bg-slate-800/60"
             :class="[i === idx ? 'bg-sky-500/15' : '', i > idx ? 'opacity-40' : '']"
           >
             <span class="text-slate-500 w-12 shrink-0">{{ fmtOffset(e.at - t0) }}</span>

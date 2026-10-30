@@ -468,7 +468,7 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
               </div>
               <div v-if="p.description" class="text-[11px] text-slate-500 mt-0.5">{{ p.description }}</div>
             </div>
-            <div class="flex gap-1.5 shrink-0">
+            <div class="flex flex-wrap gap-1.5 w-full sm:w-auto sm:shrink-0">
               <button @click="editing = p" class="px-2.5 py-1 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs">{{ t('adm.edit') }}</button>
               <button @click="duplicate(p)" class="px-2.5 py-1 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs">{{ t('adm.duplicate') }}</button>
               <button v-if="system.defaultProfileId !== p.id" @click="setDefaultProfile(p.id!)" class="px-2.5 py-1 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs">{{ t('adm.setDefault') }}</button>
@@ -520,9 +520,9 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
               <span v-if="r.upload.error" class="ml-1 text-rose-300/80">{{ r.upload.error }}</span>
             </div>
           </div>
-          <div class="flex flex-wrap items-center gap-1.5">
+          <div class="flex flex-wrap items-center gap-1.5 w-full sm:w-auto">
             <template v-if="isAdmin">
-            <select v-model="pendingChoice[r.roomId]" :class="select">
+            <select v-model="pendingChoice[r.roomId]" :class="[select, 'flex-1 min-w-0 sm:flex-none']">
               <option value="" disabled>{{ t('adm.chooseProfile') }}</option>
               <option v-for="p in profiles" :key="p.id" :value="p.id">{{ p.name }} v{{ p.version }}</option>
             </select>
@@ -541,7 +541,7 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
               <Trash2 class="w-3.5 h-3.5" />
             </button>
             </template>
-            <router-link v-if="r.session" :to="`/admin/replay/${r.roomId}`" class="px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs">{{ t('adm.replay') }}</router-link>
+            <router-link v-if="r.session" :to="`/admin/replay/${r.roomId}`" class="adm-link inline-flex items-center px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs">{{ t('adm.replay') }}</router-link>
           </div>
         </div>
 
@@ -600,7 +600,7 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
         </div>
         <div :class="card" class="space-y-3">
           <h3 class="text-sm font-semibold">{{ t('adm.actual') }}</h3>
-          <div class="flex items-center gap-2 text-xs">
+          <div class="flex flex-wrap items-center gap-2 text-xs">
             {{ t('adm.lastDays1') }} <input type="number" min="1" v-model.number="usageDays" class="w-16 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1" /> {{ t('adm.lastDays2') }}
             <button @click="loadActualUsage" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700">{{ t('adm.compute') }}</button>
             <Loader2 v-if="usageLoading" class="w-4 h-4 animate-spin text-slate-400" />
@@ -639,8 +639,8 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
         </div>
         <div class="space-y-2 text-xs">
           <h3 class="text-sm font-semibold">{{ t('adm.prices') }}</h3>
-          <div v-for="m in MODEL_OPTIONS" :key="m" class="flex items-center gap-2">
-            <span class="w-40 font-mono text-slate-400">{{ m }}</span>
+          <div v-for="m in MODEL_OPTIONS" :key="m" class="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span class="w-full sm:w-40 font-mono text-slate-400 truncate">{{ m }}</span>
             {{ t('adm.priceIn') }} <input type="number" step="0.01" v-model.number="system.prices[m].inputPerMTok" class="w-20 bg-slate-950 border border-slate-700 rounded px-2 py-1" />
             {{ t('adm.priceOut') }} <input type="number" step="0.01" v-model.number="system.prices[m].outputPerMTok" class="w-20 bg-slate-950 border border-slate-700 rounded px-2 py-1" /> {{ t('adm.perMTok') }}
           </div>
@@ -669,7 +669,7 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
               </button>
             </div>
             <form @submit.prevent="saveApiKey(k.provider)" class="flex items-center gap-2">
-              <input v-model="apiDrafts[k.provider]" type="password" autocomplete="off" :placeholder="t('api.newKey')" class="flex-1 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 font-mono" />
+              <input v-model="apiDrafts[k.provider]" type="password" autocomplete="off" :placeholder="t('api.newKey')" class="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 font-mono" />
               <button :disabled="apiBusy || !apiDrafts[k.provider]?.trim()" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold disabled:opacity-40">{{ t('api.save') }}</button>
               <button v-if="k.source === 'admin'" type="button" @click="clearApiKey(k.provider)" :disabled="apiBusy" class="px-2 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 disabled:opacity-40">{{ t('api.revert') }}</button>
             </form>
@@ -684,12 +684,12 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
             <span class="text-[11px] text-slate-500">{{ t('adm.primaryAdmin') }}</span>
           </div>
           <div v-for="a in admins" :key="a.email" class="flex items-center gap-2">
-            <span class="font-mono text-slate-300">{{ a.email }}</span>
+            <span class="font-mono text-slate-300 min-w-0 truncate">{{ a.email }}</span>
             <span class="text-[11px] text-slate-500">{{ fmtTime(a.addedAt) }}</span>
             <button v-if="authStore.isPrimaryAdmin" @click="changeAdmin(a.email, false)" :disabled="adminBusy" class="ml-auto px-2 py-1 rounded border border-slate-700 hover:bg-slate-800 text-[11px] disabled:opacity-40">{{ t('adm.remove') }}</button>
           </div>
           <form v-if="authStore.isPrimaryAdmin" @submit.prevent="changeAdmin(adminEmail, true)" class="flex items-center gap-2">
-            <input v-model="adminEmail" type="email" placeholder="name@gmail.com" class="flex-1 bg-slate-950 border border-slate-700 rounded px-2 py-1.5" />
+            <input v-model="adminEmail" type="email" placeholder="name@gmail.com" class="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded px-2 py-1.5" />
             <button :disabled="adminBusy || !adminEmail.trim()" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold disabled:opacity-40">{{ t('adm.add') }}</button>
           </form>
         </div>
@@ -697,13 +697,13 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
           <h3 class="text-sm font-semibold">{{ t('adm.observers') }}</h3>
           <p class="text-[11px] text-slate-500">{{ t('adm.observersHint') }}</p>
           <div v-for="o in observers" :key="o.email" class="flex items-center gap-2">
-            <span class="font-mono text-slate-300">{{ o.email }}</span>
+            <span class="font-mono text-slate-300 min-w-0 truncate">{{ o.email }}</span>
             <span class="text-[11px] text-slate-500">{{ fmtTime(o.addedAt) }}</span>
             <button @click="changeObserver(o.email, false)" :disabled="observerBusy" class="ml-auto px-2 py-1 rounded border border-slate-700 hover:bg-slate-800 text-[11px] disabled:opacity-40">{{ t('adm.remove') }}</button>
           </div>
           <p v-if="!observers.length" class="text-[11px] text-slate-500">{{ t('adm.noObservers') }}</p>
           <form @submit.prevent="changeObserver(observerEmail, true)" class="flex items-center gap-2">
-            <input v-model="observerEmail" type="email" placeholder="name@gmail.com" class="flex-1 bg-slate-950 border border-slate-700 rounded px-2 py-1.5" />
+            <input v-model="observerEmail" type="email" placeholder="name@gmail.com" class="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded px-2 py-1.5" />
             <button :disabled="observerBusy || !observerEmail.trim()" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold disabled:opacity-40">{{ t('adm.add') }}</button>
           </form>
         </div>
@@ -721,3 +721,11 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
     </main>
   </div>
 </template>
+
+<style scoped>
+/* Touch screens: every control at least 40px, checkboxes larger */
+@media (pointer: coarse) {
+  button, select, input:not([type='checkbox']), .adm-link { min-height: 2.5rem; }
+  button { min-width: 2.5rem; }
+}
+</style>

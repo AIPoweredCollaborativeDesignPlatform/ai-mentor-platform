@@ -140,7 +140,7 @@ const input = 'w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 
         <textarea v-model="draft.persona" rows="3" :class="input"></textarea>
       </label>
       <div class="text-[11px]">
-        <button type="button" class="text-sky-400 hover:underline" @click="toggleRationale('persona')">
+        <button type="button" class="text-sky-400 hover:underline pointer-coarse:py-1.5" @click="toggleRationale('persona')">
           {{ hasRationale('persona') ? t('pe.rationaleSet') : t('pe.rationaleAdd') }}
         </button>
         <textarea v-if="openRationale.persona" v-model="draft.rationale.persona" rows="2" :class="[input, 'mt-1 text-xs']" :placeholder="t('pe.rationalePlaceholder')"></textarea>
@@ -162,13 +162,13 @@ const input = 'w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 
               :max="f.max"
               :value="numberValue(f.path)"
               @input="setNumber(f.path, ($event.target as HTMLInputElement).value)"
-              class="w-20 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-sm text-right text-slate-100 focus:outline-none focus:border-sky-500"
+              class="w-20 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 pointer-coarse:py-2 text-sm text-right text-slate-100 focus:outline-none focus:border-sky-500"
             />
             <span class="text-xs text-slate-400 w-8">{{ f.unit ? t(f.unit) : '' }}</span>
           </div>
         </div>
         <div class="mt-1.5 text-[11px]">
-          <button type="button" class="text-sky-400 hover:underline" @click="toggleRationale(f.path)">
+          <button type="button" class="text-sky-400 hover:underline pointer-coarse:py-1.5" @click="toggleRationale(f.path)">
             {{ hasRationale(f.path) ? t('pe.rationaleSet') : t('pe.rationaleAdd') }}
           </button>
           <span v-if="!hasRationale(f.path)" class="ml-2 text-amber-400/70">{{ t('pe.provisional') }}</span>
@@ -198,14 +198,14 @@ const input = 'w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 
       </div>
     </section>
 
-    <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+    <div class="sticky bottom-0 -mx-4 -mb-4 px-4 pt-2 pb-[calc(0.75rem+env(safe-area-inset-bottom))] flex flex-wrap items-center justify-end gap-2 border-t border-slate-800 bg-slate-900 rounded-b-2xl">
       <span class="text-[11px] text-slate-500 mr-auto">{{ t('pe.versionNote', { version: profile.version || 0 }) }}</span>
-      <button type="button" @click="emit('cancel')" class="px-4 py-2 rounded-lg text-xs text-slate-400 hover:text-ink">{{ t('common.cancel') }}</button>
+      <button type="button" @click="emit('cancel')" class="px-4 py-2 pointer-coarse:py-2.5 rounded-lg text-xs text-slate-400 hover:text-ink">{{ t('common.cancel') }}</button>
       <button
         type="button"
         @click="save"
         :disabled="saving || !draft.name.trim()"
-        class="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold disabled:opacity-40"
+        class="px-4 py-2 pointer-coarse:py-2.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold disabled:opacity-40"
       >
         {{ saving ? t('pe.saving') : t('pe.save') }}
       </button>

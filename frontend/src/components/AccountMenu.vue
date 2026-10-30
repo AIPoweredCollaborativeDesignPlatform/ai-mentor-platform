@@ -42,7 +42,7 @@ const toGuest = () => run(() => authStore.logoutGoogle());
     </button>
     <template v-if="open">
       <div class="fixed inset-0 z-40" @click="open = false"></div>
-      <div class="absolute right-0 mt-1 z-50 w-64 rounded-xl border border-slate-700 bg-slate-950 shadow-xl p-1.5 text-xs">
+      <div class="absolute right-0 mt-1 z-50 w-64 max-w-[calc(100vw-1.5rem)] rounded-xl border border-slate-700 bg-slate-950 shadow-xl p-1.5 text-xs">
         <p v-if="authStore.knownAccounts.length" class="px-2 pt-1 pb-1.5 text-[11px] text-slate-500">{{ t('acct.title') }}</p>
         <div v-for="a in authStore.knownAccounts" :key="a.email" class="group flex items-center gap-2 rounded-lg hover:bg-slate-800">
           <button type="button" class="flex-1 min-w-0 flex items-center gap-2 px-2 py-1.5 text-left disabled:opacity-50" :disabled="busy" @click="switchTo(a.email)">
@@ -57,7 +57,7 @@ const toGuest = () => run(() => authStore.logoutGoogle());
           <button
             v-if="!(authStore.isGoogleLinked && a.email === authStore.email)"
             type="button"
-            class="p-1.5 mr-1 rounded text-slate-500 hover:text-slate-200 opacity-0 group-hover:opacity-100"
+            class="p-1.5 mr-1 rounded text-slate-500 hover:text-slate-200 opacity-0 group-hover:opacity-100 pointer-coarse:opacity-100"
             :title="t('acct.forget')"
             @click="authStore.forgetAccount(a.email)"
           >

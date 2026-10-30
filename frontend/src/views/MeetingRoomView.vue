@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
-import { Clock, Eye, Loader2, Power, Users, X } from 'lucide-vue-next';
+import { Clock, Eye, Loader2, MessageSquare, PenTool, Power, Users, X } from 'lucide-vue-next';
 import { useAuthStore } from '../stores/auth';
 import { useRoomStore } from '../stores/room';
 import type { MessageItem } from '../types';
@@ -9,6 +9,7 @@ import { formatDate, isDuplicateBoardPointer, isMentioning } from '../utils/chat
 import { useNotificationSound } from '../composables/useNotificationSound';
 import { useWhiteboardResize, useWhiteboardSession, type WhiteboardHandle } from '../composables/useWhiteboardSession';
 import { useAiReadTracking } from '../composables/useAiReadTracking';
+import { useStackedLayout } from '../composables/useStackedLayout';
 import { setRecording, startResearchLog, stopResearchLog } from '../services/researchLog';
 import { reopenStudySession } from '../services/session';
 import { setRoomLocale, t } from '../i18n';
@@ -97,6 +98,23 @@ const wb = useWhiteboardSession(whiteboardRef, () => lockReason.value, () => isO
 const { isWhiteboardOpen } = wb;
 const { whiteboardWidth, isResizingWhiteboard, startWhiteboardResize } = useWhiteboardResize(whiteboardRef, isWhiteboardOpen);
 
+// Phones and portrait tablets show chat or whiteboard, switched with tabs (useStackedLayout)
+const isStacked = useStackedLayout();
+const mobilePane = ref<'chat' | 'board'>('chat');
+const unseenChat = ref(0);
+const showPaneTabs = computed(() => isStacked.value && isWhiteboardOpen.value);
+const showChatPane = computed(() => !showPaneTabs.value || mobilePane.value === 'chat');
+const showBoardPane = computed(() => !showPaneTabs.value || mobilePane.value === 'board');
+const switchPane = (pane: 'chat' | 'board') => {
+  mobilePane.value = pane;
+  if (pane === 'chat') {
+    unseenChat.value = 0;
+    if (!showScrollFab.value) scrollToBottom();
+  }
+};
+// Opening a board (new, or from a chat card) brings it to the front; closing it returns to chat
+watch(() => [isWhiteboardOpen.value, wb.activeBoardId.value] as const, ([open]) => switchPane(open ? 'board' : 'chat'));
+
 const composerRef = ref<InstanceType<typeof ChatComposer> | null>(null);
 const shareWhiteboardExport = (file: File) => composerRef.value?.sendFile(file);
 
@@ -105,7 +123,8 @@ const shareWhiteboardExport = (file: File) => composerRef.value?.sendFile(file);
 const isMeetingClosed = computed(() => Boolean(lockReason.value));
 const isLegacyClosed = computed(() => !session.value && roomStore.currentRoom?.roomStatus === 'ended');
 const showSessionBar = computed(() => Boolean(session.value) && (isObserving.value || session.value!.phase !== 'running'));
-const drawerTopOffset = computed(() => (isLegacyClosed.value || showSessionBar.value ? '89px' : '56px'));
+// Below the header (+ the notch inset when opened from the home screen)
+const drawerTopOffset = computed(() => `calc(${isLegacyClosed.value || showSessionBar.value ? 89 : 56}px + env(safe-area-inset-top))`);
 const isSettingsOpen = ref(false);
 const isAssetsOpen = ref(false);
 const isProfileOpen = ref(false);
@@ -202,6 +221,7 @@ watch(() => roomStore.currentRoom?.messages.length, (count = 0) => {
     const latest = roomStore.currentRoom!.messages[count - 1];
     if (latest && latest.senderUid !== authStore.uid && latest.senderUid !== 'system') {
       playNotificationSound();
+      if (!showChatPane.value) unseenChat.value++;
       if (isMentioning(latest, authStore.displayName, authStore.uid)) {
         roomStore.pushToast(
           t('room.taggedBy', { icon: latest.senderUid === 'ai_mentor' ? '✨' : '💬', name: latest.senderName }),
@@ -325,7 +345,7 @@ onUnmounted(() => {
     <p class="text-xs">{{ t('room.verifying') }}</p>
   </div>
 
-  <div v-else class="h-[100dvh] flex flex-col bg-slate-950 text-slate-100 overflow-hidden">
+  <div v-else class="h-[100dvh] flex flex-col bg-slate-950 text-slate-100 overflow-hidden px-safe pt-safe">
     <RoomHeader
       :pin="pin"
       :isMeetingClosed="isLegacyClosed"
@@ -372,13 +392,28 @@ onUnmounted(() => {
       </span>
     </div>
 
+    <!-- Phones / portrait tablets: Chat | Whiteboard tabs while a board is open -->
+    <div v-if="showPaneTabs" class="h-10 shrink-0 flex border-b border-slate-800 bg-slate-900 text-xs font-semibold">
+      <button
+        v-for="pane in (['chat', 'board'] as const)"
+        :key="pane"
+        class="flex-1 inline-flex items-center justify-center gap-1.5 border-b-2 transition-colors"
+        :class="mobilePane === pane ? 'border-sky-500 text-ink' : 'border-transparent text-slate-400'"
+        @click="switchPane(pane)"
+      >
+        <component :is="pane === 'chat' ? MessageSquare : PenTool" class="w-4 h-4" />
+        {{ pane === 'chat' ? t('room.tabChat') : t('room.tabWhiteboard') }}
+        <span v-if="pane === 'chat' && unseenChat" class="min-w-[18px] h-[18px] px-1 rounded-full bg-sky-600 text-white text-[10px] leading-[18px] text-center">{{ unseenChat > 99 ? '99+' : unseenChat }}</span>
+      </button>
+    </div>
+
     <div class="flex-1 flex overflow-hidden w-full relative" :class="{ 'select-none': isResizingWhiteboard }">
       <!-- Blocks the canvas from capturing the mouse while resizing -->
       <div v-if="isResizingWhiteboard" class="fixed inset-0 z-50 cursor-col-resize pointer-events-auto"></div>
 
       <div
         class="flex flex-col h-full w-full min-w-0"
-        :class="[isResizingWhiteboard ? 'transition-none' : 'transition-all duration-75', isWhiteboardOpen ? 'hidden sm:flex sm:flex-1 sm:min-w-[260px]' : 'flex-1']"
+        :class="[isResizingWhiteboard ? 'transition-none' : 'transition-all duration-75', !showChatPane ? '!hidden' : isWhiteboardOpen && !isStacked ? 'flex-1 min-w-[260px]' : 'flex-1']"
       >
         <main ref="chatContainerRef" @scroll="handleScroll" class="flex-1 overflow-y-auto w-full relative custom-scrollbar" :class="{ 'is-scrolling': isScrolling }">
           <div class="max-w-5xl mx-auto w-full p-3 sm:p-5 space-y-3">
@@ -424,9 +459,9 @@ onUnmounted(() => {
       </div>
 
       <div
-        v-if="isWhiteboardOpen"
-        class="hidden sm:flex w-2.5 hover:w-3 bg-slate-900 hover:bg-indigo-500/80 active:bg-indigo-600 transition-all cursor-col-resize shrink-0 z-30 items-center justify-center select-none group border-x border-slate-800"
-        @mousedown="startWhiteboardResize"
+        v-if="isWhiteboardOpen && !isStacked"
+        class="flex w-2.5 hover:w-3 pointer-coarse:w-4 bg-slate-900 hover:bg-indigo-500/80 active:bg-indigo-600 transition-all cursor-col-resize shrink-0 z-30 items-center justify-center select-none touch-none group border-x border-slate-800"
+        @pointerdown="startWhiteboardResize"
         :title="t('room.resizeHandle')"
       >
         <div class="h-8 w-1 rounded-full bg-slate-600 group-hover:bg-slate-300 transition-colors"></div>
@@ -434,9 +469,10 @@ onUnmounted(() => {
 
       <div
         v-if="isWhiteboardOpen"
-        class="h-full relative overflow-hidden bg-slate-900 shrink-0 w-full sm:w-auto min-w-[320px] max-w-[calc(100%-260px)]"
-        :class="{ 'transition-none': isResizingWhiteboard }"
-        :style="whiteboardWidth ? { width: `${whiteboardWidth}px` } : { width: '68%' }"
+        v-show="showBoardPane"
+        class="h-full relative overflow-hidden bg-slate-900 shrink-0"
+        :class="[isStacked ? 'w-full pb-safe' : 'min-w-[320px] max-w-[calc(100%-260px)]', { 'transition-none': isResizingWhiteboard }]"
+        :style="isStacked ? undefined : whiteboardWidth ? { width: `${whiteboardWidth}px` } : { width: '68%' }"
       >
         <LiveBoardViewer
           v-if="wb.activeBoardId.value && isObserving"

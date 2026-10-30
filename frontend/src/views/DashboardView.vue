@@ -554,7 +554,7 @@ const confirmPermanentDelete = async () => {
 </script>
 
 <template>
-  <div class="min-h-[100dvh] bg-slate-950 text-slate-100 p-3.5 sm:p-6 pb-24 overflow-y-auto">
+  <div class="min-h-[100dvh] bg-slate-950 text-slate-100 p-3.5 sm:p-6 pb-24 pt-safe overflow-y-auto">
     <!-- Transient Trash Notification Banner -->
     <div
       v-if="trashNotification"
@@ -689,7 +689,7 @@ const confirmPermanentDelete = async () => {
             </template>
           </div>
 
-          <div v-else class="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             <div
               v-for="room in (isTrashView ? trashRooms : historyRooms)"
               :key="room.id"

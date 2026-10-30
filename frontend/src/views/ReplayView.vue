@@ -169,8 +169,8 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="min-h-[100dvh] bg-slate-950 text-slate-100">
-    <header class="h-14 border-b border-slate-800 bg-slate-900/90 px-4 flex items-center gap-3">
+  <div class="min-h-[100dvh] bg-slate-950 text-slate-100 pt-safe px-safe">
+    <header class="min-h-14 py-2 border-b border-slate-800 bg-slate-900/90 px-4 flex flex-wrap items-center gap-x-3 gap-y-1">
       <router-link to="/admin" class="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400"><ArrowLeft class="w-4 h-4" /></router-link>
       <h1 class="font-semibold text-sm">{{ tr('rp.title') }} <span class="font-mono text-sky-400">{{ roomId }}</span></h1>
       <span v-if="events.length" class="text-[11px] text-slate-500">{{ tr('rp.eventsLength', { count: events.length, length: fmtOffset(tEnd - t0) }) }}</span>
@@ -188,9 +188,9 @@ onMounted(async () => {
     <div v-else-if="error" class="text-center text-sm text-rose-300 mt-24">{{ error }}</div>
     <div v-else-if="!events.length" class="text-center text-sm text-slate-400 mt-24">{{ tr('rp.noEvents') }}</div>
 
-    <main v-else class="p-4 space-y-3 max-w-7xl mx-auto">
+    <main v-else class="p-3 sm:p-4 space-y-3 max-w-7xl mx-auto">
       <!-- Transport -->
-      <div class="flex items-center gap-3 p-3 rounded-2xl border border-slate-800 bg-slate-900/70">
+      <div class="flex items-center gap-2 sm:gap-3 p-3 rounded-2xl border border-slate-800 bg-slate-900/70">
         <button @click="togglePlay" class="p-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white" :title="playing ? tr('rp.pause') : tr('rp.play')">
           <Pause v-if="playing" class="w-4 h-4" /><Play v-else class="w-4 h-4" />
         </button>
@@ -199,7 +199,7 @@ onMounted(async () => {
         </select>
         <span class="font-mono text-xs w-14 text-right">{{ fmtOffset(t - t0) }}</span>
         <input type="range" class="flex-1 accent-sky-500" :min="t0" :max="tEnd" :step="100" v-model.number="t" />
-        <span class="font-mono text-xs text-slate-500 w-14">{{ fmtOffset(tEnd - t0) }}</span>
+        <span class="font-mono text-xs text-slate-500 w-14 hidden xs:inline">{{ fmtOffset(tEnd - t0) }}</span>
       </div>
 
       <div class="grid lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-3">

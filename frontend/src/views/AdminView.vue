@@ -416,7 +416,7 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
 </script>
 
 <template>
-  <div class="min-h-[100dvh] bg-slate-950 text-slate-100">
+  <div class="min-h-[100dvh] bg-slate-950 text-slate-100 pt-safe px-safe">
     <header class="h-14 border-b border-slate-800 bg-slate-900/90 px-4 flex items-center gap-3">
       <h1 class="font-bold">{{ t('adm.title') }}</h1>
       <PageNav>
@@ -431,12 +431,12 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
     </div>
 
     <main v-else class="max-w-5xl mx-auto p-4 sm:p-6 space-y-5">
-      <nav class="flex gap-1.5 p-1 bg-slate-900 rounded-xl border border-slate-800 w-fit">
+      <nav class="flex gap-1.5 p-1 bg-slate-900 rounded-xl border border-slate-800 w-fit max-w-full overflow-x-auto no-scrollbar">
         <button
           v-for="tb in tabs"
           :key="tb.id"
           @click="tab = tb.id"
-          class="px-3 py-1.5 rounded-lg text-xs font-semibold transition"
+          class="px-3 py-1.5 rounded-lg text-xs font-semibold transition shrink-0 whitespace-nowrap"
           :class="tab === tb.id ? 'bg-sky-600 text-white' : 'text-slate-400 hover:text-slate-200'"
         >
           {{ t(tb.label) }}
@@ -520,7 +520,7 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
               <span v-if="r.upload.error" class="ml-1 text-rose-300/80">{{ r.upload.error }}</span>
             </div>
           </div>
-          <div class="flex items-center gap-1.5">
+          <div class="flex flex-wrap items-center gap-1.5">
             <template v-if="isAdmin">
             <select v-model="pendingChoice[r.roomId]" :class="select">
               <option value="" disabled>{{ t('adm.chooseProfile') }}</option>
@@ -552,7 +552,7 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
             <button @click="loadPins" :disabled="pinsLoading" class="ml-auto p-1.5 rounded-lg hover:bg-slate-800 text-slate-400"><RefreshCw class="w-4 h-4" :class="{ 'animate-spin': pinsLoading }" /></button>
           </div>
           <template v-if="pins">
-            <div class="flex gap-1.5">
+            <div class="flex flex-wrap gap-1.5">
               <button
                 v-for="pt in PIN_TABS"
                 :key="pt.id"

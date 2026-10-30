@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { t } from '../../i18n';
-import { ref } from 'vue';
-import { AlertCircle, ArrowLeft, Bell, BellOff, Box, Check, Copy, Edit3, Lock, Sliders, Sparkles, WifiOff } from 'lucide-vue-next';
+import { onBeforeUnmount, ref } from 'vue';
+import { AlertCircle, ArrowLeft, Bell, BellOff, Box, Check, Copy, Edit3, Lock, MoreHorizontal, Moon, Share2, Sliders, Sun, Sparkles, WifiOff } from 'lucide-vue-next';
 import { useAuthStore } from '../../stores/auth';
 import { useRoomStore } from '../../stores/room';
 import { useNotificationSound } from '../../composables/useNotificationSound';
 import { useRoomAi } from '../../composables/useRoomAi';
 import ThemeSwitch from '../ThemeSwitch.vue';
+import { currentTheme, setTheme } from '../../theme';
 
 const props = defineProps<{
   pin: string;
@@ -31,6 +32,29 @@ const copyInviteLink = () => {
   copiedUrl.value = true;
   setTimeout(() => (copiedUrl.value = false), 2000);
 };
+
+// Phones: invite, sound and theme move into a "more" menu; invite uses the system share sheet when there is one
+const isMoreOpen = ref(false);
+const moreRef = ref<HTMLElement | null>(null);
+const closeMoreOutside = (e: PointerEvent) => {
+  if (isMoreOpen.value && !moreRef.value?.contains(e.target as Node)) isMoreOpen.value = false;
+};
+document.addEventListener('pointerdown', closeMoreOutside);
+onBeforeUnmount(() => document.removeEventListener('pointerdown', closeMoreOutside));
+const shareInvite = async () => {
+  const url = `${window.location.origin}/#/waiting/room_${props.pin}`;
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: roomStore.currentRoom?.roomName || 'AI Mentor', url });
+      isMoreOpen.value = false;
+    } catch {
+      // Share sheet dismissed
+    }
+    return;
+  }
+  copyInviteLink();
+};
+const toggleTheme = () => setTheme(currentTheme.value === 'dark' ? 'light' : 'dark');
 
 const AI_STATUS_CLASS: Record<string, string> = {
   idle: 'bg-sky-950/50 border-sky-500/40 text-sky-300 hover:bg-sky-900/50',
@@ -131,7 +155,7 @@ const pillButton = 'inline-flex items-center gap-1 text-[11px] px-2 py-1.5 round
         <Edit3 class="w-3 h-3 text-slate-400 hidden sm:inline" />
       </button>
 
-      <button @click="copyInviteLink" :class="[pillButton, 'text-slate-200']" :title="t('header.copyInvite')">
+      <button @click="copyInviteLink" :class="[pillButton, 'text-slate-200 !hidden sm:!inline-flex']" :title="t('header.copyInvite')">
         <Check v-if="copiedUrl" class="w-3.5 h-3.5 text-emerald-400" />
         <Copy v-else class="w-3.5 h-3.5" />
         <span class="hidden sm:inline">{{ copiedUrl ? t('header.copied') : t('header.invite') }}</span>
@@ -139,14 +163,35 @@ const pillButton = 'inline-flex items-center gap-1 text-[11px] px-2 py-1.5 round
 
       <button
         @click="toggleSoundMute"
-        :class="[pillButton, isSoundMuted ? 'text-slate-500' : 'text-sky-400']"
+        :class="[pillButton, '!hidden sm:!inline-flex', isSoundMuted ? 'text-slate-500' : 'text-sky-400']"
         :title="isSoundMuted ? t('header.soundMuted') : t('header.soundActive')"
       >
         <BellOff v-if="isSoundMuted" class="w-3.5 h-3.5" />
         <Bell v-else class="w-3.5 h-3.5" />
       </button>
 
-      <ThemeSwitch class="!w-9 !h-9 shrink-0" />
+      <ThemeSwitch class="!w-9 !h-9 shrink-0 !hidden sm:!inline-flex" />
+
+      <div ref="moreRef" class="relative sm:hidden">
+        <button @click="isMoreOpen = !isMoreOpen" :class="[pillButton, 'text-slate-300']" :title="t('header.more')" :aria-label="t('header.more')">
+          <MoreHorizontal class="w-4 h-4" />
+        </button>
+        <div v-if="isMoreOpen" class="absolute right-0 top-full mt-1.5 w-52 py-1 rounded-xl bg-slate-900 border border-slate-700 shadow-2xl z-50 text-sm">
+          <button class="w-full flex items-center gap-2.5 px-3 py-2.5 hover:bg-slate-800 text-slate-200" @click="shareInvite">
+            <Check v-if="copiedUrl" class="w-4 h-4 text-emerald-400" />
+            <Share2 v-else class="w-4 h-4" />
+            {{ copiedUrl ? t('header.copied') : t('header.invite') }}
+          </button>
+          <button class="w-full flex items-center gap-2.5 px-3 py-2.5 hover:bg-slate-800 text-slate-200" @click="toggleSoundMute">
+            <component :is="isSoundMuted ? BellOff : Bell" class="w-4 h-4" :class="isSoundMuted ? 'text-slate-500' : 'text-sky-400'" />
+            {{ isSoundMuted ? t('header.soundMuted') : t('header.soundActive') }}
+          </button>
+          <button class="w-full flex items-center gap-2.5 px-3 py-2.5 hover:bg-slate-800 text-slate-200" @click="toggleTheme">
+            <component :is="currentTheme === 'dark' ? Sun : Moon" class="w-4 h-4" />
+            {{ currentTheme === 'dark' ? t('common.themeLight') : t('common.themeDark') }}
+          </button>
+        </div>
+      </div>
 
       <button
         @click="emit('toggle-assets')"

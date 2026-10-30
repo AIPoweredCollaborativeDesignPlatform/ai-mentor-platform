@@ -137,13 +137,14 @@ export function useWhiteboardResize(whiteboardRef: Ref<WhiteboardHandle | null>,
     }
   });
 
-  const startWhiteboardResize = (e: MouseEvent) => {
+  // Pointer events, so the divider also drags with a finger or pen on tablets
+  const startWhiteboardResize = (e: PointerEvent) => {
     e.preventDefault();
     isResizingWhiteboard.value = true;
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
 
-    const onMouseMove = (moveEvent: MouseEvent) => {
+    const onMouseMove = (moveEvent: PointerEvent) => {
       const remainingFromRight = window.innerWidth - moveEvent.clientX;
       if (remainingFromRight < 120) {
         stopResize();
@@ -157,11 +158,13 @@ export function useWhiteboardResize(whiteboardRef: Ref<WhiteboardHandle | null>,
       isResizingWhiteboard.value = false;
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', stopResize);
+      window.removeEventListener('pointermove', onMouseMove);
+      window.removeEventListener('pointerup', stopResize);
+      window.removeEventListener('pointercancel', stopResize);
     };
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', stopResize);
+    window.addEventListener('pointermove', onMouseMove);
+    window.addEventListener('pointerup', stopResize);
+    window.addEventListener('pointercancel', stopResize);
   };
 
   return { whiteboardWidth, isResizingWhiteboard, startWhiteboardResize };

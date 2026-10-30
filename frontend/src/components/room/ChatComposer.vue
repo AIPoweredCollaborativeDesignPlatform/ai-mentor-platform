@@ -287,7 +287,7 @@ defineExpose({ setReply, sendFile });
 </script>
 
 <template>
-  <footer class="border-t border-slate-800 bg-slate-900/90 p-2.5 sm:p-3 shrink-0">
+  <footer class="border-t border-slate-800 bg-slate-900/90 p-2.5 sm:p-3 pb-[calc(0.625rem+env(safe-area-inset-bottom))] sm:pb-[calc(0.75rem+env(safe-area-inset-bottom))] shrink-0">
     <div class="max-w-4xl mx-auto space-y-1.5">
       <!-- Room-wide AI task banner -->
       <div
@@ -324,13 +324,13 @@ defineExpose({ setReply, sendFile });
         </button>
       </div>
 
-      <div class="flex items-center gap-1.5 overflow-x-auto pb-0.5 text-[11px] text-slate-400">
+      <div class="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5 text-[11px] text-slate-400">
         <button
           v-for="q in quickTags"
           :key="q.label"
           @click="insertQuickTag(q.tag)"
           :disabled="isMeetingClosed"
-          class="px-2 py-0.5 rounded-lg border disabled:opacity-40 transition flex items-center gap-1 shrink-0"
+          class="px-2 py-0.5 pointer-coarse:py-1.5 rounded-lg border disabled:opacity-40 transition flex items-center gap-1 shrink-0"
           :class="q.accent ? 'border-sky-500/30 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20' : 'border-slate-700 hover:bg-slate-800 text-slate-300'"
         >
           <component :is="q.icon" class="w-3 h-3" :class="q.iconClass" /> {{ q.label }}
@@ -380,7 +380,7 @@ defineExpose({ setReply, sendFile });
         <div class="relative flex-1 min-w-0">
           <div
             v-if="isMentionMenuOpen && mentionCandidates.length"
-            class="absolute bottom-full left-0 mb-2 w-72 sm:w-80 bg-slate-900/95 border border-slate-700/80 rounded-xl shadow-2xl p-1.5 z-50 max-h-56 overflow-y-auto"
+            class="absolute bottom-full left-0 mb-2 w-72 sm:w-80 max-w-[calc(100vw-7rem)] bg-slate-900/95 border border-slate-700/80 rounded-xl shadow-2xl p-1.5 z-50 max-h-56 overflow-y-auto"
           >
             <div class="px-2 py-1 text-[10px] font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-800 mb-1 flex items-center justify-between">
               <span>{{ t('room.mentionMember') }}</span>
@@ -391,7 +391,7 @@ defineExpose({ setReply, sendFile });
               :key="cand.id"
               type="button"
               @mousedown.prevent="selectMentionCandidate(cand)"
-              class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left transition cursor-pointer text-xs"
+              class="w-full flex items-center gap-2.5 px-2.5 py-1.5 pointer-coarse:py-2.5 rounded-lg text-left transition cursor-pointer text-xs"
               :class="idx === mentionMenuIndex ? 'bg-sky-600/30 text-ink ring-1 ring-sky-500' : 'hover:bg-slate-800 text-slate-200'"
             >
               <div class="w-6 h-6 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center shrink-0 text-sm">{{ cand.avatar }}</div>
@@ -413,6 +413,7 @@ defineExpose({ setReply, sendFile });
             @paste="onPaste"
             @keydown="onKeyDown"
             :disabled="isBlocked"
+            enterkeyhint="send"
             :placeholder="isMeetingClosed
               ? lockedText || t('room.closedReadOnly')
               : isMuted ? t('room.mutedText') : aiEnabled ? t('composer.placeholderAi') : t('composer.placeholder')"

@@ -352,6 +352,9 @@ async function writeThumbnail() {
 
 // ---------- canvas setup ----------
 let resizeObserver: ResizeObserver | null = null;
+// Narrow boards (phones, portrait tablets, a squeezed split) move the tools to a bottom bar
+const boardWidth = ref(1000);
+const compact = computed(() => boardWidth.value < 640);
 
 function setupCanvas() {
   const el = canvasEl.value!;
@@ -373,6 +376,9 @@ function setupCanvas() {
   resizeObserver = new ResizeObserver(() => {
     const r = containerRef.value?.getBoundingClientRect();
     if (!r || !canvas) return;
+    boardWidth.value = r.width || boardWidth.value;
+    // Hidden behind the Chat tab on phones (display: none): keep the last size until it shows again
+    if (!r.width || !r.height) return;
     if (r.width === canvas.width && r.height === canvas.height) return;
     canvas.setDimensions({ width: r.width, height: r.height });
     // Resizing clears the bitmap; render now (before paint) instead of next frame to avoid a blank flash
@@ -1398,7 +1404,7 @@ const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(()
 <template>
   <div class="h-full w-full flex flex-col bg-slate-900 text-slate-100 select-none">
     <!-- Header -->
-    <div class="h-12 shrink-0 flex items-center gap-2 px-3 border-b border-slate-800 bg-slate-950">
+    <div class="h-12 shrink-0 flex items-center gap-2 px-3 min-w-0 border-b border-slate-800 bg-slate-950">
       <span class="text-sm font-semibold truncate">{{ t('msg.boardOf', { name: creatorName }) }}</span>
       <span
         class="px-2 py-0.5 rounded-full text-[10px] font-semibold flex items-center gap-1 shrink-0"
@@ -1406,7 +1412,7 @@ const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(()
       >
         <component :is="isPrivate ? Lock : Globe" class="w-3 h-3" />{{ isPrivate ? t('msg.private') : t('wb.live') }}
       </span>
-      <div class="flex -space-x-1.5 ml-1">
+      <div class="flex -space-x-1.5 ml-1 shrink-0" :class="{ hidden: compact && others.length > 3 }">
         <span
           v-for="p in others"
           :key="p.uid"
@@ -1417,10 +1423,10 @@ const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(()
       </div>
       <div class="flex-1"></div>
       <button v-if="isMine && isPrivate" class="wb-btn bg-emerald-600 hover:bg-emerald-500 text-white" @click="shareToChat" :title="t('wb.shareTitle')">
-        <Globe class="w-3.5 h-3.5" /> {{ t('wb.share') }}
+        <Globe class="w-3.5 h-3.5" /><span v-if="!compact">{{ t('wb.share') }}</span>
       </button>
       <button v-if="isMine && !isPrivate" class="wb-btn" @click="makePrivate" :title="t('wb.makePrivateTitle')">
-        <Lock class="w-3.5 h-3.5" /> {{ t('wb.makePrivate') }}
+        <Lock class="w-3.5 h-3.5" /><span v-if="!compact">{{ t('wb.makePrivate') }}</span>
       </button>
       <button class="wb-btn" @click="sendAsImage" :title="t('wb.sendImage')"><Send class="w-3.5 h-3.5" /></button>
       <button class="wb-btn" @click="downloadPng" :title="t('wb.downloadPng')"><Download class="w-3.5 h-3.5" /></button>
@@ -1457,7 +1463,12 @@ const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(()
       </div>
 
       <!-- Tool rail -->
-      <div class="absolute left-3 top-1/2 -translate-y-1/2 z-20 flex flex-col gap-1 p-1.5 rounded-2xl bg-slate-950/90 border border-slate-800 shadow-xl">
+      <div
+        class="absolute z-20 flex gap-1 p-1.5 rounded-2xl bg-slate-950/90 border border-slate-800 shadow-xl"
+        :class="compact
+          ? 'wb-rail-bottom left-2 right-2 bottom-2 flex-row items-center overflow-x-auto no-scrollbar'
+          : 'left-3 top-1/2 -translate-y-1/2 flex-col'"
+      >
         <button
           v-for="tl in tools"
           :key="tl.id"
@@ -1472,7 +1483,7 @@ const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(()
         <button v-if="showWhiteboardAi" class="wb-tool text-fuchsia-300" :class="{ 'wb-tool-active': ai.open }" :title="t('wb.generateWith', { name: aiName })" @click="ai.open = !ai.open">
           <Sparkles class="w-4 h-4" />
         </button>
-        <div class="h-px bg-slate-800 my-1"></div>
+        <div class="bg-slate-800 shrink-0" :class="compact ? 'w-px h-6 mx-1' : 'h-px my-1'"></div>
         <button class="wb-tool" :disabled="!canUndo" :title="t('wb.undo')" @click="history.undo().then(refreshHistoryFlags)"><Undo2 class="w-4 h-4" /></button>
         <button class="wb-tool" :disabled="!canRedo" :title="t('wb.redo')" @click="history.redo().then(refreshHistoryFlags)"><Redo2 class="w-4 h-4" /></button>
         <input ref="fileInput" type="file" accept="image/*" class="hidden" @change="onFilePicked" />
@@ -1481,9 +1492,13 @@ const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(()
       <!-- Tool options -->
       <div
         v-if="['pen', 'rect', 'ellipse', 'text', 'sticky', 'arrow'].includes(tool) || selectionKinds.any"
-        class="absolute left-16 right-3 top-3 z-20 flex justify-center pointer-events-none"
+        class="absolute top-3 z-20 flex justify-center pointer-events-none"
+        :class="compact ? 'left-2 right-2 top-2' : 'left-16 right-3'"
       >
-      <div class="pointer-events-auto flex flex-wrap items-center gap-2 px-2.5 py-1.5 rounded-xl bg-slate-950/90 border border-slate-800 shadow-xl">
+      <div
+        class="pointer-events-auto flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-slate-950/90 border border-slate-800 shadow-xl"
+        :class="compact ? 'max-w-full flex-nowrap overflow-x-auto no-scrollbar [&>*]:shrink-0' : 'flex-wrap'"
+      >
         <template v-if="tool === 'sticky' || selectionKinds.sticky">
           <button
             v-for="c in STICKY_COLORS"
@@ -1552,7 +1567,8 @@ const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(()
 
       <div
         v-if="isolated"
-        class="absolute left-1/2 -translate-x-1/2 bottom-14 z-20 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-600/90 text-white text-[11px] shadow-xl"
+        class="absolute left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-600/90 text-white text-[11px] shadow-xl"
+        :class="compact ? 'bottom-28' : 'bottom-14'"
       >
         {{ t('wb.editingGroup') }}
         <button class="underline" @click="exitGroup">{{ t('wb.done') }}</button>
@@ -1569,7 +1585,8 @@ const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(()
       <!-- AI generate panel -->
       <div
         v-if="ai.open && showWhiteboardAi"
-        class="absolute left-16 top-1/2 -translate-y-1/2 z-30 w-72 p-3 rounded-2xl bg-slate-950/95 border border-slate-800 shadow-2xl"
+        class="absolute z-30 p-3 rounded-2xl bg-slate-950/95 border border-slate-800 shadow-2xl"
+        :class="compact ? 'left-2 right-2 bottom-[68px]' : 'left-16 top-1/2 -translate-y-1/2 w-72'"
       >
         <p class="text-xs font-semibold mb-2 flex items-center gap-1.5"><Sparkles class="w-3.5 h-3.5 text-fuchsia-300" /> {{ t('wb.generateSvg', { name: aiName }) }}</p>
         <textarea
@@ -1589,13 +1606,17 @@ const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(()
       </div>
 
       <!-- Zoom -->
-      <div class="absolute right-3 bottom-3 z-20 flex items-center gap-1 px-1.5 py-1 rounded-xl bg-slate-950/90 border border-slate-800 shadow-xl text-xs">
+      <div class="absolute z-20 flex items-center gap-1 px-1.5 py-1 rounded-xl bg-slate-950/90 border border-slate-800 shadow-xl text-xs" :class="compact ? 'right-2 bottom-[68px]' : 'right-3 bottom-3'">
         <button class="wb-tool !w-7 !h-7" :title="t('wb.zoomOut')" @click="zoomBy(1 / 1.2)"><Minus class="w-3.5 h-3.5" /></button>
         <button class="w-12 text-center text-slate-300 hover:text-ink" :title="t('wb.zoomFit')" @click="zoomToFit">{{ zoomPct }}%</button>
         <button class="wb-tool !w-7 !h-7" :title="t('wb.zoomIn')" @click="zoomBy(1.2)"><Plus class="w-3.5 h-3.5" /></button>
       </div>
 
-      <div v-if="toast" class="absolute left-1/2 -translate-x-1/2 bottom-4 z-30 px-3 py-1.5 rounded-lg bg-slate-950/95 border border-slate-700 text-xs shadow-xl">
+      <div
+        v-if="toast"
+        class="absolute left-1/2 -translate-x-1/2 z-30 max-w-[calc(100%-1rem)] px-3 py-1.5 rounded-lg bg-slate-950/95 border border-slate-700 text-xs shadow-xl"
+        :class="compact ? 'bottom-[116px]' : 'bottom-4'"
+      >
         {{ toast }}
       </div>
     </div>
@@ -1633,6 +1654,22 @@ const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(()
   justify-content: center;
   border-radius: 0.375rem;
   color: rgb(var(--c-n-300));
+}
+.wb-rail-bottom .wb-tool {
+  flex-shrink: 0;
+}
+/* Finger-sized targets on touch screens */
+@media (pointer: coarse) {
+  .wb-tool:not([class*='!w-']) {
+    width: 2.625rem;
+    height: 2.625rem;
+  }
+  .wb-btn {
+    padding: 0.5rem 0.75rem;
+  }
+  .wb-chip {
+    padding: 0.4rem 0.65rem;
+  }
 }
 .wb-tool:hover:not(:disabled) {
   background: rgb(var(--c-n-800));

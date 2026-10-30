@@ -4,6 +4,7 @@ import { nextTick, ref } from 'vue';
 export type Theme = 'light' | 'dark';
 
 const STORAGE_KEY = 'ai-mentor-theme';
+const DARK_BG = '#1c1c1c'; // --c-n-950 in dark mode (style.css)
 
 const read = (): Theme => {
   try {
@@ -17,9 +18,16 @@ export const currentTheme = ref<Theme>(read());
 
 // Always the latest choice, so a late callback from an earlier (skipped) switch cannot undo a newer one
 let target: Theme = currentTheme.value;
+// Mobile browser chrome (status bar / address bar) takes the page background colour
+const syncThemeColor = (theme: Theme) => {
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? DARK_BG : '#ffffff');
+};
+syncThemeColor(currentTheme.value);
+
 const apply = async () => {
   currentTheme.value = target;
   document.documentElement.dataset.theme = target;
+  syncThemeColor(target);
   await nextTick(); // let Vue redraw theme-dependent bits (the toggle icon) before the new snapshot
 };
 

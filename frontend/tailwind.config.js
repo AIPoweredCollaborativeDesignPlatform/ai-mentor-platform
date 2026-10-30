@@ -11,6 +11,8 @@ export default {
   content: ['./index.html', './src/**/*.{vue,js,ts,jsx,tsx}'],
   theme: {
     extend: {
+      // Larger phones (≥ 400px wide); sm / md / lg stay Tailwind's 640 / 768 / 1024
+      screens: { xs: '400px' },
       colors: {
         slate: scale('n'),
         gray: scale('n'),
@@ -74,5 +76,8 @@ export default {
       '6xl': ['1.5rem', { lineHeight: '2rem' }]
     }
   },
-  plugins: []
+  plugins: [
+    // Touch screens (phones, tablets): `pointer-coarse:` for finger-sized targets
+    ({ addVariant }) => addVariant('pointer-coarse', '@media (pointer: coarse)')
+  ]
 };

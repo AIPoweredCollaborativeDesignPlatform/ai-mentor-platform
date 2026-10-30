@@ -144,6 +144,31 @@
   body {
     @apply bg-slate-950 text-slate-100;
   }
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* Phones and tablets (iOS / Android) */
+@layer utilities {
+  /* Notch / home-indicator insets; the viewport uses viewport-fit=cover (index.html) */
+  .pt-safe { padding-top: env(safe-area-inset-top); }
+  .pb-safe { padding-bottom: env(safe-area-inset-bottom); }
+  .pl-safe { padding-left: env(safe-area-inset-left); }
+  .pr-safe { padding-right: env(safe-area-inset-right); }
+  .px-safe { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
+  .no-scrollbar { scrollbar-width: none; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+}
+/* iOS Safari zooms the page when a focused field is under 16px; touch devices get 16px fields */
+@media (pointer: coarse) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
 }
 
 /* Scrollbars */

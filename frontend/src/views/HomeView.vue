@@ -159,7 +159,7 @@ const handleGoogleSignIn = async () => {
 </script>
 
 <template>
-  <div class="min-h-[100dvh] flex flex-col items-center justify-center p-4 sm:p-6 bg-slate-950 overflow-y-auto relative">
+  <div class="min-h-[100dvh] flex flex-col items-center justify-center p-4 pt-16 sm:p-6 pb-[calc(1rem+env(safe-area-inset-bottom))] bg-slate-950 overflow-y-auto relative">
     <PageNav />
     <!-- Brand / Header -->
     <div class="text-center max-w-xl mb-5">
@@ -233,7 +233,7 @@ const handleGoogleSignIn = async () => {
             <!-- Room Emoji Picker Popover -->
             <div
               v-if="isEmojiPickerOpen"
-              class="absolute z-50 top-12 left-0 w-72 sm:w-80 bg-slate-900/95 border border-slate-700 rounded-2xl shadow-2xl p-3 text-slate-100 animate-in fade-in zoom-in-95 duration-100"
+              class="absolute z-50 top-12 left-0 w-72 sm:w-80 max-w-[calc(100vw-2rem)] bg-slate-900/95 border border-slate-700 rounded-2xl shadow-2xl p-3 text-slate-100 animate-in fade-in zoom-in-95 duration-100"
             >
               <div class="flex items-center justify-between pb-2 mb-2 border-b border-slate-800 text-xs">
                 <span class="font-semibold text-slate-300">{{ t('home.chooseEmblem') }}</span>

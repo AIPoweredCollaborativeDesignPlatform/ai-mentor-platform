@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { t } from '../../i18n';
+import { touchToolbarMsgId, useLongPress } from '../../composables/useLongPress';
 import { computed, ref } from 'vue';
 import {
   AlertCircle, Bot, CheckCircle2, ChevronDown, ChevronUp, Copy, CornerUpLeft, Download, Eye, EyeOff,
@@ -36,6 +37,10 @@ const COLLAPSE_AT = 260;
 
 const msg = computed(() => props.msg);
 const isMine = computed(() => msg.value.senderUid === authStore.uid);
+// Touch screens: long press opens the hover toolbar
+const isToolbarPinned = computed(() => touchToolbarMsgId.value === msg.value.id);
+const longPress = useLongPress(() => (touchToolbarMsgId.value = msg.value.id));
+const closeTouchToolbar = () => (touchToolbarMsgId.value = null);
 const isAi = computed(() => msg.value.senderUid === 'ai_mentor');
 const mentionsMe = computed(() => isMentioning(msg.value, authStore.displayName, authStore.uid));
 const isAsset = (...types: string[]) => msg.value.type === 'ai_asset' && types.includes(msg.value.assetType || '');
@@ -138,7 +143,9 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
     </div>
 
     <div
-      class="flex flex-col min-w-0 group/msg relative"
+      v-on="longPress"
+      @contextmenu="isToolbarPinned && $event.preventDefault()"
+      class="flex flex-col min-w-0 group/msg relative pointer-coarse:[-webkit-touch-callout:none]"
       :class="[isMine ? 'items-end' : 'items-start', msg.type === 'ai_asset' ? 'w-full max-w-full sm:max-w-3xl' : 'max-w-[85%] sm:max-w-[75%] md:max-w-[70%]']"
     >
       <!-- Sender line: mine = [time] [name], others = [name] [time] [AI badge] -->
@@ -435,8 +442,10 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
       <!-- Hover toolbar: a floating overlay, so showing it never moves other messages -->
       <div
         v-if="!isMeetingClosed"
-        class="absolute -top-3 z-20 flex items-center gap-0.5 px-1.5 py-0.5 rounded-full whitespace-nowrap bg-slate-900/95 border border-slate-700/80 shadow-md text-xs select-none transition-opacity duration-150 opacity-0 pointer-events-none group-hover/msg:opacity-100 group-hover/msg:pointer-events-auto"
-        :class="isMine ? 'left-0' : 'right-0'"
+        data-touch-toolbar
+        @click="closeTouchToolbar"
+        class="absolute -top-3 z-20 flex items-center gap-0.5 px-1.5 py-0.5 pointer-coarse:-top-9 pointer-coarse:py-1 pointer-coarse:gap-1 rounded-full whitespace-nowrap bg-slate-900/95 border border-slate-700/80 shadow-md text-xs select-none transition-opacity duration-150"
+        :class="[isMine ? 'left-0' : 'right-0', isToolbarPinned ? 'opacity-100' : 'opacity-0 pointer-events-none [@media(hover:hover)]:group-hover/msg:opacity-100 [@media(hover:hover)]:group-hover/msg:pointer-events-auto']"
       >
         <button
           v-for="emoji in REACTIONS"

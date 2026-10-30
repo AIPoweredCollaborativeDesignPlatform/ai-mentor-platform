@@ -113,6 +113,8 @@ export const useAuthStore = defineStore('auth', () => {
     const entry = { email: user.email, name: user.displayName || user.email.split('@')[0], photo: user.photoURL || '' };
     saveAccounts([entry, ...knownAccounts.value.filter(a => a.email !== user.email)].slice(0, 6));
   }
+  // The Google account's own name, for pages outside rooms (displayName is the in-room nickname)
+  const accountName = computed(() => knownAccounts.value.find(a => a.email === email.value)?.name || email.value.split('@')[0] || '');
   const forgetAccount = (accountEmail: string) => saveAccounts(knownAccounts.value.filter(a => a.email !== accountEmail));
 
   // Attach real Firebase listener if configured
@@ -317,6 +319,7 @@ export const useAuthStore = defineStore('auth', () => {
     isPrimaryAdmin,
     isObserver,
     knownAccounts,
+    accountName,
     forgetAccount,
     waitForRole,
     firebaseUser,

@@ -158,6 +158,14 @@ export const KIND_GROUPS: { id: string; label: MessageKey; match: (k: string) =>
 
 export const groupOf = (kind: string) => KIND_GROUPS.find(g => g.match(kind))?.id || 'session';
 
+/** Time of the last real activity (chat, board, whiteboard use): later leave / time-up / end events are idle tail. */
+export function lastActivityAt(events: ResearchEvent[]): number {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (['chat', 'board', 'whiteboard_ui'].includes(groupOf(events[i].kind))) return events[i].at;
+  }
+  return events.at(-1)?.at || 0;
+}
+
 export const fmtOffset = (ms: number) => {
   const s = Math.max(0, Math.floor(ms / 1000));
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
@@ -183,6 +191,7 @@ export function describe(e: ResearchEvent): string {
     case 'session_started': return tr('rp.started', { count: (d.participants || []).length });
     case 'session_time_up': return tr('rp.timeUp');
     case 'session_ended': return tr('rp.ended', { by: d.endedBy });
+    case 'session_reopened': return tr('rp.reopened', { by: d.by });
     case 'room_enter': return tr('rp.enter');
     case 'room_leave': return tr('rp.leave');
     default: return e.kind;

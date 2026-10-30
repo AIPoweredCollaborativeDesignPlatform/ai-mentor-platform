@@ -43,6 +43,8 @@ const session = computed(() => roomStore.currentRoom?.session);
 const isResearcher = computed(() => roomStore.isHost && Boolean(session.value));
 const isObserving = computed(() => isResearcher.value || (roomStore.myStatus === 'observer' && Boolean(session.value)));
 const canControlSession = computed(() => isResearcher.value || authStore.isAdmin);
+// A room created by a participant has no researcher: its participants may restart an ended discussion
+const canParticipantReopen = computed(() => Boolean(session.value) && !roomStore.currentRoom?.hostUid && roomStore.myStatus === 'approved');
 const participantCount = computed(() => roomStore.onlineParticipants.length);
 
 /** Why chat and whiteboards are locked for me right now, or null when I can take part. */
@@ -66,7 +68,7 @@ const timeLeft = computed(() => {
 
 const isReopening = ref(false);
 const reopen = async () => {
-  if (!window.confirm(t('room.reopenConfirm'))) return;
+  if (!window.confirm(t(canControlSession.value ? 'room.reopenConfirm' : 'room.reopenConfirmParticipant'))) return;
   isReopening.value = true;
   try {
     await reopenStudySession(roomId);
@@ -386,10 +388,20 @@ onUnmounted(() => {
           <Power class="w-3.5 h-3.5" /> {{ t('room.end') }}
         </button>
       </template>
-      <span v-else class="mx-auto inline-flex items-center gap-1.5 truncate">
-        <Loader2 v-if="session!.phase === 'waiting'" class="w-3.5 h-3.5 animate-spin shrink-0" />
-        {{ session!.phase === 'ended' ? t('room.thanks') : lockReason }}
-      </span>
+      <template v-else>
+        <span class="inline-flex items-center gap-1.5 truncate" :class="canParticipantReopen && session!.phase === 'ended' ? '' : 'mx-auto'">
+          <Loader2 v-if="session!.phase === 'waiting'" class="w-3.5 h-3.5 animate-spin shrink-0" />
+          {{ session!.phase === 'ended' ? t('room.thanks') : lockReason }}
+        </span>
+        <button
+          v-if="canParticipantReopen && session!.phase === 'ended'"
+          @click="reopen"
+          :disabled="isReopening"
+          class="ml-auto shrink-0 inline-flex items-center gap-1 px-2.5 py-1 pointer-coarse:py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-[11px] font-semibold transition disabled:opacity-50"
+        >
+          {{ isReopening ? t('room.reopening') : t('room.reopen') }}
+        </button>
+      </template>
     </div>
 
     <!-- Phones / portrait tablets: Chat | Whiteboard tabs while a board is open -->

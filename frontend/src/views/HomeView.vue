@@ -196,7 +196,7 @@ const handleGoogleSignIn = async () => {
         </div>
         <div v-else class="flex items-center justify-between text-xs">
           <span class="text-emerald-400 flex items-center gap-1">
-            {{ t('home.signedIn', { name: authStore.displayName || authStore.email?.split('@')[0] || t('common.user') }) }}
+            {{ t('home.signedIn', { name: authStore.accountName || t('common.user') }) }}
           </span>
           <router-link to="/dashboard" class="text-sky-400 hover:underline flex items-center gap-1 font-semibold">
             <LayoutDashboard class="w-3.5 h-3.5" /> {{ t('common.dashboard') }}

@@ -112,7 +112,7 @@ const handleGoogleSignIn = async () => {
   try {
     // Signing in replaces the anonymous uid; the server moves rooms the guest hosted (claimGuestRooms)
     await authStore.upgradeWithGoogle();
-    roomStore.pushToast(t('profile.signedInTitle'), t('profile.signedInText', { name: authStore.displayName }), 'success');
+    roomStore.pushToast(t('profile.signedInTitle'), t('profile.signedInText', { name: authStore.accountName }), 'success');
   } catch (err: any) {
     if (err?.code !== 'auth/popup-closed-by-user' && err?.code !== 'auth/cancelled-popup-request') {
       console.warn('Google sign-in error:', err);

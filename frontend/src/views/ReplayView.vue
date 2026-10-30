@@ -9,7 +9,7 @@ import LocaleSwitch from '../components/LocaleSwitch.vue';
 import ThemeSwitch from '../components/ThemeSwitch.vue';
 import BoardReplayCanvas from '../components/admin/BoardReplayCanvas.vue';
 import {
-  KIND_GROUPS, describe, fmtOffset, groupOf, indexAt, loadEvents, loadFinalBoard, membersOf, stateAt, wasTruncated,
+  KIND_GROUPS, describe, fmtOffset, groupOf, indexAt, lastActivityAt, loadEvents, loadFinalBoard, membersOf, stateAt, wasTruncated,
   type ReplayMessage, type ReplayObject, type ResearchEvent
 } from '../utils/replay';
 import { formatMessageText } from '../utils/chat';
@@ -26,7 +26,8 @@ const loading = ref(true);
 const error = ref('');
 
 const t0 = computed(() => events.value[0]?.at || 0);
-const tEnd = computed(() => events.value.at(-1)?.at || 0);
+// Playback stops at the last activity; the idle tail after it stays in the event list (greyed)
+const tEnd = computed(() => lastActivityAt(events.value));
 const t = ref(0);
 const members = computed(() => membersOf(events.value));
 const who = (e: { uid: string | null; role: string }) => {
@@ -113,7 +114,7 @@ onUnmounted(() => clearInterval(timer));
 const groups = ref<Record<string, boolean>>(Object.fromEntries(KIND_GROUPS.map(g => [g.id, g.id !== 'board'])));
 const listed = computed(() => events.value.map((e, i) => ({ e, i }))
   .filter(({ e }) => groups.value[groupOf(e.kind)] && !(hideObserver.value && (e.role === 'researcher' || e.role === 'observer'))));
-const jumpTo = (e: ResearchEvent) => (t.value = e.at);
+const jumpTo = (e: ResearchEvent) => (t.value = Math.min(e.at, tEnd.value));
 const listRef = ref<HTMLElement | null>(null);
 const followTimeline = ref(true);
 watch(idx, async () => {

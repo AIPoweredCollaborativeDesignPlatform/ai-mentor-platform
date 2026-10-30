@@ -37,7 +37,7 @@ const toGuest = () => run(() => authStore.logoutGoogle());
   <div class="relative">
     <button type="button" class="page-nav-btn max-w-[11rem]" :title="t('acct.switch')" @click="open = !open">
       <UserRound class="w-3.5 h-3.5 shrink-0" />
-      <span class="truncate hidden sm:inline">{{ authStore.isGoogleLinked ? authStore.displayName || authStore.email : t('acct.guest') }}</span>
+      <span class="truncate hidden sm:inline">{{ authStore.isGoogleLinked ? authStore.accountName : t('acct.guest') }}</span>
       <ChevronDown class="w-3 h-3 shrink-0" />
     </button>
     <template v-if="open">

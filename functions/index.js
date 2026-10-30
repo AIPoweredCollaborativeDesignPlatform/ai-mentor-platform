@@ -315,19 +315,26 @@ export const endStudySession = onCall({ maxInstances: 10 }, async request => {
 });
 
 // Session timing every minute, then due Drive exports (src/drive.js)
-/** Reopen an ended room: the room's researcher (host) or the study administrator. */
+/**
+ * Reopen an ended room: the room's researcher (host) or the study administrator; in a room created
+ * by a participant (no researcher), also any approved participant.
+ */
 export const reopenStudySession = onCall({ maxInstances: 5 }, async request => {
   requireAuth(request);
   const { roomId } = request.data || {};
   if (!roomId) throw new HttpsError('invalid-argument', 'Missing roomId');
-  const room = (await getFirestore().doc(`rooms/${roomId}`).get()).data();
+  const db = getFirestore();
+  const room = (await db.doc(`rooms/${roomId}`).get()).data();
   if (!room) throw new HttpsError('not-found', 'Room not found');
   const token = request.auth.token;
-  const isResearcher = room.hostUid === request.auth.uid;
+  const isResearcher = Boolean(room.hostUid) && room.hostUid === request.auth.uid;
+  let by = isResearcher ? 'researcher' : 'admin';
   if (!isResearcher && !isAdminToken(token)) {
-    throw new HttpsError('permission-denied', 'Only the researcher can reopen the session');
+    const me = room.hostUid ? null : (await db.doc(`rooms/${roomId}/participants/${request.auth.uid}`).get()).data();
+    if (me?.status !== 'approved') throw new HttpsError('permission-denied', 'Only the researcher can reopen the session');
+    by = 'participant';
   }
-  return { reopened: await reopenSession(String(roomId), isResearcher ? 'researcher' : 'admin') };
+  return { reopened: await reopenSession(String(roomId), by) };
 });
 
 export const sessionClock = onSchedule(

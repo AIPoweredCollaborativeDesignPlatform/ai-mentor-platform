@@ -576,7 +576,7 @@ const confirmPermanentDelete = async () => {
             </h1>
             <p class="text-xs text-slate-400 mt-0.5 truncate">
               <span class="text-sky-400 font-mono truncate block max-w-[130px] xs:max-w-[200px] sm:max-w-none">{{
-                authStore.displayName || authStore.email?.split('@')[0] || t('common.user')
+                authStore.accountName || t('common.user')
               }}</span>
             </p>
           </div>

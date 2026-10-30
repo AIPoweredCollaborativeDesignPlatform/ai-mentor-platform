@@ -178,7 +178,9 @@ const loadDashboardData = async () => {
   trashRooms.value = initialRooms.filter(r => !!r.deletedAt);
 
 
-  // 2. Fetch remote rooms from Firestore (Multi-device synchronization)
+  // 2. Fetch remote rooms from Firestore (Multi-device synchronization). The cached list above is
+  // already on screen; queries made before sign-in is restored would be refused by the rules
+  await authStore.waitForAuthReady().catch(() => {});
   if (!db || !authStore.uid) {
     isLoading.value = false;
     isRefreshing.value = false;
@@ -188,84 +190,60 @@ const loadDashboardData = async () => {
   try {
     const remoteRoomsMap = new Map<string, any>();
 
-    // Query A: Rooms where user is host
-    try {
-      const qHost = query(collection(db, 'rooms'), where('hostUid', '==', authStore.uid));
-      const snapHost = await getDocs(qHost);
-      snapHost.forEach((d) => {
-        const data = d.data();
-        const pin = data.pin || d.id.replace('room_', '');
-        remoteRoomsMap.set(pin, { ...data, roomId: d.id, pin, isHost: true });
-      });
-    } catch (e) {
-      console.warn('qHost failed:', e);
-    }
-
-    // Query B: Rooms where user is a participant
-    try {
-      const qPart = query(
-        collection(db, 'rooms'),
-        where('participantUids', 'array-contains', authStore.uid)
-      );
-      const snapPart = await getDocs(qPart);
-      snapPart.forEach((d) => {
-        const data = d.data();
-        const pin = data.pin || d.id.replace('room_', '');
-        if (!remoteRoomsMap.has(pin)) {
-          remoteRoomsMap.set(pin, { ...data, roomId: d.id, pin, isHost: data.hostUid === authStore.uid });
-        }
-      });
-    } catch (e) {
-      console.warn('qPart failed:', e);
-    }
-
-    // Query C: User personal room index
-    const userRoomOverrides = new Map<string, any>();
-    try {
-      const snapUser = await getDocs(collection(db, 'users', authStore.uid, 'rooms'));
-      for (const d of snapUser.docs) {
-        const data = d.data();
-        const pin = data.pin || d.id.replace('room_', '');
-        const roomId = d.id;
-        userRoomOverrides.set(pin, { ...data, roomId, pin });
-
-        // If not discovered by Query A or B, verify if the room document actually exists
-        if (!remoteRoomsMap.has(pin)) {
-          try {
-            const rSnap = await getDoc(doc(db, 'rooms', roomId));
-            if (!rSnap.exists()) {
-              // Dead orphaned room! Clean up user reference and local storage
-              await deleteDoc(doc(db, 'users', authStore.uid, 'rooms', roomId)).catch(() => {});
-              localStorage.removeItem(`ai_room_${pin}`);
-              continue;
-            }
-            const rData = rSnap.data();
-            const isUserHost = rData.hostUid === authStore.uid;
-            const isUserParticipant = rData.participantUids?.includes(authStore.uid);
-            if (!isUserHost && !isUserParticipant) {
-              // User is no longer a member of this room
-              await deleteDoc(doc(db, 'users', authStore.uid, 'rooms', roomId)).catch(() => {});
-              localStorage.removeItem(`ai_room_${pin}`);
-              continue;
-            }
-            remoteRoomsMap.set(pin, { ...rData, roomId, pin, isHost: isUserHost });
-          } catch (e) {
-            // Cannot read room doc, clean up
-            await deleteDoc(doc(db, 'users', authStore.uid, 'rooms', roomId)).catch(() => {});
-            localStorage.removeItem(`ai_room_${pin}`);
-          }
-        }
+    // Every request below runs in parallel: one round trip per step instead of one per room
+    const uid = authStore.uid;
+    const warnNull = (label: string) => (e: unknown) => {
+      console.warn(`${label} failed:`, e);
+      return null;
+    };
+    // A: rooms I host, B: rooms I take part in, C: my personal room index
+    const [snapHost, snapPart, snapUser] = await Promise.all([
+      getDocs(query(collection(db, 'rooms'), where('hostUid', '==', uid))).catch(warnNull('qHost')),
+      getDocs(query(collection(db, 'rooms'), where('participantUids', 'array-contains', uid))).catch(warnNull('qPart')),
+      getDocs(collection(db, 'users', uid, 'rooms')).catch(warnNull('snapUser'))
+    ]);
+    snapHost?.forEach((d) => {
+      const data = d.data();
+      const pin = data.pin || d.id.replace('room_', '');
+      remoteRoomsMap.set(pin, { ...data, roomId: d.id, pin, isHost: true });
+    });
+    snapPart?.forEach((d) => {
+      const data = d.data();
+      const pin = data.pin || d.id.replace('room_', '');
+      if (!remoteRoomsMap.has(pin)) {
+        remoteRoomsMap.set(pin, { ...data, roomId: d.id, pin, isHost: data.hostUid === uid });
       }
-    } catch (e) {
-      console.warn('snapUser failed:', e);
-    }
+    });
+
+    const userRoomOverrides = new Map<string, any>();
+    const forget = async (roomId: string, pin: string) => {
+      await deleteDoc(doc(db, 'users', uid, 'rooms', roomId)).catch(() => {});
+      localStorage.removeItem(`ai_room_${pin}`);
+    };
+    await Promise.all((snapUser?.docs || []).map(async (d) => {
+      const data = d.data();
+      const pin = data.pin || d.id.replace('room_', '');
+      const roomId = d.id;
+      userRoomOverrides.set(pin, { ...data, roomId, pin });
+      if (remoteRoomsMap.has(pin)) return;
+      // Not found by A or B: keep it only if the room still exists and I am still a member
+      try {
+        const rSnap = await getDoc(doc(db, 'rooms', roomId));
+        const rData = rSnap.data();
+        const isUserHost = rData?.hostUid === uid;
+        if (!rData || (!isUserHost && !rData.participantUids?.includes(uid))) return forget(roomId, pin);
+        remoteRoomsMap.set(pin, { ...rData, roomId, pin, isHost: isUserHost });
+      } catch {
+        await forget(roomId, pin);
+      }
+    }));
 
     // Process all rooms retrieved from Cloud
     const mergedRooms: RoomHistoryItem[] = [];
     const mergedAssets: { type: string; title: string; date: string; roomPin: string }[] = [];
     const seenAssetKeys = new Set<string>();
 
-    for (const [pin, roomData] of remoteRoomsMap.entries()) {
+    await Promise.all([...remoteRoomsMap.entries()].map(async ([pin, roomData]) => {
       const roomId = roomData.roomId || `room_${pin}`;
       let lastActive = roomData.lastActive || roomData.createdAt || roomData.joinedAt || Date.now();
       let previewText = '';
@@ -370,7 +348,7 @@ const loadDashboardData = async () => {
         isHost,
         deletedAt: roomDeletedAt
       });
-    }
+    }));
 
     // Merge any local assets that weren't captured remotely
     initialAssets.forEach((asset) => {

@@ -12,8 +12,7 @@ import {
   LayoutDashboard,
   Search,
   X,
-  Loader2,
-  LogOut
+  Loader2
 } from 'lucide-vue-next';
 import { computed, onMounted, watch } from 'vue';
 import { listProfiles } from '../services/admin';
@@ -90,12 +89,6 @@ onMounted(async () => {
 // Signing in on this page (or the role arriving later) makes the staff controls appear: load the list then
 watch(isStudyAdmin, loadProfiles);
 
-const handleLogout = async () => {
-  await authStore.logoutGoogle();
-  profiles.value = [];
-  profilesLoaded = false;
-};
-
 const handleCreateRoom = async () => {
   isLoading.value = true;
   try {
@@ -167,11 +160,7 @@ const handleGoogleSignIn = async () => {
 
 <template>
   <div class="min-h-[100dvh] flex flex-col items-center justify-center p-4 sm:p-6 bg-slate-950 overflow-y-auto relative">
-    <PageNav>
-      <button v-if="authStore.isGoogleLinked" @click="handleLogout" class="page-nav-btn">
-        <LogOut class="w-3.5 h-3.5 text-rose-400" /> <span class="hidden sm:inline">{{ t('dash.signOut') }}</span>
-      </button>
-    </PageNav>
+    <PageNav />
     <!-- Brand / Header -->
     <div class="text-center max-w-xl mb-5">
       <h1 class="text-xl sm:text-2xl font-black text-ink mb-1.5 tracking-tight flex items-center justify-center gap-2">

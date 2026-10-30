@@ -19,7 +19,6 @@ import { db } from '../firebase/config';
 import {
   LayoutDashboard,
   Clock,
-  LogOut,
   FolderOpen,
   Trash2,
   SlidersHorizontal,
@@ -552,11 +551,6 @@ const confirmPermanentDelete = async () => {
     }
   }
 };
-const handleLogout = async () => {
-  await authStore.logoutGoogle();
-  historyRooms.value = [];
-  router.replace('/');
-};
 </script>
 
 <template>
@@ -592,9 +586,6 @@ const handleLogout = async () => {
           <button @click="handleRefresh" :disabled="isRefreshing" class="page-nav-btn" :title="t('dash.syncTitle')">
             <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': isRefreshing }" />
             <span class="hidden sm:inline">{{ t('dash.sync') }}</span>
-          </button>
-          <button @click="handleLogout" class="page-nav-btn">
-            <LogOut class="w-3.5 h-3.5 text-rose-400" /> <span class="hidden sm:inline">{{ t('dash.signOut') }}</span>
           </button>
         </PageNav>
       </div>

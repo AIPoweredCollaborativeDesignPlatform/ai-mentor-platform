@@ -92,6 +92,29 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.setItem('ai_mentor_avatar', newAvatar);
   };
 
+  // Google accounts used in this browser, for the account switcher (Firebase keeps one signed-in
+  // account at a time; switching re-opens Google sign-in with the chosen account filled in)
+  type KnownAccount = { email: string; name: string; photo: string };
+  const ACCOUNTS_KEY = 'ai_mentor_accounts';
+  const readAccounts = (): KnownAccount[] => {
+    try {
+      return JSON.parse(localStorage.getItem(ACCOUNTS_KEY) || '[]');
+    } catch {
+      return [];
+    }
+  };
+  const knownAccounts = ref<KnownAccount[]>(readAccounts());
+  const saveAccounts = (list: KnownAccount[]) => {
+    knownAccounts.value = list;
+    localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(list));
+  };
+  function rememberAccount(user: User) {
+    if (!user.email) return;
+    const entry = { email: user.email, name: user.displayName || user.email.split('@')[0], photo: user.photoURL || '' };
+    saveAccounts([entry, ...knownAccounts.value.filter(a => a.email !== user.email)].slice(0, 6));
+  }
+  const forgetAccount = (accountEmail: string) => saveAccounts(knownAccounts.value.filter(a => a.email !== accountEmail));
+
   // Attach real Firebase listener if configured
   if (auth) {
     // Check if we just came back from a redirect login
@@ -115,9 +138,11 @@ export const useAuthStore = defineStore('auth', () => {
           setRole(null);
           localStorage.removeItem('ai_mentor_google_linked');
         } else {
-          // Real Google account
+          // Real Google account. A different account than last time must not inherit the remembered role
+          if ((user.email || '') !== email.value) setRole(null);
           isGoogleLinked.value = true;
           email.value = user.email || '';
+          rememberAccount(user);
           displayName.value = user.displayName || displayName.value || user.email?.split('@')[0] || 'User';
           localStorage.setItem('ai_mentor_google_linked', 'true');
           localStorage.setItem('ai_mentor_email', email.value);
@@ -163,12 +188,13 @@ export const useAuthStore = defineStore('auth', () => {
   };
 
   // Real Google Account sign-in / upgrade
-  const upgradeWithGoogle = async () => {
+  // `accountEmail`: switch straight to a remembered account (Google pre-selects it); otherwise pick any
+  const upgradeWithGoogle = async (accountEmail?: string) => {
     if (!auth) {
       throw new Error('Firebase Auth is not configured');
     }
     const provider = new GoogleAuthProvider();
-    provider.setCustomParameters({ prompt: 'select_account' });
+    provider.setCustomParameters(accountEmail ? { login_hint: accountEmail } : { prompt: 'select_account' });
 
     const previousAnonUid = (auth.currentUser && auth.currentUser.isAnonymous)
       ? auth.currentUser.uid
@@ -200,6 +226,8 @@ export const useAuthStore = defineStore('auth', () => {
 
     if (!user) return { success: false };
 
+    if ((user.email || '') !== email.value) setRole(null); // switched accounts: the old role does not carry over
+    rememberAccount(user);
     firebaseUser.value = user;
     uid.value = user.uid;
     email.value = user.email || '';
@@ -288,6 +316,8 @@ export const useAuthStore = defineStore('auth', () => {
     isAdmin,
     isPrimaryAdmin,
     isObserver,
+    knownAccounts,
+    forgetAccount,
     waitForRole,
     firebaseUser,
     updateProfile,

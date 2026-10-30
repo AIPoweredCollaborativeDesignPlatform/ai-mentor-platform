@@ -4,12 +4,13 @@ import { useRoute } from 'vue-router';
 import { Home, Settings2 } from 'lucide-vue-next';
 import { t } from '../i18n';
 import { useAuthStore } from '../stores/auth';
+import AccountMenu from './AccountMenu.vue';
 import LocaleSwitch from './LocaleSwitch.vue';
 import ThemeSwitch from './ThemeSwitch.vue';
 
 /**
  * The same top-right cluster on the home, dashboard and admin pages:
- * [page actions (slot)] [Home] [Admin, staff only] [day/night] [language]. The link to the current page is left out.
+ * [page actions (slot)] [Home] [Admin, staff only] [account] [day/night] [language]. The link to the current page is left out.
  */
 const route = useRoute();
 const authStore = useAuthStore();
@@ -26,6 +27,7 @@ const showAdmin = computed(() => authStore.isObserver && route.path !== '/admin'
     <router-link v-if="showAdmin" to="/admin" class="page-nav-btn">
       <Settings2 class="w-3.5 h-3.5" /> {{ t('common.adminPanel') }}
     </router-link>
+    <AccountMenu />
     <ThemeSwitch />
     <LocaleSwitch />
   </div>

@@ -16,11 +16,12 @@ service cloud.firestore {
         get(/databases/$(database)/documents/rooms/$(roomId)/participants/$(request.auth.uid)).data.status == "approved";
     }
 
-    // Study administrator (bootstrap account, matches functions/src/roles.js)
+    // Study administrators: the primary bootstrap account, plus accounts it added (custom claim
+    // role: 'admin', set by functions/src/roles.js)
     function isAdmin() {
       return isAuthenticated()
-        && request.auth.token.email == 'bb900114@gmail.com'
-        && request.auth.token.email_verified == true;
+        && request.auth.token.email_verified == true
+        && (request.auth.token.email == 'bb900114@gmail.com' || request.auth.token.role == 'admin');
     }
 
     // Observers (custom claim set by functions/src/roles.js) and the administrator: read-only access

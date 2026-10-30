@@ -40,8 +40,9 @@ export const useAuthStore = defineStore('auth', () => {
   const isGoogleLinked = ref(localStorage.getItem('ai_mentor_google_linked') === 'true');
   const firebaseUser = ref<User | null>(null);
 
-  // Study roles (functions/src/roles.js): the administrator is a fixed account, observers carry the
-  // custom claim role: 'observer'. Rules enforce access; these only shape the UI.
+  // Study roles (functions/src/roles.js): the primary administrator is a fixed account; added
+  // administrators carry the custom claim role: 'admin', observers role: 'observer'. Rules enforce
+  // access; these only shape the UI.
   const ADMIN_EMAIL = 'bb900114@gmail.com';
   // Remembered from the last check so staff controls show at once; syncMyRole confirms it after sign-in
   const ROLE_KEY = 'ai_mentor_role';
@@ -51,7 +52,8 @@ export const useAuthStore = defineStore('auth', () => {
     if (role) localStorage.setItem(ROLE_KEY, role);
     else localStorage.removeItem(ROLE_KEY);
   };
-  const isAdmin = computed(() => isGoogleLinked.value && email.value === ADMIN_EMAIL);
+  const isPrimaryAdmin = computed(() => isGoogleLinked.value && email.value === ADMIN_EMAIL);
+  const isAdmin = computed(() => isPrimaryAdmin.value || (isGoogleLinked.value && roleClaim.value === 'admin'));
   const isObserver = computed(() => isAdmin.value || roleClaim.value === 'observer');
 
   // Pages that depend on the role (join choice, admin) await this; it never blocks sign-in itself
@@ -284,6 +286,7 @@ export const useAuthStore = defineStore('auth', () => {
     email,
     isGoogleLinked,
     isAdmin,
+    isPrimaryAdmin,
     isObserver,
     waitForRole,
     firebaseUser,

@@ -17,7 +17,7 @@ import { logBoardObjectChange, logMessageChange } from './src/events.js';
 import { authUrl, exportRoom, handleCallback, runDueExports } from './src/drive.js';
 import { createRoom, listPins, markRoomDeleted, updateMyProfile, updateRoomDetails } from './src/rooms.js';
 import { consentTextFor, roomLanguage, str } from './src/i18n.js';
-import { claimAnonymousRooms, isAdminToken, isObserverToken, listObservers, setObserver, syncRole } from './src/roles.js';
+import { claimAnonymousRooms, isAdminToken, isObserverToken, isPrimaryAdminToken, listAdmins, listObservers, setAdmin, setObserver, syncRole } from './src/roles.js';
 
 initializeApp();
 
@@ -126,7 +126,7 @@ const requireAdmin = request => {
 };
 
 // ---------- Roles (src/roles.js) ----------
-/** Brings the caller's observer claim in line with the list; the browser refreshes its token when changed. */
+/** Brings the caller's role claim in line with the lists; the browser refreshes its token when changed. */
 export const syncMyRole = onCall({ maxInstances: 10 }, async request => {
   requireAuth(request);
   return syncRole(request.auth.uid, request.auth.token);
@@ -142,6 +142,22 @@ export const setStudyObserver = onCall({ maxInstances: 2 }, async request => {
   const { email, add } = request.data || {};
   try {
     return await setObserver(email, add !== false, request.auth.token.email);
+  } catch (err) {
+    throw new HttpsError('invalid-argument', err?.message || String(err));
+  }
+});
+
+// Additional administrators: any administrator can see the list, only the primary one can change it
+export const listStudyAdmins = onCall({ maxInstances: 2 }, async request => {
+  requireAdmin(request);
+  return { admins: await listAdmins() };
+});
+
+export const setStudyAdmin = onCall({ maxInstances: 2 }, async request => {
+  if (!isPrimaryAdminToken(request.auth?.token)) throw new HttpsError('permission-denied', 'Primary administrator only');
+  const { email, add } = request.data || {};
+  try {
+    return await setAdmin(email, add !== false, request.auth.token.email);
   } catch (err) {
     throw new HttpsError('invalid-argument', err?.message || String(err));
   }

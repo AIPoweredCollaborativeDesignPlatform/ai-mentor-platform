@@ -185,3 +185,14 @@ export async function setObserver(email: string, add: boolean) {
   const fn = httpsCallable<{ email: string; add: boolean }, { email: string; applied: boolean }>(functions, 'setStudyObserver');
   return (await fn({ email, add })).data;
 }
+
+/** Additional administrators (only the primary administrator may change the list). */
+export async function listAdmins(): Promise<StudyObserver[]> {
+  const fn = httpsCallable<void, { admins: StudyObserver[] }>(functions, 'listStudyAdmins');
+  return (await fn()).data.admins;
+}
+
+export async function setAdmin(email: string, add: boolean) {
+  const fn = httpsCallable<{ email: string; add: boolean }, { email: string; applied: boolean }>(functions, 'setStudyAdmin');
+  return (await fn({ email, add })).data;
+}

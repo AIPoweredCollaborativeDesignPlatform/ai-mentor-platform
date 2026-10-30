@@ -10,7 +10,7 @@ import {
 } from '../utils/aiProfiles';
 import {
   assignRoomProfile, deleteStudyRoom, exportRoomNow, getDriveAuthUrl, getDriveStatus, getSystemConfig, listProfiles, listStudyRooms, loadUsage,
-  listObservers, listRoomPins, saveProfile, saveSystemConfig, setObserver, type DriveStatus, type StudyObserver, type RoomPins, type StudyRoom, type UsageRow
+  listAdmins, listObservers, listRoomPins, saveProfile, saveSystemConfig, setAdmin, setObserver, type DriveStatus, type StudyObserver, type RoomPins, type StudyRoom, type UsageRow
 } from '../services/admin';
 import { DEFAULT_CONSENT_TEXT, DEFAULT_CONSENT_TEXT_ZH } from '../constants/consent';
 import { intlLocale, t, type MessageKey } from '../i18n';
@@ -80,7 +80,7 @@ const loadAll = async () => {
 onMounted(async () => {
   await authStore.waitForAuthReady().catch(() => {});
   await authStore.waitForRole();
-  if (isAdmin.value) await Promise.all([loadAll(), loadObservers()]);
+  if (isAdmin.value) await Promise.all([loadAll(), loadObservers(), loadAdmins()]);
   else if (canView.value) {
     tab.value = 'rooms';
     await loadAll();
@@ -107,6 +107,29 @@ const changeObserver = async (email: string, add: boolean) => {
     roomStore.pushToast(t('adm.actionFailed'), e?.message || String(e), 'error');
   } finally {
     observerBusy.value = false;
+  }
+};
+
+// ---------- Administrators (added by the primary administrator; same rights except this list) ----------
+const admins = ref<StudyObserver[]>([]);
+const adminEmail = ref('');
+const adminBusy = ref(false);
+const loadAdmins = async () => {
+  admins.value = await listAdmins().catch(() => []);
+};
+const changeAdmin = async (email: string, add: boolean) => {
+  if (!email.trim()) return;
+  if (!window.confirm(t(add ? 'adm.addAdminConfirm' : 'adm.removeAdminConfirm', { email: email.trim() }))) return;
+  adminBusy.value = true;
+  try {
+    const res = await setAdmin(email.trim(), add);
+    roomStore.pushToast(add ? t('adm.adminAdded') : t('adm.adminRemoved'), add && !res.applied ? t('adm.observerPending', { email: res.email }) : res.email, 'success');
+    adminEmail.value = '';
+    await Promise.all([loadAdmins(), loadObservers()]);
+  } catch (e: any) {
+    roomStore.pushToast(t('adm.actionFailed'), e?.message || String(e), 'error');
+  } finally {
+    adminBusy.value = false;
   }
 };
 
@@ -578,6 +601,24 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
             <label>{{ t('adm.priceImage') }} <input type="number" step="0.001" v-model.number="system.prices.imagePerUnit" class="w-20 bg-slate-950 border border-slate-700 rounded px-2 py-1" /></label>
             <label>{{ t('adm.price3d') }} <input type="number" step="0.01" v-model.number="system.prices.model3DPerUnit" class="w-20 bg-slate-950 border border-slate-700 rounded px-2 py-1" /></label>
           </div>
+        </div>
+        <!-- Administrators: everyone with admin rights sees the list, only the primary administrator edits it -->
+        <div class="space-y-2 text-xs">
+          <h3 class="text-sm font-semibold">{{ t('adm.admins') }}</h3>
+          <p class="text-[11px] text-slate-500">{{ t('adm.adminsHint') }}</p>
+          <div class="flex items-center gap-2">
+            <span class="font-mono text-slate-300">bb900114@gmail.com</span>
+            <span class="text-[11px] text-slate-500">{{ t('adm.primaryAdmin') }}</span>
+          </div>
+          <div v-for="a in admins" :key="a.email" class="flex items-center gap-2">
+            <span class="font-mono text-slate-300">{{ a.email }}</span>
+            <span class="text-[11px] text-slate-500">{{ fmtTime(a.addedAt) }}</span>
+            <button v-if="authStore.isPrimaryAdmin" @click="changeAdmin(a.email, false)" :disabled="adminBusy" class="ml-auto px-2 py-1 rounded border border-slate-700 hover:bg-slate-800 text-[11px] disabled:opacity-40">{{ t('adm.remove') }}</button>
+          </div>
+          <form v-if="authStore.isPrimaryAdmin" @submit.prevent="changeAdmin(adminEmail, true)" class="flex items-center gap-2">
+            <input v-model="adminEmail" type="email" placeholder="name@gmail.com" class="flex-1 bg-slate-950 border border-slate-700 rounded px-2 py-1.5" />
+            <button :disabled="adminBusy || !adminEmail.trim()" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold disabled:opacity-40">{{ t('adm.add') }}</button>
+          </form>
         </div>
         <div class="space-y-2 text-xs">
           <h3 class="text-sm font-semibold">{{ t('adm.observers') }}</h3>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import { Loader2, RefreshCw, Trash2 } from 'lucide-vue-next';
+import { useRoute, useRouter } from 'vue-router';
+import { Check, CheckCheck, ChevronDown, Loader2, MessageSquare, RefreshCw, SlidersHorizontal, Trash2 } from 'lucide-vue-next';
 import { useAuthStore } from '../stores/auth';
 import { useRoomStore } from '../stores/room';
 import ProfileEditor from '../components/admin/ProfileEditor.vue';
@@ -45,7 +46,29 @@ const isAdmin = computed(() => authStore.isAdmin);
 // Observers only see the rooms tab (status, uploads, replays), without any action buttons
 const canView = computed(() => authStore.isObserver);
 
-const tab = ref<'profiles' | 'rooms' | 'cost' | 'system'>('profiles');
+type AdminTab = 'profiles' | 'rooms' | 'cost' | 'system';
+// The tab lives in the URL (?tab=rooms), so reloading or coming back from a replay keeps it
+const route = useRoute();
+const router = useRouter();
+const TAB_IDS: AdminTab[] = ['profiles', 'rooms', 'cost', 'system'];
+const tab = ref<AdminTab>(TAB_IDS.includes(route.query.tab as AdminTab) ? (route.query.tab as AdminTab) : 'profiles');
+watch(tab, id => router.replace({ query: { ...route.query, tab: id } }));
+
+// Last loaded lists are shown at once from this browser, then refreshed in the background
+const CACHE_KEY = 'ai_mentor_admin_cache';
+const readCache = (): { rooms?: StudyRoom[]; pins?: RoomPins; profiles?: AiProfile[] } => {
+  try {
+    return JSON.parse(localStorage.getItem(CACHE_KEY) || '{}');
+  } catch {
+    return {};
+  }
+};
+const writeCache = (part: ReturnType<typeof readCache>) => {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ ...readCache(), ...part }));
+  } catch {}
+};
+const cached = readCache();
 const ALL_TABS = [
   { id: 'profiles', label: 'adm.tabProfiles' },
   { id: 'rooms', label: 'adm.tabRooms' },
@@ -54,7 +77,8 @@ const ALL_TABS = [
 ] as const;
 const tabs = computed(() => (isAdmin.value ? ALL_TABS : ALL_TABS.filter(tb => tb.id === 'rooms')));
 
-const profiles = ref<AiProfile[]>([]);
+const profiles = ref<AiProfile[]>(cached.profiles || []);
+watch(profiles, list => writeCache({ profiles: list }));
 const system = ref<Record<string, any>>(structuredClone(SYSTEM_DEFAULTS));
 const loading = ref(false);
 const error = ref('');
@@ -81,11 +105,10 @@ const loadAll = async () => {
 onMounted(async () => {
   await authStore.waitForAuthReady().catch(() => {});
   await authStore.waitForRole();
+  if (canView.value && !isAdmin.value) tab.value = 'rooms';
+  if (canView.value && tab.value === 'rooms') loadRoomsTab();
   if (isAdmin.value) await Promise.all([loadAll(), loadObservers(), loadAdmins(), loadApiKeys()]);
-  else if (canView.value) {
-    tab.value = 'rooms';
-    await loadAll();
-  }
+  else if (canView.value) await loadAll();
 });
 
 // ---------- Observers ----------
@@ -235,24 +258,75 @@ const setDefaultProfile = async (id: string) => {
 };
 
 // ---------- Rooms ----------
-const rooms = ref<StudyRoom[]>([]);
+const rooms = ref<StudyRoom[]>(cached.rooms || []);
 const roomsLoading = ref(false);
 const pendingChoice = ref<Record<string, string>>({});
 const loadRooms = async () => {
   roomsLoading.value = true;
   try {
     [rooms.value] = await Promise.all([listStudyRooms(), loadDrive()]);
+    writeCache({ rooms: rooms.value });
   } catch (e: any) {
     roomStore.pushToast(t('adm.loadRoomsFailed'), e?.message || String(e), 'error');
   } finally {
     roomsLoading.value = false;
   }
 };
-watch(tab, t => {
-  if (t !== 'rooms') return;
-  if (!rooms.value.length) loadRooms();
-  if (!pins.value) loadPins();
+// Every visit refreshes; the cached list stays on screen meanwhile
+let roomsFetched = false;
+const loadRoomsTab = () => {
+  if (roomsFetched) return;
+  roomsFetched = true;
+  loadRooms();
+  loadPins();
+};
+watch(tab, id => id === 'rooms' && canView.value && loadRoomsTab());
+
+// Filter by condition, first few rooms only (PIN list stays reachable), batch delete
+const roomFilter = ref<string>('all');
+const roomFilters = computed(() => {
+  const seen = new Map<string, string>();
+  for (const r of rooms.value) {
+    const id = r.assignment?.profileId || '';
+    if (!seen.has(id)) seen.set(id, r.assignment ? r.assignment.profileName || '—' : t('adm.notAssigned'));
+  }
+  return [...seen].map(([id, name]) => ({ id, name, count: rooms.value.filter(r => (r.assignment?.profileId || '') === id).length }));
 });
+const filteredRooms = computed(() => (roomFilter.value === 'all' ? rooms.value : rooms.value.filter(r => (r.assignment?.profileId || '') === roomFilter.value)));
+const ROOMS_PREVIEW = 5;
+const showAllRooms = ref(false);
+const visibleRooms = computed(() => (showAllRooms.value ? filteredRooms.value : filteredRooms.value.slice(0, ROOMS_PREVIEW)));
+const isRunning = (r: StudyRoom) => r.session?.phase === 'running';
+
+const manageRooms = ref(false);
+const selectedRooms = ref(new Set<string>());
+const toggleRoomSelect = (r: StudyRoom) => {
+  if (!manageRooms.value || isRunning(r)) return;
+  const next = new Set(selectedRooms.value);
+  next.has(r.roomId) ? next.delete(r.roomId) : next.add(r.roomId);
+  selectedRooms.value = next;
+};
+const selectable = computed(() => filteredRooms.value.filter(r => !isRunning(r)));
+const toggleSelectAllRooms = () => {
+  selectedRooms.value = selectedRooms.value.size === selectable.value.length ? new Set() : new Set(selectable.value.map(r => r.roomId));
+};
+const exitManage = () => {
+  manageRooms.value = false;
+  selectedRooms.value = new Set();
+};
+const deletingRooms = ref(false);
+const deleteSelectedRooms = async () => {
+  const ids = [...selectedRooms.value];
+  if (!ids.length || !window.confirm(t('adm.deleteManyConfirm', { count: ids.length }))) return;
+  deletingRooms.value = true;
+  const failed: string[] = [];
+  await Promise.all(ids.map(id => deleteStudyRoom(id).catch(() => failed.push(id))));
+  rooms.value = rooms.value.filter(r => !ids.includes(r.roomId) || failed.includes(r.roomId));
+  writeCache({ rooms: rooms.value });
+  deletingRooms.value = false;
+  exitManage();
+  if (failed.length) roomStore.pushToast(t('adm.deleteFailed'), t('adm.deleteManyFailed', { count: failed.length }), 'error');
+};
 
 // One confirmation, as agreed for the study protocol
 const assign = async (room: StudyRoom) => {
@@ -271,6 +345,7 @@ const assign = async (room: StudyRoom) => {
 };
 
 const fmtTime = (ms?: number) => (ms ? new Date(ms).toLocaleString(intlLocale(), { hour12: false }) : '—');
+const fmtShort = (ms?: number) => (ms ? new Date(ms).toLocaleString(intlLocale(), { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) : '—');
 
 // ---------- Cost ----------
 const costProfileId = ref<string>('');
@@ -334,13 +409,14 @@ const saveSystem = async () => {
 };
 
 // ---------- PINs (functions/src/rooms.js): deleted rooms never give their PIN back ----------
-const pins = ref<RoomPins | null>(null);
+const pins = ref<RoomPins | null>(cached.pins || null);
 const pinsLoading = ref(false);
 const pinView = ref<'inUse' | 'ended' | 'invalid' | 'free'>('inUse');
 const loadPins = async () => {
   pinsLoading.value = true;
   try {
     pins.value = await listRoomPins();
+    writeCache({ pins: pins.value });
   } catch (e: any) {
     roomStore.pushToast(t('adm.loadPinsFailed'), e?.message || String(e), 'error');
   } finally {
@@ -390,16 +466,6 @@ const endOrReopen = async (room: StudyRoom, end: boolean) => {
     roomStore.pushToast(end ? t('adm.endFailed') : t('adm.reopenFailed'), e?.message || String(e), 'error');
   }
 };
-const removeRoom = async (room: StudyRoom) => {
-  if (!window.confirm(t('adm.deleteConfirm', { pin: room.pin, name: room.roomName || '' }))) return;
-  try {
-    await deleteStudyRoom(room.roomId);
-    rooms.value = rooms.value.filter(r => r.roomId !== room.roomId);
-  } catch (e: any) {
-    const running = e?.code === 'functions/failed-precondition';
-    roomStore.pushToast(t('adm.deleteFailed'), running ? t('adm.deleteRunning') : e?.message || String(e), 'error');
-  }
-};
 const UPLOAD_LABELS: Record<string, { text: MessageKey; cls: string }> = {
   pending: { text: 'adm.upPending', cls: 'text-slate-300' },
   uploading: { text: 'adm.upUploading', cls: 'text-sky-300' },
@@ -408,6 +474,14 @@ const UPLOAD_LABELS: Record<string, { text: MessageKey; cls: string }> = {
   needs_auth: { text: 'adm.upNeedsAuth', cls: 'text-amber-300' },
   reopened: { text: 'adm.upReopened', cls: 'text-slate-400' }
 };
+
+const uploadLabel = (r: StudyRoom) => `Drive ${UPLOAD_LABELS[r.upload!.status] ? t(UPLOAD_LABELS[r.upload!.status].text) : r.upload!.status}`;
+// Full details stay available on hover; the card shows the short line
+const roomDetail = (r: StudyRoom) => [
+  t('adm.created', { at: fmtTime(r.createdAt) }),
+  t('adm.lastActive', { at: fmtTime(r.lastActive) }),
+  r.assignment ? `${fmtTime(r.assignment.assignedAt)} by ${r.assignment.assignedBy}` : ''
+].filter(Boolean).join(' · ');
 
 const PHASE_LABELS: Record<string, MessageKey> = { waiting: 'adm.phaseWaiting', running: 'adm.phaseRunning', ended: 'adm.phaseEnded' };
 
@@ -501,28 +575,74 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
           </button>
         </div>
 
-        <div v-for="r in rooms" :key="r.roomId" :class="card" class="flex flex-wrap items-center gap-3">
+        <!-- Filter by condition, batch management -->
+        <div v-if="rooms.length" class="flex flex-wrap items-center gap-1.5">
+          <button
+            v-for="f in [{ id: 'all', name: t('adm.filterAll'), count: rooms.length }, ...roomFilters]"
+            :key="f.id"
+            @click="roomFilter = f.id"
+            class="px-2.5 py-1 rounded-lg text-[11px] font-semibold"
+            :class="roomFilter === f.id ? 'bg-sky-600 text-white' : 'border border-slate-700 text-slate-400 hover:text-slate-200'"
+          >
+            {{ f.name }} {{ f.count }}
+          </button>
+          <div v-if="isAdmin" class="ml-auto flex items-center gap-1.5">
+            <template v-if="manageRooms">
+              <button @click="toggleSelectAllRooms" class="px-2.5 py-1 rounded-lg border border-slate-700 text-xs inline-flex items-center gap-1">
+                <CheckCheck class="w-3.5 h-3.5 text-sky-400" />
+                {{ selectedRooms.size && selectedRooms.size === selectable.length ? t('dash.deselectAll') : t('dash.selectAll') }}
+              </button>
+              <button @click="deleteSelectedRooms" :disabled="!selectedRooms.size || deletingRooms" class="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold inline-flex items-center gap-1 disabled:opacity-40">
+                <Trash2 class="w-3.5 h-3.5" /> {{ t('adm.deleteN', { count: selectedRooms.size }) }}
+              </button>
+              <button @click="exitManage" class="px-2.5 py-1 rounded-lg border border-slate-700 text-xs text-slate-400">{{ t('wb.done') }}</button>
+            </template>
+            <button v-else @click="manageRooms = true" class="px-2.5 py-1 rounded-lg border border-slate-700 text-xs text-slate-300 inline-flex items-center gap-1">
+              <SlidersHorizontal class="w-3.5 h-3.5 text-sky-400" /> {{ t('dash.manage') }}
+            </button>
+          </div>
+        </div>
+        <p v-if="manageRooms" class="text-[11px] text-slate-500">{{ t('adm.manageHint') }}</p>
+
+        <div
+          v-for="r in visibleRooms"
+          :key="r.roomId"
+          :class="[card, manageRooms ? (isRunning(r) ? 'opacity-50' : 'cursor-pointer') : '', selectedRooms.has(r.roomId) ? '!border-sky-500/80 ring-1 ring-sky-500/40' : '']"
+          class="flex flex-wrap items-center gap-x-3 gap-y-2"
+          @click="toggleRoomSelect(r)"
+        >
           <div class="min-w-0 flex-1">
-            <div class="font-semibold text-sm">{{ r.roomName || 'Meeting' }} <span class="font-mono text-xs text-sky-400">{{ r.pin }}</span>
-              <span v-if="r.session" class="ml-1 text-[10px]" :class="r.session.phase === 'running' ? 'text-emerald-300' : r.session.phase === 'ended' ? 'text-amber-300' : 'text-slate-400'">
-                {{ PHASE_LABELS[r.session.phase] ? t(PHASE_LABELS[r.session.phase]) : r.session.phase }}<template v-if="r.session.phase === 'waiting'">{{ t('adm.opensAt', { count: r.session.expected }) }}</template><template v-if="r.session.endedBy"> · {{ r.session.endedBy === 'all_offline' ? t('adm.allOffline') : t('adm.endedByResearcher') }}</template>
-              </span>
-              <span v-else-if="r.roomStatus === 'ended'" class="ml-1 text-[10px] text-amber-300">{{ t('adm.phaseEnded') }}</span>
+            <div class="flex items-center gap-2 min-w-0">
+              <span
+                v-if="manageRooms"
+                class="w-4 h-4 rounded border flex items-center justify-center shrink-0"
+                :class="selectedRooms.has(r.roomId) ? 'bg-sky-500 border-sky-400 text-white' : 'border-slate-600 bg-slate-950'"
+              ><Check v-if="selectedRooms.has(r.roomId)" class="w-3 h-3 stroke-[3]" /></span>
+              <span class="font-semibold text-sm truncate">{{ r.roomName || 'Meeting' }}</span>
+              <span class="font-mono text-xs text-sky-400 shrink-0">{{ r.pin }}</span>
+              <span
+                v-if="r.session || r.roomStatus === 'ended'"
+                class="shrink-0 px-1.5 py-0.5 rounded text-[10px]"
+                :class="r.session?.phase === 'running' ? 'bg-emerald-500/15 text-emerald-300' : r.session?.phase === 'waiting' ? 'bg-slate-800 text-slate-400' : 'bg-amber-500/15 text-amber-300'"
+                :title="r.session?.endedBy ? (r.session.endedBy === 'all_offline' ? t('adm.allOffline') : t('adm.endedByResearcher')) : ''"
+              >{{ r.session ? (PHASE_LABELS[r.session.phase] ? t(PHASE_LABELS[r.session.phase]) : r.session.phase) : t('adm.phaseEnded') }}</span>
             </div>
-            <div class="text-[11px] text-slate-500">{{ t('adm.created', { at: fmtTime(r.createdAt) }) }} · {{ t('adm.lastActive', { at: fmtTime(r.lastActive) }) }}</div>
-            <div class="text-[11px] text-slate-300 mt-0.5">
-              {{ t('adm.current', { value: r.assignment ? `${r.assignment.profileName || '—'} v${r.assignment.profileVersion} (${r.assignment.mode}) · ${fmtTime(r.assignment.assignedAt)} by ${r.assignment.assignedBy}` : t('adm.notAssigned') }) }}
-            </div>
-            <div v-if="r.upload" class="text-[11px] mt-0.5">
-              <span :class="UPLOAD_LABELS[r.upload.status]?.cls">{{ t('adm.drivePrefix', { status: UPLOAD_LABELS[r.upload.status] ? t(UPLOAD_LABELS[r.upload.status].text) : r.upload.status }) }}</span>
-              <span v-if="r.upload.status === 'pending' && r.upload.dueAt" class="text-slate-500">{{ t('adm.dueAt', { at: fmtTime(r.upload.dueAt) }) }}</span>
-              <a v-if="r.upload.folderUrl" :href="r.upload.folderUrl" target="_blank" rel="noopener" class="ml-1 text-sky-400 hover:underline">{{ t('adm.folder') }}</a>
-              <span v-if="r.upload.error" class="ml-1 text-rose-300/80">{{ r.upload.error }}</span>
+            <div
+              class="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-slate-400"
+              :title="roomDetail(r)"
+            >
+              <span v-if="r.messageCount !== undefined" class="inline-flex items-center gap-1"><MessageSquare class="w-3 h-3" />{{ t('adm.messageCount', { count: r.messageCount }) }}</span>
+              <span :class="r.assignment ? 'text-slate-300' : 'text-amber-300'">{{ r.assignment ? `${r.assignment.profileName || '—'} v${r.assignment.profileVersion} · ${r.assignment.mode}` : t('adm.notAssigned') }}</span>
+              <span>{{ t('adm.lastActiveShort', { at: fmtShort(r.lastActive) }) }}</span>
+              <template v-if="r.upload">
+                <a v-if="r.upload.folderUrl" :href="r.upload.folderUrl" target="_blank" rel="noopener" @click.stop class="hover:underline" :class="UPLOAD_LABELS[r.upload.status]?.cls">{{ uploadLabel(r) }}</a>
+                <span v-else :class="UPLOAD_LABELS[r.upload.status]?.cls" :title="r.upload.error || (r.upload.dueAt ? t('adm.dueAt', { at: fmtTime(r.upload.dueAt) }) : '')">{{ uploadLabel(r) }}</span>
+              </template>
             </div>
           </div>
-          <div class="flex flex-wrap items-center gap-1.5 w-full sm:w-auto">
+          <div v-if="!manageRooms" class="flex flex-wrap items-center gap-1.5 w-full sm:w-auto">
             <template v-if="isAdmin">
-            <select v-model="pendingChoice[r.roomId]" :class="[select, 'flex-1 min-w-0 sm:flex-none']">
+            <select v-model="pendingChoice[r.roomId]" :class="[select, 'flex-1 min-w-0 sm:flex-none sm:w-36']">
               <option value="" disabled>{{ t('adm.chooseProfile') }}</option>
               <option v-for="p in profiles" :key="p.id" :value="p.id">{{ p.name }} v{{ p.version }}</option>
             </select>
@@ -530,20 +650,21 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
             <button v-if="r.session" @click="uploadNow(r)" :disabled="exporting[r.roomId]" class="px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs disabled:opacity-40">
               {{ exporting[r.roomId] ? t('adm.uploading') : t('adm.uploadDrive') }}
             </button>
-            <button v-if="r.session && r.session.phase !== 'ended'" @click="endOrReopen(r, true)" class="px-3 py-1.5 rounded-lg border border-rose-800 text-rose-200 hover:bg-rose-900/40 text-xs">{{ t('common.end') }}</button>
-            <button v-else-if="r.session" @click="endOrReopen(r, false)" class="px-3 py-1.5 rounded-lg border border-emerald-800 text-emerald-200 hover:bg-emerald-900/40 text-xs">{{ t('common.reopen') }}</button>
-            <button
-              @click="removeRoom(r)"
-              :disabled="r.session?.phase === 'running'"
-              :title="r.session?.phase === 'running' ? t('adm.deleteRunning') : t('adm.deleteHint')"
-              class="p-1.5 rounded-lg border border-slate-700 text-rose-300 hover:bg-rose-900/40 disabled:opacity-40 disabled:hover:bg-transparent"
-            >
-              <Trash2 class="w-3.5 h-3.5" />
-            </button>
+            <!-- End and Reopen share one width so the row does not shift -->
+            <button v-if="r.session && r.session.phase !== 'ended'" @click="endOrReopen(r, true)" class="w-20 px-2 py-1.5 rounded-lg border border-rose-800 text-rose-200 hover:bg-rose-900/40 text-xs">{{ t('common.end') }}</button>
+            <button v-else-if="r.session" @click="endOrReopen(r, false)" class="w-20 px-2 py-1.5 rounded-lg border border-emerald-800 text-emerald-200 hover:bg-emerald-900/40 text-xs">{{ t('common.reopen') }}</button>
             </template>
             <router-link v-if="r.session" :to="`/admin/replay/${r.roomId}`" class="adm-link inline-flex items-center px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs">{{ t('adm.replay') }}</router-link>
           </div>
         </div>
+        <button
+          v-if="filteredRooms.length > ROOMS_PREVIEW"
+          @click="showAllRooms = !showAllRooms"
+          class="w-full py-2 rounded-xl border border-dashed border-slate-700 text-xs text-slate-400 hover:text-slate-200 inline-flex items-center justify-center gap-1"
+        >
+          <ChevronDown class="w-3.5 h-3.5 transition" :class="showAllRooms ? 'rotate-180' : ''" />
+          {{ showAllRooms ? t('adm.collapseRooms') : t('adm.showAllRooms', { count: filteredRooms.length }) }}
+        </button>
 
         <div :class="card" class="space-y-2">
           <div class="flex items-center gap-2">

@@ -18,7 +18,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'toggle-settings'): void;
   (e: 'toggle-assets'): void;
-  (e: 'open-profile'): void;
 }>();
 
 const authStore = useAuthStore();
@@ -145,16 +144,6 @@ const pillButton = 'inline-flex items-center gap-1 text-[11px] px-2 py-1.5 round
         <span class="max-w-[130px] truncate text-[11px]">{{ aiName }} · {{ roomStore.aiStatusDetail }}</span>
       </button>
 
-      <button
-        @click="emit('open-profile')"
-        class="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-700 text-slate-200 transition text-xs cursor-pointer min-h-[36px]"
-        :title="t('header.changeProfile')"
-      >
-        <span class="text-sm">{{ authStore.avatar }}</span>
-        <span class="hidden sm:inline font-medium truncate max-w-[80px]">{{ authStore.displayName }}</span>
-        <Edit3 class="w-3 h-3 text-slate-400 hidden sm:inline" />
-      </button>
-
       <button @click="copyInviteLink" :class="[pillButton, 'text-slate-200 !hidden sm:!inline-flex']" :title="t('header.copyInvite')">
         <Check v-if="copiedUrl" class="w-3.5 h-3.5 text-emerald-400" />
         <Copy v-else class="w-3.5 h-3.5" />
@@ -212,7 +201,7 @@ const pillButton = 'inline-flex items-center gap-1 text-[11px] px-2 py-1.5 round
         <Sliders class="w-3.5 h-3.5" />
         <span class="hidden sm:inline">{{ t('header.settingsBtn') }}</span>
         <span
-          v-if="roomStore.pendingParticipants.length > 0"
+          v-if="roomStore.isHost && roomStore.pendingParticipants.length > 0"
           class="absolute -top-1 -right-1 w-4 h-4 bg-amber-500 text-slate-950 font-bold text-[9px] rounded-full flex items-center justify-center shadow-sm"
         >
           {{ roomStore.pendingParticipants.length }}

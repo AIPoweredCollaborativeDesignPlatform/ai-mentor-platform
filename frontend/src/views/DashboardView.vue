@@ -29,10 +29,11 @@ import {
 } from 'lucide-vue-next';
 
 import { ref, onMounted } from 'vue';
-import { intlLocale, t } from '../i18n';
+import { intlLocale, t, type MessageKey } from '../i18n';
 import PageNav from '../components/PageNav.vue';
 
 const router = useRouter();
+const PHASE_LABELS: Record<string, MessageKey> = { waiting: 'adm.phaseWaiting', running: 'adm.phaseRunning', ended: 'adm.phaseEnded' };
 const authStore = useAuthStore();
 
 interface RoomHistoryItem {
@@ -48,6 +49,8 @@ interface RoomHistoryItem {
   hostUid?: string;
   isHost?: boolean;
   deletedAt?: number | null;
+  /** Session phase: waiting / running / ended */
+  phase?: string;
 }
 
 const historyRooms = ref<RoomHistoryItem[]>([]);
@@ -150,7 +153,8 @@ const loadDashboardData = async () => {
       timestamp: lastActive,
       hostUid: item.hostUid || '',
       isHost,
-      deletedAt: item.deletedAt || null
+      deletedAt: item.deletedAt || null,
+      phase: item.phase
     });
 
     if (item.messages) {
@@ -307,6 +311,7 @@ const loadDashboardData = async () => {
       // Determine deletedAt taking personal override into account
       const userOverride = userRoomOverrides.get(pin);
       const isHost = roomData.hostUid === authStore.uid || roomData.isHost;
+      const roomPhase: string | undefined = roomData.session?.phase || (roomData.roomStatus === 'ended' ? 'ended' : undefined);
       const roomDeletedAt = roomData.deletedAt || userOverride?.deletedAt || (localMap.get(pin)?.deletedAt) || null;
 
       // Sync to local storage cache so next load is instantaneous
@@ -322,7 +327,8 @@ const loadDashboardData = async () => {
         lastActive,
         createdAt: roomData.createdAt || cached.createdAt || Date.now(),
         assetsCount,
-        deletedAt: roomDeletedAt
+        deletedAt: roomDeletedAt,
+        phase: roomPhase
       };
       localStorage.setItem(`ai_room_${pin}`, JSON.stringify(updatedCache));
 
@@ -345,7 +351,8 @@ const loadDashboardData = async () => {
         timestamp: lastActive,
         hostUid: roomData.hostUid || '',
         isHost,
-        deletedAt: roomDeletedAt
+        deletedAt: roomDeletedAt,
+        phase: roomPhase
       });
     }));
 
@@ -723,6 +730,11 @@ const confirmPermanentDelete = async () => {
                     >
                       PIN: {{ room.pin }}
                     </span>
+                    <span
+                      v-if="room.phase && PHASE_LABELS[room.phase]"
+                      class="text-[10px] px-1.5 py-0.5 rounded"
+                      :class="room.phase === 'running' ? 'bg-emerald-500/15 text-emerald-300' : room.phase === 'ended' ? 'bg-amber-500/15 text-amber-300' : 'bg-slate-800 text-slate-400'"
+                    >{{ t(PHASE_LABELS[room.phase]) }}</span>
                   </div>
                   <span class="text-[11px] text-slate-500">{{ room.date }}</span>
                 </div>

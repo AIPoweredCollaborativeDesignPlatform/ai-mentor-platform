@@ -1,6 +1,4 @@
-import {
-  collection, doc, getDoc, getDocs, limit, orderBy, query, runTransaction, setDoc, where
-} from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, limit, orderBy, query, runTransaction, setDoc, where, getCountFromServer } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase/config';
 import type { AiProfile } from '../utils/aiProfiles';
@@ -40,6 +38,8 @@ export interface StudyRoom {
   session?: { phase: string; expected: number; maxOnline: number; taskMinutes: number; startedAt?: number; endedAt?: number; endedBy?: string };
   upload?: RoomExport;
   assignment?: { profileId: string | null; profileVersion: number; profileName?: string; mode?: string; assignedAt?: number; assignedBy?: string };
+  /** All chat messages, AI and system notices included */
+  messageCount?: number;
 }
 
 /** Rooms created by the redesigned site (they carry appVersion), newest first. */
@@ -47,6 +47,7 @@ export async function listStudyRooms(max = 100): Promise<StudyRoom[]> {
   const snap = await getDocs(query(collection(db, 'rooms'), orderBy('appVersion'), limit(max)));
   const rooms = snap.docs.map(d => ({ ...(d.data() as any), roomId: d.id }) as StudyRoom).filter(r => !(r as any).deletedAt);
   await Promise.all(rooms.map(async r => {
+    r.messageCount = await getCountFromServer(collection(db, 'rooms', r.roomId, 'messages')).then(c => c.data().count).catch(() => undefined);
     const exp = await getDoc(doc(db, 'roomExports', r.roomId));
     if (exp.exists()) r.upload = exp.data() as RoomExport;
     const ai = await getDoc(doc(db, 'roomAi', r.roomId));

@@ -29,6 +29,7 @@ import {
 
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import { ROOM_EMOJI_LIST } from '../constants/roomEmojis';
+import ProfileSettings from './room/ProfileSettings.vue';
 
 const props = withDefaults(defineProps<{
   isOpen: boolean;
@@ -261,6 +262,9 @@ onUnmounted(() => {
           </button>
         </div>
 
+        <!-- My nickname and avatar (participants; the researcher and observers are invisible) -->
+        <ProfileSettings v-if="!roomStore.isHost && roomStore.myStatus !== 'observer'" />
+
         <!-- Room Profile & Appearance (Name & Avatar/Emoji) -->
         <section class="p-4 rounded-2xl bg-slate-950/70 border border-slate-800 space-y-3.5 shadow-lg">
           <div class="flex items-center justify-between">
@@ -441,8 +445,8 @@ onUnmounted(() => {
           </p>
         </section>
 
-        <!-- 1. Waiting Room Approval List -->
-        <section>
+        <!-- 1. Waiting Room Approval List (only the host approves) -->
+        <section v-if="roomStore.isHost">
           <div class="flex items-center justify-between mb-3">
             <div class="flex items-center gap-2">
               <Users class="w-4 h-4 text-amber-400" />
@@ -530,7 +534,8 @@ onUnmounted(() => {
                   {{ p.isOnline !== false ? t('host.online') : t('host.offline') }}
                 </span>
 
-                <div v-if="!p.isHost" class="flex items-center gap-1">
+                <!-- Mute / remove: only the host can; nobody else sees the buttons -->
+                <div v-if="roomStore.isHost && !p.isHost" class="flex items-center gap-1">
                   <button
                     @click="roomStore.muteParticipant(p.uid, !p.isMuted)"
                     class="p-1.5 rounded bg-slate-800 hover:bg-slate-700 transition"

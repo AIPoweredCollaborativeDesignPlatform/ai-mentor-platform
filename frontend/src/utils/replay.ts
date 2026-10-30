@@ -166,6 +166,25 @@ export function lastActivityAt(events: ResearchEvent[]): number {
   return events.at(-1)?.at || 0;
 }
 
+export interface ReplaySegment {
+  start: number;
+  /** Last activity in the segment (playback stops there) */
+  end: number;
+  /** Start of the next segment (events up to it belong here) */
+  until: number;
+}
+
+/** A reopened session is replayed as separate parts: each reopen starts a new segment. */
+export function segmentsOf(events: ResearchEvent[]): ReplaySegment[] {
+  if (!events.length) return [];
+  const starts = [0, ...events.flatMap((e, i) => (e.kind === 'session_reopened' && i > 0 ? [i] : []))];
+  return starts.map((from, k) => {
+    const to = starts[k + 1] ?? events.length;
+    const part = events.slice(from, to);
+    return { start: part[0].at, end: Math.max(part[0].at, lastActivityAt(part)), until: events[to]?.at ?? Infinity };
+  });
+}
+
 export const fmtOffset = (ms: number) => {
   const s = Math.max(0, Math.floor(ms / 1000));
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;

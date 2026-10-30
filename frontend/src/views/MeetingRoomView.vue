@@ -19,7 +19,6 @@ import ChatMessage from '../components/room/ChatMessage.vue';
 import ChatStatusBubbles from '../components/room/ChatStatusBubbles.vue';
 import ChatComposer from '../components/room/ChatComposer.vue';
 import AssetsDrawer from '../components/room/AssetsDrawer.vue';
-import ProfileModal from '../components/room/ProfileModal.vue';
 import HostControlDrawer from '../components/HostControlDrawer.vue';
 import DocumentModal from '../components/DocumentModal.vue';
 import PdfViewerModal from '../components/PdfViewerModal.vue';
@@ -129,7 +128,6 @@ const showSessionBar = computed(() => Boolean(session.value) && (isObserving.val
 const drawerTopOffset = computed(() => `calc(${isLegacyClosed.value || showSessionBar.value ? 89 : 56}px + env(safe-area-inset-top))`);
 const isSettingsOpen = ref(false);
 const isAssetsOpen = ref(false);
-const isProfileOpen = ref(false);
 
 const toggleSettings = () => {
   isAssetsOpen.value = false;
@@ -138,10 +136,6 @@ const toggleSettings = () => {
 const toggleAssets = () => {
   isSettingsOpen.value = false;
   isAssetsOpen.value = !isAssetsOpen.value;
-};
-const openProfile = () => {
-  isSettingsOpen.value = isAssetsOpen.value = false;
-  isProfileOpen.value = true;
 };
 
 const docModal = ref({ isOpen: false, title: '', content: '' });
@@ -355,7 +349,6 @@ onUnmounted(() => {
       :isAssetsOpen="isAssetsOpen"
       @toggle-settings="toggleSettings"
       @toggle-assets="toggleAssets"
-      @open-profile="openProfile"
     />
 
     <!-- Session status: the researcher always sees it; participants only before and after the session -->
@@ -526,7 +519,6 @@ onUnmounted(() => {
     </div>
 
     <AlertModal :isOpen="alertModal.isOpen" :title="alertModal.title" :message="alertModal.message" :type="alertModal.type" @confirm="alertModal.onConfirm" />
-    <ProfileModal :isOpen="isProfileOpen" @close="isProfileOpen = false" />
 
     <div v-if="showEndConfirm" class="fixed inset-0 z-[90] flex items-center justify-center p-4 bg-black/75">
       <div class="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-6 shadow-2xl text-center">

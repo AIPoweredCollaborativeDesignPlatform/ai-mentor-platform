@@ -4,12 +4,12 @@ import { useRoute } from 'vue-router';
 import { ArrowLeft, Loader2, Pause, Play } from 'lucide-vue-next';
 import { useAuthStore } from '../stores/auth';
 // `t` is the playback time in this view
-import { t as tr, type MessageKey } from '../i18n';
+import { intlLocale, t as tr, type MessageKey } from '../i18n';
 import LocaleSwitch from '../components/LocaleSwitch.vue';
 import ThemeSwitch from '../components/ThemeSwitch.vue';
 import BoardReplayCanvas from '../components/admin/BoardReplayCanvas.vue';
 import {
-  KIND_GROUPS, describe, fmtOffset, groupOf, indexAt, lastActivityAt, loadEvents, loadFinalBoard, membersOf, stateAt, wasTruncated,
+  KIND_GROUPS, describe, fmtOffset, groupOf, indexAt, loadEvents, segmentsOf, loadFinalBoard, membersOf, stateAt, wasTruncated,
   type ReplayMessage, type ReplayObject, type ResearchEvent
 } from '../utils/replay';
 import { formatMessageText } from '../utils/chat';
@@ -25,9 +25,21 @@ const events = ref<ResearchEvent[]>([]);
 const loading = ref(true);
 const error = ref('');
 
-const t0 = computed(() => events.value[0]?.at || 0);
-// Playback stops at the last activity; the idle tail after it stays in the event list (greyed)
-const tEnd = computed(() => lastActivityAt(events.value));
+// A reopened session plays as separate parts; each stops at its own last activity
+const segments = computed(() => segmentsOf(events.value));
+const segIndex = ref(0);
+const segment = computed(() => segments.value[segIndex.value] || { start: 0, end: 0, until: Infinity });
+const t0 = computed(() => segment.value.start);
+// The idle tail after the last activity stays in the event list (greyed)
+const tEnd = computed(() => segment.value.end);
+const pickSegment = (i: number) => {
+  playing.value = false;
+  clearInterval(timer);
+  segIndex.value = i;
+  t.value = t0.value;
+};
+// Messages from an earlier part show their clock time instead of an offset
+const timeLabel = (at: number) => (at < t0.value ? new Date(at).toLocaleTimeString(intlLocale(), { hour: '2-digit', minute: '2-digit', hour12: false }) : fmtOffset(at - t0.value));
 const t = ref(0);
 const members = computed(() => membersOf(events.value));
 const who = (e: { uid: string | null; role: string }) => {
@@ -113,7 +125,7 @@ onUnmounted(() => clearInterval(timer));
 // ---------- Event list ----------
 const groups = ref<Record<string, boolean>>(Object.fromEntries(KIND_GROUPS.map(g => [g.id, g.id !== 'board'])));
 const listed = computed(() => events.value.map((e, i) => ({ e, i }))
-  .filter(({ e }) => groups.value[groupOf(e.kind)] && !(hideObserver.value && (e.role === 'researcher' || e.role === 'observer'))));
+  .filter(({ e }) => e.at >= segment.value.start && e.at < segment.value.until && groups.value[groupOf(e.kind)] && !(hideObserver.value && (e.role === 'researcher' || e.role === 'observer'))));
 const jumpTo = (e: ResearchEvent) => (t.value = Math.min(e.at, tEnd.value));
 const listRef = ref<HTMLElement | null>(null);
 const followTimeline = ref(true);
@@ -186,9 +198,17 @@ onMounted(async () => {
 <template>
   <div class="min-h-[100dvh] bg-slate-950 text-slate-100 pt-safe px-safe">
     <header class="min-h-14 py-2 border-b border-slate-800 bg-slate-900/90 px-4 flex flex-wrap items-center gap-x-3 gap-y-1">
-      <router-link to="/admin" class="p-1.5 pointer-coarse:p-2.5 rounded-lg hover:bg-slate-800 text-slate-400"><ArrowLeft class="w-4 h-4" /></router-link>
+      <router-link to="/admin?tab=rooms" class="p-1.5 pointer-coarse:p-2.5 rounded-lg hover:bg-slate-800 text-slate-400"><ArrowLeft class="w-4 h-4" /></router-link>
       <h1 class="font-semibold text-sm">{{ tr('rp.title') }} <span class="font-mono text-sky-400">{{ roomId }}</span></h1>
       <span v-if="events.length" class="text-[11px] text-slate-500">{{ tr('rp.eventsLength', { count: events.length, length: fmtOffset(tEnd - t0) }) }}</span>
+      <span v-if="segments.length > 1" class="flex gap-1">
+        <button
+          v-for="(s, i) in segments"
+          :key="s.start"
+          @click="pickSegment(i)"
+          class="px-2 py-0.5 pointer-coarse:py-1.5 rounded-lg text-[11px] border"
+          :class="i === segIndex ? 'border-sky-400 bg-sky-500/15 text-sky-200' : 'border-slate-700 text-slate-400 hover:text-slate-200'"
+        >{{ tr('rp.segment', { n: i + 1 }) }}</button></span>
       <ThemeSwitch class="ml-auto" />
       <LocaleSwitch />
       <div class="flex flex-wrap gap-2 text-[11px]">
@@ -227,7 +247,7 @@ onMounted(async () => {
                 <b :class="ROLE_CLASS[m.senderUid?.startsWith('ai_mentor') ? 'ai' : m.senderUid === 'system' ? 'system' : 'participant']">
                   {{ who({ uid: m.senderUid, role: m.senderUid?.startsWith('ai_mentor') ? 'ai' : m.senderUid === 'system' ? 'system' : 'participant' }) }}
                 </b>
-                {{ m.senderName }} · {{ fmtOffset(m.timestamp - t0) }}
+                {{ m.senderName }} · {{ timeLabel(m.timestamp) }}
               </div>
               <button v-if="m.type === 'whiteboard_state'" @click="showBoard(m.id)" class="text-sky-300 hover:underline text-left">
                 {{ tr('rp.boardInChat', { label: boardLabel(m.id) }) }}

@@ -10,7 +10,7 @@ import {
   type AiProfile, type CostInputs, type Prices
 } from '../utils/aiProfiles';
 import {
-  assignRoomProfile, deleteStudyRoom, exportRoomNow, getDriveAuthUrl, getDriveStatus, getSystemConfig, listProfiles, listStudyRooms, loadUsage,
+  assignRoomProfile, deleteStudyRoom, listRoomCreators, exportRoomNow, getDriveAuthUrl, getDriveStatus, getSystemConfig, listProfiles, listStudyRooms, loadUsage,
   listAdmins, listObservers, listRoomPins, saveProfile, saveSystemConfig, setAdmin, setObserver,
   getApiKeyStatus, setApiKey, testApiKeys, type ApiKeyStatus, type ApiProvider, type ApiTestResult, type DriveStatus, type StudyObserver, type RoomPins, type StudyRoom, type UsageRow
 } from '../services/admin';
@@ -18,6 +18,7 @@ import { DEFAULT_CONSENT_TEXT, DEFAULT_CONSENT_TEXT_ZH } from '../constants/cons
 import { intlLocale, t, type MessageKey } from '../i18n';
 import PageNav from '../components/PageNav.vue';
 import { endStudySession, reopenStudySession } from '../services/session';
+import { DEFAULT_NOTIFICATION_VOLUME, playChime } from '../composables/useNotificationSound';
 
 // Mirrors functions/src/config.js DEFAULT_SYSTEM_CONFIG for display before config/system exists
 const SYSTEM_DEFAULTS = {
@@ -25,6 +26,8 @@ const SYSTEM_DEFAULTS = {
   memoryModel: 'claude-haiku-5-5',
   mentorEffort: 'low',
   engine3D: 'meshy',
+  notificationVolume: DEFAULT_NOTIFICATION_VOLUME,
+  meshy: { aiModel: 'meshy-7.1', geometryResolution: 'standard', autoRefine: false, textureResolution: '2k', enablePbr: true },
   defaultProfileId: null as string | null,
   consentText: DEFAULT_CONSENT_TEXT,
   consentTextZh: DEFAULT_CONSENT_TEXT_ZH,
@@ -39,6 +42,12 @@ const SYSTEM_DEFAULTS = {
   } as Prices
 };
 const MODEL_OPTIONS = ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5'];
+// Meshy credits per request (docs.meshy.ai/en/api/pricing, checked 2026-10-30)
+const MESHY_MODELS = [
+  { id: 'meshy-6-lite', label: 'adm.meshyLite', credits: 5 },
+  { id: 'meshy-6', label: 'adm.meshy6', credits: 20 },
+  { id: 'meshy-7.1', label: 'adm.meshy71', credits: 20 }
+] as const;
 
 const authStore = useAuthStore();
 const roomStore = useRoomStore();
@@ -93,6 +102,7 @@ const loadAll = async () => {
       ...structuredClone(SYSTEM_DEFAULTS),
       ...cfg,
       models: { ...SYSTEM_DEFAULTS.models, ...(cfg.models || {}) },
+      meshy: { ...SYSTEM_DEFAULTS.meshy, ...(cfg.meshy || {}) },
       prices: { ...SYSTEM_DEFAULTS.prices, ...(cfg.prices || {}) }
     };
   } catch (e: any) {
@@ -264,7 +274,11 @@ const pendingChoice = ref<Record<string, string>>({});
 const loadRooms = async () => {
   roomsLoading.value = true;
   try {
-    [rooms.value] = await Promise.all([listStudyRooms(), loadDrive()]);
+    const [list] = await Promise.all([listStudyRooms(), loadDrive()]);
+    // Creator account (or anonymous guest), looked up by the server
+    const creators = await listRoomCreators(list.map(r => r.roomId)).catch(() => ({} as Record<string, StudyRoom['creator']>));
+    list.forEach(r => (r.creator = creators[r.roomId]));
+    rooms.value = list;
     writeCache({ rooms: rooms.value });
   } catch (e: any) {
     roomStore.pushToast(t('adm.loadRoomsFailed'), e?.message || String(e), 'error');
@@ -396,12 +410,24 @@ const actual = computed(() => {
 });
 
 // ---------- System ----------
+const meshyCost = computed(() => {
+  const m = system.value.meshy || {};
+  const preview = (MESHY_MODELS.find(x => x.id === m.aiModel)?.credits ?? 20) + (m.aiModel === 'meshy-7.1' && m.geometryResolution !== 'standard' ? 5 : 0);
+  const refine = m.textureResolution === '8k' ? 15 : 10;
+  return { preview, refine: m.autoRefine ? refine : 0 };
+});
+// 2k / 4k geometry only on meshy-7.1; 4k / 8k textures not on meshy-6-lite
+watch(() => system.value.meshy?.aiModel, model => {
+  if (!system.value.meshy) return;
+  if (model !== 'meshy-7.1') system.value.meshy.geometryResolution = 'standard';
+  if (model === 'meshy-6-lite') system.value.meshy.textureResolution = '2k';
+});
 const savingSystem = ref(false);
 const saveSystem = async () => {
   savingSystem.value = true;
   try {
-    const { models, memoryModel, mentorEffort, engine3D, prices, consentText, consentTextZh } = system.value;
-    await saveSystemConfig({ models, memoryModel, mentorEffort, engine3D, prices, consentText, consentTextZh });
+    const { models, memoryModel, mentorEffort, engine3D, meshy, notificationVolume, prices, consentText, consentTextZh } = system.value;
+    await saveSystemConfig({ models, memoryModel, mentorEffort, engine3D, meshy, notificationVolume, prices, consentText, consentTextZh });
     roomStore.pushToast(t('adm.saved'), t('adm.systemSaved'), 'success');
   } finally {
     savingSystem.value = false;
@@ -475,6 +501,8 @@ const UPLOAD_LABELS: Record<string, { text: MessageKey; cls: string }> = {
   reopened: { text: 'adm.upReopened', cls: 'text-slate-400' }
 };
 
+const creatorLabel = (r: StudyRoom) =>
+  !r.creator ? '' : r.creator.email || t(r.creator.anonymous ? 'adm.creatorAnon' : 'adm.creatorUnknown');
 const uploadLabel = (r: StudyRoom) => `Drive ${UPLOAD_LABELS[r.upload!.status] ? t(UPLOAD_LABELS[r.upload!.status].text) : r.upload!.status}`;
 // Full details stay available on hover; the card shows the short line
 const roomDetail = (r: StudyRoom) => [
@@ -634,6 +662,7 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
               <span v-if="r.messageCount !== undefined" class="inline-flex items-center gap-1"><MessageSquare class="w-3 h-3" />{{ t('adm.messageCount', { count: r.messageCount }) }}</span>
               <span :class="r.assignment ? 'text-slate-300' : 'text-amber-300'">{{ r.assignment ? `${r.assignment.profileName || '—'} v${r.assignment.profileVersion} · ${r.assignment.mode}` : t('adm.notAssigned') }}</span>
               <span>{{ t('adm.lastActiveShort', { at: fmtShort(r.lastActive) }) }}</span>
+              <span v-if="r.creator" class="truncate max-w-full" :class="r.creator.email ? '' : 'text-slate-500'">{{ t('adm.createdBy', { who: creatorLabel(r) }) }}</span>
               <template v-if="r.upload">
                 <a v-if="r.upload.folderUrl" :href="r.upload.folderUrl" target="_blank" rel="noopener" @click.stop class="hover:underline" :class="UPLOAD_LABELS[r.upload.status]?.cls">{{ uploadLabel(r) }}</a>
                 <span v-else :class="UPLOAD_LABELS[r.upload.status]?.cls" :title="r.upload.error || (r.upload.dueAt ? t('adm.dueAt', { at: fmtTime(r.upload.dueAt) }) : '')">{{ uploadLabel(r) }}</span>
@@ -758,6 +787,43 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
             <select v-model="system.engine3D" :class="[select, 'w-full']"><option value="meshy">Meshy</option><option value="tripo">Tripo</option></select>
           </label>
         </div>
+        <!-- Meshy detail (functions/src/mesh3d.js); fixed during a study run, recorded with every model -->
+        <div v-if="system.engine3D === 'meshy'" class="space-y-2 text-xs p-3 rounded-xl border border-slate-800">
+          <h3 class="text-sm font-semibold">{{ t('adm.meshyTitle') }}</h3>
+          <p class="text-[11px] text-slate-500">{{ t('adm.meshyHint') }}</p>
+          <div class="grid sm:grid-cols-2 gap-3">
+            <label class="space-y-1"><span class="text-slate-400">{{ t('adm.meshyModel') }}</span>
+              <select v-model="system.meshy.aiModel" :class="[select, 'w-full']">
+                <option v-for="m in MESHY_MODELS" :key="m.id" :value="m.id">{{ t(m.label) }}</option>
+              </select>
+            </label>
+            <label class="space-y-1"><span class="text-slate-400">{{ t('adm.meshyGeometry') }}</span>
+              <select v-model="system.meshy.geometryResolution" :class="[select, 'w-full']" :disabled="system.meshy.aiModel !== 'meshy-7.1'">
+                <option value="standard">{{ t('adm.meshyGeoStandard') }}</option>
+                <option value="2k">{{ t('adm.meshyGeo2k') }}</option>
+                <option value="4k">{{ t('adm.meshyGeo4k') }}</option>
+              </select>
+            </label>
+          </div>
+          <label class="flex items-start gap-2 pt-1">
+            <input type="checkbox" v-model="system.meshy.autoRefine" class="mt-0.5" />
+            <span><span class="text-slate-200">{{ t('adm.meshyAutoRefine') }}</span> <span class="block text-[11px] text-slate-500">{{ t('adm.meshyAutoRefineHint') }}</span></span>
+          </label>
+          <div class="grid sm:grid-cols-2 gap-3">
+            <label class="space-y-1"><span class="text-slate-400">{{ t('adm.meshyTexture') }}</span>
+              <select v-model="system.meshy.textureResolution" :class="[select, 'w-full']">
+                <option value="2k">2K</option>
+                <option value="4k" :disabled="system.meshy.aiModel === 'meshy-6-lite'">4K</option>
+                <option value="8k" :disabled="system.meshy.aiModel === 'meshy-6-lite'">{{ t('adm.meshyTex8k') }}</option>
+              </select>
+            </label>
+            <label class="flex items-center gap-2 sm:pt-5">
+              <input type="checkbox" v-model="system.meshy.enablePbr" />
+              <span class="text-slate-300">{{ t('adm.meshyPbr') }}</span>
+            </label>
+          </div>
+          <p class="text-[11px] text-sky-300/80">{{ t('adm.meshyCost', { preview: meshyCost.preview, refine: meshyCost.refine }) }}</p>
+        </div>
         <div class="space-y-2 text-xs">
           <h3 class="text-sm font-semibold">{{ t('adm.prices') }}</h3>
           <div v-for="m in MODEL_OPTIONS" :key="m" class="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -770,6 +836,16 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
             <label>{{ t('adm.priceImage') }} <input type="number" step="0.001" v-model.number="system.prices.imagePerUnit" class="w-20 bg-slate-950 border border-slate-700 rounded px-2 py-1" /></label>
             <label>{{ t('adm.price3d') }} <input type="number" step="0.01" v-model.number="system.prices.model3DPerUnit" class="w-20 bg-slate-950 border border-slate-700 rounded px-2 py-1" /></label>
           </div>
+        </div>
+        <!-- Message chime volume for every room and participant (composables/useNotificationSound.ts) -->
+        <div class="space-y-1.5 text-xs">
+          <h3 class="text-sm font-semibold">{{ t('adm.volumeTitle') }}</h3>
+          <div class="flex items-center gap-3">
+            <input type="range" min="0" max="100" step="5" v-model.number="system.notificationVolume" class="flex-1 min-w-0 accent-sky-500 pointer-coarse:h-8" />
+            <span class="w-10 text-right font-mono">{{ system.notificationVolume }}</span>
+            <button type="button" @click="playChime(system.notificationVolume)" class="px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800">{{ t('adm.volumeTest') }}</button>
+          </div>
+          <p class="text-[11px] text-slate-500">{{ t('adm.volumeHint') }}</p>
         </div>
         <!-- AI provider keys: status, replace / revert to the Functions secret, quick test -->
         <div class="space-y-2 text-xs">

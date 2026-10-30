@@ -1,6 +1,6 @@
 import { getSystemConfig } from './config.js';
 import { Anthropic, classifyError, createMessage, parseJsonObject, responseText } from './claude.js';
-import { PROMPT_VERSION, MEMORY_PROMPT, buildTranscript, mentorSystemPrompt } from './prompts.js';
+import { PROMPT_VERSION, buildTranscript, memoryPrompt, mentorSystemPrompt } from './prompts.js';
 import { generateImages } from './images.js';
 import { countWebSearches, logAiCall } from './log.js';
 
@@ -35,7 +35,8 @@ export async function analyze({ apiKey, falKey, roomId, room, messages, particip
     participants,
     messages,
     profile,
-    memory
+    memory,
+    session: room.session
   });
   // `note` replaces the generic trigger line for system-initiated responses (e.g. a settled poll)
   const userPrompt = `Conversation transcript:\n${buildTranscript(messages, participants)}\n\n${rosterNote ? `${rosterNote}\n` : ''}${
@@ -121,7 +122,7 @@ export async function analyze({ apiKey, falKey, roomId, room, messages, particip
 }
 
 /** Incremental long-term memory update; returns the new memory or null on failure. */
-export async function updateMemory({ apiKey, roomId, previous, messages, participants }) {
+export async function updateMemory({ apiKey, roomId, previous, messages, participants, profile }) {
   const sys = await getSystemConfig();
   const model = sys.memoryModel;
   const startedAt = Date.now();
@@ -133,7 +134,7 @@ export async function updateMemory({ apiKey, roomId, previous, messages, partici
       model,
       max_tokens: 4000,
       output_config: { effort: 'low' },
-      system: MEMORY_PROMPT,
+      system: memoryPrompt(profile?.prompts),
       messages: [{ role: 'user', content: userPrompt }]
     });
     const next = parseJsonObject(responseText(response));

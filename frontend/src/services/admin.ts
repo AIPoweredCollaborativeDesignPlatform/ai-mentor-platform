@@ -40,6 +40,30 @@ export interface StudyRoom {
   assignment?: { profileId: string | null; profileVersion: number; profileName?: string; mode?: string; assignedAt?: number; assignedBy?: string };
   /** All chat messages, AI and system notices included */
   messageCount?: number;
+  /** Who created the room (listRoomCreators) */
+  creator?: RoomCreator;
+}
+
+export interface RoomCreator {
+  email: string | null;
+  anonymous: boolean;
+  unknown: boolean;
+}
+
+/** Google account or anonymous guest behind each room's creator (study staff only). */
+export async function listRoomCreators(roomIds: string[]): Promise<Record<string, RoomCreator>> {
+  return (await httpsCallable<{ roomIds: string[] }, Record<string, RoomCreator>>(functions, 'listRoomCreators')({ roomIds })).data;
+}
+
+export interface PromptDefaults {
+  version: string;
+  defaults: Record<string, string>;
+  placeholders: Record<string, string[]>;
+}
+
+/** Built-in prompt blocks; a profile stores only the blocks it changes. */
+export async function getPromptDefaults(): Promise<PromptDefaults> {
+  return (await httpsCallable<void, PromptDefaults>(functions, 'getPromptDefaults')()).data;
 }
 
 /** Rooms created by the redesigned site (they carry appVersion), newest first. */

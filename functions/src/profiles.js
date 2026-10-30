@@ -43,6 +43,12 @@ export const DEFAULT_PROFILE = {
     taskMinutes: 30, // 0 = no time limit (no reminders, no time-up message)
     reminderMinutes: [5] // minutes before the end at which the AI writes a reminder
   },
+  // Chat tone: 1 formal ... 5 very casual; maxSentences caps every chat message (assets are not limited)
+  style: { casualness: 4, maxSentences: 2 },
+  // With a time limit, the first share of the time leans divergent (src/prompts.js pacing)
+  facilitation: { divergeShare: 0.5 },
+  // Overrides of src/prompts.js PROMPT_DEFAULTS, by block; empty = built-in text
+  prompts: {},
   rationale: {}
 };
 

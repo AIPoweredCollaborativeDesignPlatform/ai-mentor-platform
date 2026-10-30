@@ -14,6 +14,9 @@ export const DEFAULT_SYSTEM_CONFIG = {
   webSearchMaxUses: 3,
   imageModel: 'fal-ai/flux/schnell',
   engine3D: 'meshy',
+  // Meshy text-to-3D (src/mesh3d.js; docs.meshy.ai/en/api/text-to-3d). Preview = untextured mesh,
+  // refine = textures. 2k/4k geometry needs meshy-7.1; autoRefine adds a texturing pass after every preview.
+  meshy: { aiModel: 'meshy-7.1', geometryResolution: 'standard', autoRefine: false, textureResolution: '2k', enablePbr: true },
   // Only for Anthropic keys not scoped to a workspace (Console > Settings > Workspaces > ID)
   anthropicWorkspaceId: null,
   // Profile snapshotted into new rooms (aiProfiles/{id}); null = built-in DEFAULT_PROFILE

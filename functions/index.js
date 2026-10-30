@@ -5,9 +5,10 @@ import { HttpsError, onCall, onRequest } from 'firebase-functions/v2/https';
 import { onDocumentCreated, onDocumentDeleted, onDocumentUpdated, onDocumentWritten } from 'firebase-functions/v2/firestore';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { getFirestore } from 'firebase-admin/firestore';
+import { getAuth } from 'firebase-admin/auth';
 import { getSystemConfig } from './src/config.js';
 import { classifyError, createMessage, extractSvg, imageBlockFromDataUrl, responseText } from './src/claude.js';
-import { PROMPT_VERSION, VISION_PROMPT, sketchToSvgPrompt, textToSvgPrompt } from './src/prompts.js';
+import { PROMPT_DEFAULTS, PROMPT_PLACEHOLDERS, PROMPT_VERSION, sketchToSvgPrompt, textToSvgPrompt, visionPrompt } from './src/prompts.js';
 import { refineMeshy } from './src/mesh3d.js';
 import { logAiCall } from './src/log.js';
 import { FRIENDLY_ERRORS } from './src/mentor.js';
@@ -53,6 +54,9 @@ const requireRoomMember = async request => {
   }
   return room;
 };
+
+/** Prompt overrides of the profile frozen into the room (roomAi/{roomId}.profile.prompts). */
+const roomPrompts = async roomId => (await getFirestore().doc(`roomAi/${roomId}`).get()).data()?.profile?.prompts || {};
 
 const toHttpsError = (err, label) => {
   const category = classifyError(err);
@@ -289,6 +293,28 @@ export const listRoomPins = onCall({ maxInstances: 2 }, async request => {
   return listPins();
 });
 
+/** Who created each room: the Google account (email) or an anonymous guest. Study staff only. */
+export const listRoomCreators = onCall({ maxInstances: 2 }, async request => {
+  if (!isObserverToken(request.auth?.token)) throw new HttpsError('permission-denied', 'Study staff only');
+  const roomIds = (Array.isArray(request.data?.roomIds) ? request.data.roomIds : []).map(String).filter(id => /^room_\d{4,6}$/.test(id)).slice(0, 100);
+  const db = getFirestore();
+  const rooms = await Promise.all(roomIds.map(async id => [id, (await db.doc(`rooms/${id}`).get()).data()]));
+  const uidOf = room => room?.createdBy || room?.hostUid || '';
+  const uids = [...new Set(rooms.map(([, r]) => uidOf(r)).filter(Boolean))];
+  const users = uids.length ? (await getAuth().getUsers(uids.map(uid => ({ uid })))).users : [];
+  const byUid = new Map(users.map(u => [u.uid, u]));
+  return Object.fromEntries(rooms.map(([id, r]) => {
+    const u = byUid.get(uidOf(r));
+    return [id, { email: u?.email || null, anonymous: Boolean(u) && !u.email, unknown: !u }];
+  }));
+});
+
+/** Built-in prompt blocks for the admin editor (profiles store only the blocks they override). */
+export const getPromptDefaults = onCall({ maxInstances: 2 }, async request => {
+  requireAdmin(request);
+  return { version: PROMPT_VERSION, defaults: PROMPT_DEFAULTS, placeholders: PROMPT_PLACEHOLDERS };
+});
+
 // ---------- Experiment flow (src/session.js) ----------
 export const joinStudyRoom = onCall({ maxInstances: 20 }, async request => {
   requireAuth(request);
@@ -403,12 +429,13 @@ export const whiteboardVision = onCall(
   async request => {
     await requireRoomMember(request);
     const sys = await getSystemConfig();
+    const prompts = await roomPrompts(request.data.roomId);
     try {
       const response = await createMessage(await anthropicKey(), {
         model: sys.models.vision,
         max_tokens: 1000,
         output_config: { effort: 'low' },
-        messages: [{ role: 'user', content: [imageBlockFromDataUrl(request.data?.imageDataUrl), { type: 'text', text: VISION_PROMPT }] }]
+        messages: [{ role: 'user', content: [imageBlockFromDataUrl(request.data?.imageDataUrl), { type: 'text', text: visionPrompt(prompts) }] }]
       });
       const summary = responseText(response).trim();
       await logAiCall({
@@ -431,11 +458,12 @@ export const generateSvg = onCall(
   async request => {
     await requireRoomMember(request);
     const sys = await getSystemConfig();
+    const prompts = await roomPrompts(request.data.roomId);
     try {
       const response = await createMessage(await anthropicKey(), {
         model: sys.models.svg,
         max_tokens: 8000,
-        messages: [{ role: 'user', content: textToSvgPrompt(String(request.data?.prompt || '').slice(0, 2000)) }]
+        messages: [{ role: 'user', content: textToSvgPrompt(String(request.data?.prompt || '').slice(0, 2000), prompts) }]
       });
       const svg = extractSvg(responseText(response));
       await logAiCall({ ...baseLog(request, 'text_to_svg', sys.models.svg), input: { prompt: request.data?.prompt || '' }, output: { svg }, usage: meta(sys.models.svg, response).usage });
@@ -454,11 +482,12 @@ export const sketchToSvg = onCall(
     await requireRoomMember(request);
     const { imageDataUrl, notes = '', language = 'zh-TW' } = request.data || {};
     const sys = await getSystemConfig();
+    const prompts = await roomPrompts(request.data.roomId);
     try {
       const response = await createMessage(await anthropicKey(), {
         model: sys.models.svg,
         max_tokens: 8000,
-        messages: [{ role: 'user', content: [imageBlockFromDataUrl(imageDataUrl), { type: 'text', text: sketchToSvgPrompt(String(notes).slice(0, 2000), language) }] }]
+        messages: [{ role: 'user', content: [imageBlockFromDataUrl(imageDataUrl), { type: 'text', text: sketchToSvgPrompt(String(notes).slice(0, 2000), language, prompts) }] }]
       });
       const svg = extractSvg(responseText(response));
       await logAiCall({ ...baseLog(request, 'sketch_to_svg', sys.models.svg), input: { notes, imageBytes: String(imageDataUrl || '').length }, output: { svg }, usage: meta(sys.models.svg, response).usage });
@@ -480,8 +509,9 @@ export const refineModel3D = onCall(
     const { taskId, texturePrompt, roomId, title = '' } = request.data || {};
     if (!taskId) throw new HttpsError('invalid-argument', 'Missing Meshy task id');
     try {
-      const result = await refineMeshy({ previewTaskId: taskId, texturePrompt, keys: await meshKeys() });
-      await logAiCall({ ...baseLog(request, 'model_3d_refine', 'meshy'), input: { taskId, texturePrompt: texturePrompt || '' }, output: result });
+      const { meshy } = await getSystemConfig();
+      const result = await refineMeshy({ previewTaskId: taskId, texturePrompt, keys: await meshKeys(), meshy });
+      await logAiCall({ ...baseLog(request, 'model_3d_refine', 'meshy'), input: { taskId, texturePrompt: texturePrompt || '', meshy }, output: result });
       // The refined model is posted as an AI message by the server (browsers cannot post as the AI)
       const name = String(title).slice(0, 200);
       await postAiMessage(roomId, room, (await ensureRoomAi(roomId)).profile || {}, {

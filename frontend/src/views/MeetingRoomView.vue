@@ -206,10 +206,6 @@ const scrollToMessage = (id: string) => {
   }, 300); // wait for the drawer to close
 };
 
-watch(() => [roomStore.isAnalyzing, roomStore.isGenerating3D], ([analyzing, generating]) => {
-  if (analyzing || generating) scrollToBottom();
-});
-
 // New message from someone else: chime, plus a toast if it @mentions me; follow the stream unless scrolled up
 let lastKnownMsgCount = 0;
 watch(() => roomStore.currentRoom?.messages.length, (count = 0) => {
@@ -439,7 +435,6 @@ onUnmounted(() => {
                 @reply="composerRef?.setReply($event)"
               />
             </div>
-            <ChatStatusBubbles />
           </div>
 
           <div class="h-2 w-full"></div>
@@ -452,6 +447,9 @@ onUnmounted(() => {
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
           </button>
         </main>
+
+        <!-- Fixed slot above the composer: typing / AI status never shifts the messages -->
+        <ChatStatusBubbles />
 
         <ChatComposer
           ref="composerRef"

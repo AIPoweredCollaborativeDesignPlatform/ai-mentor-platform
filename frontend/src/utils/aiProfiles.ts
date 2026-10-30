@@ -35,6 +35,12 @@ export interface AiProfile {
     /** Minutes before the end at which the AI writes a reminder */
     reminderMinutes: number[];
   };
+  /** Chat tone: casualness 1 (formal) ... 5 (very casual); maxSentences caps each chat message */
+  style: { casualness: number; maxSentences: number };
+  /** With a time limit, this share of the time leans divergent (0-1) */
+  facilitation: { divergeShare: number };
+  /** Overrides of the server's prompt blocks (functions/src/prompts.js PROMPT_DEFAULTS); missing = built-in */
+  prompts: Record<string, string>;
   /** Optional basis / literature per field path, e.g. rationale['triggers.pauseSeconds'] */
   rationale: Record<string, string>;
   updatedAt?: number;
@@ -64,6 +70,9 @@ const base = (): AiProfile => ({
   memory: { updateEveryMessages: 15, updateOnWhiteboardShare: true },
   modules: { enable3D: true, enableMoodboard: true, enableFactRetrieval: true, enableSummary: true, enableWhiteboardAi: true },
   session: { expectedParticipants: 3, maxParticipants: 3, openingText: { 'zh-TW': '', en: '' }, taskDescription: { 'zh-TW': '', en: '' }, taskMinutes: 30, reminderMinutes: [5] },
+  style: { casualness: 4, maxSentences: 2 },
+  facilitation: { divergeShare: 0.5 },
+  prompts: {},
   rationale: {}
 });
 
@@ -78,7 +87,14 @@ const localizedOf = (v: unknown): Localized => {
 };
 export const withDefaults = (p: AiProfile): AiProfile => {
   const session = { ...base().session, ...(p.session || {}) };
-  return { ...base(), ...p, session: { ...session, openingText: localizedOf(session.openingText), taskDescription: localizedOf(session.taskDescription) } };
+  return {
+    ...base(),
+    ...p,
+    session: { ...session, openingText: localizedOf(session.openingText), taskDescription: localizedOf(session.taskDescription) },
+    style: { ...base().style, ...(p.style || {}) },
+    facilitation: { ...base().facilitation, ...(p.facilitation || {}) },
+    prompts: { ...(p.prompts || {}) }
+  };
 };
 
 /** Starting set for a study; timing values are placeholders until set from the literature. */

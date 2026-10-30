@@ -236,7 +236,7 @@ export async function runCheck(roomId, secrets, { reason, forced = false, caller
     const every = profile.memory?.updateEveryMessages || 0;
     if (every && state.msgsSinceMemory >= every) {
       const recent = messages.slice(-Math.min(state.msgsSinceMemory, CONTEXT_MESSAGES));
-      const memory = await updateMemory({ apiKey: secrets.anthropic, roomId, previous: { ...(roomAi.memory || {}), ...memoryUpdate }, messages: recent, participants });
+      const memory = await updateMemory({ apiKey: secrets.anthropic, roomId, previous: { ...(roomAi.memory || {}), ...memoryUpdate }, messages: recent, participants, profile: roomAi.profile });
       if (memory) {
         Object.assign(memoryUpdate, memory);
         stateUpdate.msgsSinceMemory = 0;
@@ -255,12 +255,12 @@ async function run3D(roomId, profile, secrets, { aiMessage, assetData, prompt, m
   const sys = await getSystemConfig();
   const stop = startPresence(roomId, 'mesh', { type: '3D Model Generation', prompt: String(prompt).slice(0, 100) });
   try {
-    const res = await generate3D({ engine: sys.engine3D, prompt, keys: { meshy: secrets.meshy, tripo: secrets.tripo } });
-    await logAiCall({ kind: 'model_3d', roomId, model: sys.engine3D, input: { prompt }, output: res });
+    const res = await generate3D({ engine: sys.engine3D, prompt, keys: { meshy: secrets.meshy, tripo: secrets.tripo }, meshy: sys.meshy });
+    await logAiCall({ kind: 'model_3d', roomId, model: sys.engine3D, input: { prompt, meshy: sys.engine3D === 'meshy' ? sys.meshy : null }, output: res });
     await postAiMessage(roomId, room, profile, {
       content: aiMessage,
       assetType: 'mesh_3d',
-      assetPayload: { title: prompt, provider: res.provider, taskId: res.taskId, modelUrl: res.modelUrl, originalModelUrl: res.originalModelUrl, ...(res.thumbnailUrl ? { posterUrl: res.thumbnailUrl } : {}), isRefined: false, isInteractive: true },
+      assetPayload: { title: prompt, provider: res.provider, taskId: res.taskId, modelUrl: res.modelUrl, originalModelUrl: res.originalModelUrl, ...(res.thumbnailUrl ? { posterUrl: res.thumbnailUrl } : {}), isRefined: res.isRefined, isInteractive: true },
       meta
     });
   } catch (err) {

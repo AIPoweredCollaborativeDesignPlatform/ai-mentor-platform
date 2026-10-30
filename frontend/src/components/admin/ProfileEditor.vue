@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { MODES, TIMING_FIELDS, getPath, modeLabel, setPath, withDefaults, type AiProfile } from '../../utils/aiProfiles';
 import { t, type MessageKey } from '../../i18n';
+import { getPromptDefaults, type PromptDefaults } from '../../services/admin';
 
 const props = defineProps<{ profile: AiProfile; saving: boolean }>();
 const emit = defineEmits<{ (e: 'save', profile: AiProfile): void; (e: 'cancel'): void }>();
@@ -39,8 +40,50 @@ const reminderText = computed({
 const sessionNumber = (key: 'expectedParticipants' | 'maxParticipants' | 'taskMinutes', raw: string) =>
   (draft.value.session[key] = Math.max(key === 'expectedParticipants' ? 1 : 0, Math.round(Number(raw) || 0)));
 
+// ---------- Tone, pacing and prompt blocks ----------
+const CASUAL_LABELS: MessageKey[] = ['pe.casual1', 'pe.casual2', 'pe.casual3', 'pe.casual4', 'pe.casual5'];
+const setDivergeShare = (raw: string) => (draft.value.facilitation.divergeShare = Math.min(100, Math.max(0, Number(raw) || 0)) / 100);
+
+// Same blocks as functions/src/prompts.js PROMPT_DEFAULTS
+const PROMPT_BLOCKS: { key: string; label: MessageKey; warn?: MessageKey }[] = [
+  { key: 'role', label: 'pp.role' },
+  { key: 'designThinking', label: 'pp.designThinking' },
+  { key: 'pacingDiverge', label: 'pp.pacingDiverge' },
+  { key: 'pacingConverge', label: 'pp.pacingConverge' },
+  { key: 'pacingOpen', label: 'pp.pacingOpen' },
+  { key: 'style', label: 'pp.style' },
+  { key: 'rules', label: 'pp.rules' },
+  { key: 'outputFormat', label: 'pp.outputFormat', warn: 'pp.outputFormatWarn' },
+  { key: 'memory', label: 'pp.memory', warn: 'pp.outputFormatWarn' },
+  { key: 'sessionMessage', label: 'pp.sessionMessage' },
+  { key: 'sessionKickoff', label: 'pp.sessionKickoff' },
+  { key: 'sessionReminder', label: 'pp.sessionReminder' },
+  { key: 'sessionTimeUp', label: 'pp.sessionTimeUp' },
+  { key: 'vision', label: 'pp.vision' },
+  { key: 'svgRules', label: 'pp.svgRules' },
+  { key: 'textToSvg', label: 'pp.textToSvg' },
+  { key: 'sketchToSvg', label: 'pp.sketchToSvg' }
+];
+const promptDefaults = ref<PromptDefaults | null>(null);
+const promptError = ref('');
+onMounted(async () => {
+  try {
+    promptDefaults.value = await getPromptDefaults();
+  } catch (e: any) {
+    promptError.value = t('pe.promptsLoadFailed', { error: e?.message || String(e) });
+  }
+});
+const phLabel = (ph: string) => `{{${ph}}}`;
+const promptValue = (key: string) => draft.value.prompts[key] ?? promptDefaults.value?.defaults[key] ?? '';
+const setPrompt = (key: string, value: string) => (draft.value.prompts[key] = value);
+const isPromptChanged = (key: string) => key in draft.value.prompts && draft.value.prompts[key] !== promptDefaults.value?.defaults[key];
+const resetPrompt = (key: string) => delete draft.value.prompts[key];
+
 const save = () => {
   draft.value.rationale = Object.fromEntries(Object.entries(draft.value.rationale || {}).filter(([, v]) => v?.trim()));
+  // Keep only blocks that differ from the built-in text (an emptied block falls back to it)
+  const defaults = promptDefaults.value?.defaults;
+  draft.value.prompts = Object.fromEntries(Object.entries(draft.value.prompts || {}).filter(([k, v]) => v?.trim() && v !== defaults?.[k]));
   emit('save', draft.value);
 };
 
@@ -146,6 +189,69 @@ const input = 'w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 
         <textarea v-if="openRationale.persona" v-model="draft.rationale.persona" rows="2" :class="[input, 'mt-1 text-xs']" :placeholder="t('pe.rationalePlaceholder')"></textarea>
       </div>
     </section>
+
+    <!-- Chat tone and divergent / convergent pacing -->
+    <section class="space-y-3" :class="{ 'opacity-50': draft.mode === 'none' }">
+      <h3 class="text-sm font-semibold text-slate-200">{{ t('pe.style') }}</h3>
+      <div class="space-y-1">
+        <span class="text-xs text-slate-400">{{ t('pe.casualness') }}</span>
+        <div class="grid grid-cols-5 gap-1.5">
+          <button
+            v-for="level in 5"
+            :key="level"
+            type="button"
+            @click="draft.style.casualness = level"
+            class="px-1 py-2 pointer-coarse:py-2.5 rounded-lg border text-xs transition"
+            :class="draft.style.casualness === level ? 'border-sky-400 bg-sky-500/15 text-sky-100' : 'border-slate-700 bg-slate-900 text-slate-400 hover:border-slate-600'"
+          >
+            <span class="block font-semibold">{{ level }}</span>
+            <span class="block text-[10px]">{{ t(CASUAL_LABELS[level - 1]) }}</span>
+          </button>
+        </div>
+      </div>
+      <div class="grid sm:grid-cols-2 gap-3">
+        <label class="space-y-1">
+          <span class="text-xs text-slate-400">{{ t('pe.maxSentences') }}</span>
+          <input type="number" min="1" max="8" v-model.number="draft.style.maxSentences" :class="input" />
+          <span class="block text-[11px] text-slate-500">{{ t('pe.maxSentencesHelp') }}</span>
+        </label>
+        <label class="space-y-1">
+          <span class="text-xs text-slate-400">{{ t('pe.divergeShare') }}</span>
+          <input type="number" min="0" max="100" :value="Math.round(draft.facilitation.divergeShare * 100)" @input="setDivergeShare(($event.target as HTMLInputElement).value)" :class="input" />
+          <span class="block text-[11px] text-slate-500">{{ t('pe.divergeShareHelp') }}</span>
+        </label>
+      </div>
+    </section>
+
+    <!-- Every instruction the AI receives; only changed blocks are stored with the profile -->
+    <section class="space-y-2">
+      <h3 class="text-sm font-semibold text-slate-200">{{ t('pe.prompts') }}</h3>
+      <p class="text-[11px] text-slate-500">{{ t('pe.promptsHelp', { version: promptDefaults?.version || '—' }) }}</p>
+      <p v-if="promptError" class="text-[11px] text-rose-300">{{ promptError }}</p>
+      <details v-for="b in PROMPT_BLOCKS" :key="b.key" class="rounded-xl border border-slate-800 bg-slate-900/60">
+        <summary class="px-3 py-2.5 pointer-coarse:py-3 cursor-pointer text-sm text-slate-200 flex items-center gap-2 select-none">
+          <span class="min-w-0 flex-1">{{ t(b.label) }}</span>
+          <span v-if="isPromptChanged(b.key)" class="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300">{{ t('pe.promptChanged') }}</span>
+        </summary>
+        <div class="px-3 pb-3 space-y-2">
+          <p v-if="b.warn" class="text-[11px] text-amber-300">{{ t(b.warn) }}</p>
+          <div v-if="promptDefaults?.placeholders[b.key]?.length" class="flex flex-wrap gap-1 text-[10px]">
+            <span class="text-slate-500">{{ t('pe.placeholders') }}</span>
+            <code v-for="ph in promptDefaults.placeholders[b.key]" :key="ph" class="px-1 rounded bg-slate-800 text-sky-300">{{ phLabel(ph) }}</code>
+          </div>
+          <textarea
+            :value="promptValue(b.key)"
+            @input="setPrompt(b.key, ($event.target as HTMLTextAreaElement).value)"
+            :disabled="!promptDefaults"
+            rows="10"
+            spellcheck="false"
+            :class="[input, 'font-mono !text-xs leading-relaxed']"
+          ></textarea>
+          <button v-if="isPromptChanged(b.key)" type="button" @click="resetPrompt(b.key)" class="text-[11px] text-sky-400 hover:underline pointer-coarse:py-1.5">{{ t('pe.promptReset') }}</button>
+        </div>
+      </details>
+    </section>
+
 
     <section class="space-y-2">
       <h3 class="text-sm font-semibold text-slate-200">{{ t('pe.timing') }}</h3>

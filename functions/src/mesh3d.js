@@ -71,21 +71,45 @@ async function tripoTask(token, prompt) {
   });
 }
 
+// 2k / 4k geometry exists only on meshy-7.1 (and "latest"); 4k/8k textures not on meshy-6-lite
+const meshyPreviewBody = (prompt, opts = {}) => {
+  const aiModel = opts.aiModel || 'meshy-7.1';
+  const body = { mode: 'preview', prompt: String(prompt).slice(0, 800), ai_model: aiModel, should_remesh: true };
+  if (opts.geometryResolution && opts.geometryResolution !== 'standard' && ['meshy-7.1', 'latest'].includes(aiModel)) {
+    body.geometry_resolution = opts.geometryResolution;
+  }
+  return body;
+};
+
 /**
  * Runs a text-to-3D job to completion and copies the GLB into Firebase Storage,
- * so the browser can load it without CORS problems.
+ * so the browser can load it without CORS problems. `meshy`: system settings (src/config.js);
+ * with autoRefine the textured model is returned (isRefined).
  */
-export async function generate3D({ engine, prompt, keys }) {
-  const result = engine === 'tripo'
-    ? { ...(await tripoTask(keys.tripo, prompt)), provider: 'Tripo3D API' }
-    : { ...(await meshyTask(keys.meshy, { mode: 'preview', prompt, art_style: 'realistic', should_remesh: true })), provider: 'Meshy.ai v2 Text-to-3D' };
-  const storedUrl = await rehostToStorage(result.modelUrl, `models/${result.taskId}.glb`, 'model/gltf-binary');
-  return { ...result, originalModelUrl: result.modelUrl, modelUrl: storedUrl };
+export async function generate3D({ engine, prompt, keys, meshy = {} }) {
+  if (engine === 'tripo') {
+    const result = { ...(await tripoTask(keys.tripo, prompt)), provider: 'Tripo3D API' };
+    const storedUrl = await rehostToStorage(result.modelUrl, `models/${result.taskId}.glb`, 'model/gltf-binary');
+    return { ...result, originalModelUrl: result.modelUrl, modelUrl: storedUrl, isRefined: false };
+  }
+  const preview = { ...(await meshyTask(keys.meshy, meshyPreviewBody(prompt, meshy))), provider: `Meshy ${meshy.aiModel || 'meshy-7.1'} Text-to-3D` };
+  if (meshy.autoRefine) {
+    try {
+      const refined = await refineMeshy({ previewTaskId: preview.taskId, keys, meshy });
+      return { ...refined, previewTaskId: preview.taskId, isRefined: true };
+    } catch (err) {
+      console.warn('[generate3D] auto refine failed, keeping the preview:', err?.message || err);
+    }
+  }
+  const storedUrl = await rehostToStorage(preview.modelUrl, `models/${preview.taskId}.glb`, 'model/gltf-binary');
+  return { ...preview, originalModelUrl: preview.modelUrl, modelUrl: storedUrl, isRefined: false };
 }
 
 /** Meshy texturing pass on an existing preview task. */
-export async function refineMeshy({ previewTaskId, texturePrompt, keys }) {
-  const body = { mode: 'refine', preview_task_id: previewTaskId, enable_pbr: true };
+export async function refineMeshy({ previewTaskId, texturePrompt, keys, meshy = {} }) {
+  const body = { mode: 'refine', preview_task_id: previewTaskId, enable_pbr: meshy.enablePbr !== false };
+  const lite = meshy.aiModel === 'meshy-6-lite';
+  if (meshy.textureResolution && meshy.textureResolution !== '2k' && !lite) body.texture_resolution = meshy.textureResolution;
   if (texturePrompt?.trim()) body.texture_prompt = texturePrompt.trim();
   const result = await meshyTask(keys.meshy, body);
   const storedUrl = await rehostToStorage(result.modelUrl, `models/${result.taskId}.glb`, 'model/gltf-binary');

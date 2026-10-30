@@ -289,30 +289,6 @@ defineExpose({ setReply, sendFile });
 <template>
   <footer class="border-t border-slate-800 bg-slate-900/90 p-2.5 sm:p-3 pb-[calc(0.625rem+env(safe-area-inset-bottom))] sm:pb-[calc(0.75rem+env(safe-area-inset-bottom))] shrink-0">
     <div class="max-w-4xl mx-auto space-y-1.5">
-      <!-- Room-wide AI task banner -->
-      <div
-        v-if="aiEnabled && roomStore.currentRoom?.aiActiveTask"
-        class="flex items-center justify-between p-2.5 rounded-xl bg-sky-950/90 border border-sky-500/40 shadow-lg text-xs text-sky-200 animate-pulse"
-      >
-        <div class="flex items-center gap-2.5 min-w-0">
-          <div class="p-1 rounded-lg bg-sky-500/20 text-sky-400 shrink-0">
-            <Loader2 class="w-4 h-4 animate-spin text-sky-400" />
-          </div>
-          <div class="min-w-0">
-            <p class="font-semibold text-sky-200 truncate">{{ roomStore.currentRoom.aiActiveTask.callerName ? t('composer.aiRespondingTo', { name: aiName, caller: roomStore.currentRoom.aiActiveTask.callerName }) : t('composer.aiResponding', { name: aiName }) }}</p>
-            <p class="text-slate-400 text-[11px] truncate">{{ roomStore.currentRoom.aiActiveTask.type }}: "{{ roomStore.currentRoom.aiActiveTask.prompt }}"</p>
-          </div>
-        </div>
-        <button
-          v-if="roomStore.currentRoom.aiActiveTask.callerUid === authStore.uid || roomStore.isHost"
-          @click="roomStore.abortCurrentAiGeneration()"
-          class="ml-2 px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 hover:text-ink text-[11px] font-medium transition cursor-pointer flex items-center gap-1 shrink-0"
-          :title="t('composer.stopAi')"
-        >
-          <X class="w-3 h-3" /> {{ t('common.stop') }}
-        </button>
-      </div>
-
       <div v-if="replyingTo" class="flex items-center justify-between p-2 rounded-xl bg-slate-950/90 border border-slate-700/80 text-xs text-slate-300">
         <div class="flex items-center gap-2 min-w-0">
           <CornerUpLeft class="w-3.5 h-3.5 text-sky-400 shrink-0" />

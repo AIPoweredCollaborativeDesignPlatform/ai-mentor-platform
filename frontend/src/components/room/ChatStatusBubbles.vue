@@ -3,6 +3,7 @@ import { t } from '../../i18n';
 import { computed } from 'vue';
 import { Bot, Box, X } from 'lucide-vue-next';
 import { useRoomStore } from '../../stores/room';
+import { useAuthStore } from '../../stores/auth';
 import { AI_TYPING_UIDS, formatTypingText } from '../../utils/chat';
 import { useRoomAi } from '../../composables/useRoomAi';
 
@@ -10,7 +11,11 @@ const roomStore = useRoomStore();
 const { aiEnabled, aiName } = useRoomAi();
 
 const humanTypers = computed(() => roomStore.typingUsers.filter(u => !AI_TYPING_UIDS.includes(u.uid)));
-const isAiThinking = computed(() => aiEnabled.value && roomStore.isAnalyzing);
+const authStore = useAuthStore();
+// A room-wide AI task (someone @mentioned the AI) or the AI's own check; shown as one chip
+const activeTask = computed(() => (aiEnabled.value ? roomStore.currentRoom?.aiActiveTask : null));
+const isAiThinking = computed(() => aiEnabled.value && (roomStore.isAnalyzing || Boolean(activeTask.value)));
+const canStopTask = computed(() => !activeTask.value || activeTask.value.callerUid === authStore.uid || roomStore.isHost);
 
 // One row of fixed height, always reserved: statuses appear and disappear without moving the chat
 const chip = 'flex items-center gap-1.5 shrink-0 animate-fade-in';
@@ -29,8 +34,8 @@ const stopButton = 'ml-1 px-1.5 py-0.5 pointer-coarse:py-1 rounded-md bg-rose-50
 
     <div v-if="isAiThinking" :class="chip">
       <Bot class="w-3.5 h-3.5 text-slate-500" />
-      <span>{{ t('status.aiThinking', { name: aiName }) }}</span>
-      <button @click="roomStore.abortCurrentAiGeneration()" :class="stopButton" :title="t('status.interruptAi')">
+      <span>{{ activeTask?.callerName ? t('composer.aiRespondingTo', { name: aiName, caller: activeTask.callerName }) : t('status.aiThinking', { name: aiName }) }}</span>
+      <button v-if="canStopTask" @click="roomStore.abortCurrentAiGeneration()" :class="stopButton" :title="t('status.interruptAi')">
         <X class="w-3 h-3" /> {{ t('common.stop') }}
       </button>
     </div>

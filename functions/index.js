@@ -17,6 +17,7 @@ import { logBoardObjectChange, logMessageChange } from './src/events.js';
 import { authUrl, exportRoom, handleCallback, runDueExports } from './src/drive.js';
 import { createRoom, listPins, markRoomDeleted, updateMyProfile, updateRoomDetails } from './src/rooms.js';
 import { consentTextFor, roomLanguage, str } from './src/i18n.js';
+import { keyStatus, resolveKeys, setKeyOverride, testProviders } from './src/apiKeys.js';
 import { claimAnonymousRooms, isAdminToken, isObserverToken, isPrimaryAdminToken, listAdmins, listObservers, setAdmin, setObserver, syncRole } from './src/roles.js';
 
 initializeApp();
@@ -75,12 +76,16 @@ const meta = (model, response) => ({
 });
 
 // ---------- AI Mentor (server-side activity manager; see src/engine.js) ----------
-const engineSecrets = () => ({
+// Keys in use: an override set on the admin page (src/apiKeys.js), else the Functions secret.
+// Only functions that mount ALL_SECRETS may read every secret.
+const secretValues = () => ({
   anthropic: ANTHROPIC_API_KEY.value(),
   fal: FAL_KEY.value(),
   meshy: MESHY_API_KEY.value(),
   tripo: TRIPO_API_KEY.value()
 });
+const engineSecrets = () => resolveKeys(secretValues());
+const anthropicKey = async () => (await resolveKeys({ anthropic: ANTHROPIC_API_KEY.value() })).anthropic;
 const ALL_SECRETS = [ANTHROPIC_API_KEY, FAL_KEY, MESHY_API_KEY, TRIPO_API_KEY];
 
 // Handlers may wait up to stallSeconds for a pause/stall; concurrency lets waits share instances
@@ -89,14 +94,14 @@ export const onRoomMessage = onDocumentCreated(
   async event => {
     const msg = event.data?.data();
     if (!msg) return;
-    await handleNewMessage(event.params.roomId, event.params.messageId, msg, engineSecrets());
+    await handleNewMessage(event.params.roomId, event.params.messageId, msg, await engineSecrets());
   }
 );
 
 // Votes on the AI's polls: once a majority has voted, the AI follows up on the result (engine.js handlePollVote)
 export const onPollVote = onDocumentUpdated(
   { document: 'rooms/{roomId}/messages/{messageId}', secrets: ALL_SECRETS, timeoutSeconds: 300, memory: '512MiB', cpu: 1, concurrency: 80, maxInstances: 10 },
-  event => handlePollVote(event.params.roomId, event.params.messageId, event.data?.before?.data(), event.data?.after?.data(), engineSecrets())
+  async event => handlePollVote(event.params.roomId, event.params.messageId, event.data?.before?.data(), event.data?.after?.data(), await engineSecrets())
 );
 
 // New rooms from this site get the default profile snapshot immediately
@@ -115,7 +120,7 @@ export const mentorRespond = onCall(
       const target = (await getFirestore().doc(`rooms/${roomId}/messages/${String(retryMessageId)}`).get()).data();
       if (target?.senderUid !== 'ai_mentor') throw new HttpsError('invalid-argument', 'Not an AI message');
     }
-    await runCheck(roomId, engineSecrets(), { reason: 'retry', forced: true, callerUid: request.auth.uid, retryMessageId });
+    await runCheck(roomId, await engineSecrets(), { reason: 'retry', forced: true, callerUid: request.auth.uid, retryMessageId });
     return { ok: true };
   }
 );
@@ -145,6 +150,30 @@ export const setStudyObserver = onCall({ maxInstances: 2 }, async request => {
   } catch (err) {
     throw new HttpsError('invalid-argument', err?.message || String(err));
   }
+});
+
+// ---------- AI provider keys (src/apiKeys.js) ----------
+export const getApiKeyStatus = onCall({ secrets: ALL_SECRETS, maxInstances: 2 }, async request => {
+  requireAdmin(request);
+  return { keys: await keyStatus(secretValues()) };
+});
+
+/** Empty `key` removes the admin override (the Functions secret is used again). */
+export const setApiKey = onCall({ secrets: ALL_SECRETS, maxInstances: 2 }, async request => {
+  requireAdmin(request);
+  const { provider, key } = request.data || {};
+  try {
+    await setKeyOverride(String(provider || ''), key, request.auth.token.email);
+  } catch (err) {
+    throw new HttpsError('invalid-argument', err?.message || String(err));
+  }
+  return { keys: await keyStatus(secretValues()) };
+});
+
+export const testApiKeys = onCall({ secrets: ALL_SECRETS, timeoutSeconds: 60, maxInstances: 2 }, async request => {
+  requireAdmin(request);
+  const only = Array.isArray(request.data?.providers) && request.data.providers.length ? request.data.providers.map(String) : undefined;
+  return { results: await testProviders(secretValues(), only) };
 });
 
 // Additional administrators: any administrator can see the list, only the primary one can change it
@@ -349,7 +378,7 @@ export const onSessionJob = onDocumentCreated(
   { document: 'sessionJobs/{jobId}', secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 300, maxInstances: 10 },
   async event => {
     const job = event.data?.data();
-    if (job) await runSessionJob(job, { anthropic: ANTHROPIC_API_KEY.value() });
+    if (job) await runSessionJob(job, { anthropic: await anthropicKey() });
   }
 );
 
@@ -368,7 +397,7 @@ export const whiteboardVision = onCall(
     await requireRoomMember(request);
     const sys = await getSystemConfig();
     try {
-      const response = await createMessage(ANTHROPIC_API_KEY.value(), {
+      const response = await createMessage(await anthropicKey(), {
         model: sys.models.vision,
         max_tokens: 1000,
         output_config: { effort: 'low' },
@@ -396,7 +425,7 @@ export const generateSvg = onCall(
     await requireRoomMember(request);
     const sys = await getSystemConfig();
     try {
-      const response = await createMessage(ANTHROPIC_API_KEY.value(), {
+      const response = await createMessage(await anthropicKey(), {
         model: sys.models.svg,
         max_tokens: 8000,
         messages: [{ role: 'user', content: textToSvgPrompt(String(request.data?.prompt || '').slice(0, 2000)) }]
@@ -419,7 +448,7 @@ export const sketchToSvg = onCall(
     const { imageDataUrl, notes = '', language = 'zh-TW' } = request.data || {};
     const sys = await getSystemConfig();
     try {
-      const response = await createMessage(ANTHROPIC_API_KEY.value(), {
+      const response = await createMessage(await anthropicKey(), {
         model: sys.models.svg,
         max_tokens: 8000,
         messages: [{ role: 'user', content: [imageBlockFromDataUrl(imageDataUrl), { type: 'text', text: sketchToSvgPrompt(String(notes).slice(0, 2000), language) }] }]
@@ -435,7 +464,7 @@ export const sketchToSvg = onCall(
 );
 
 // ---------- 3D ----------
-const meshKeys = () => ({ meshy: MESHY_API_KEY.value(), tripo: TRIPO_API_KEY.value() });
+const meshKeys = () => resolveKeys({ meshy: MESHY_API_KEY.value(), tripo: TRIPO_API_KEY.value() });
 
 export const refineModel3D = onCall(
   { secrets: [MESHY_API_KEY, TRIPO_API_KEY], timeoutSeconds: 540, memory: '512MiB', maxInstances: 10 },
@@ -444,7 +473,7 @@ export const refineModel3D = onCall(
     const { taskId, texturePrompt, roomId, title = '' } = request.data || {};
     if (!taskId) throw new HttpsError('invalid-argument', 'Missing Meshy task id');
     try {
-      const result = await refineMeshy({ previewTaskId: taskId, texturePrompt, keys: meshKeys() });
+      const result = await refineMeshy({ previewTaskId: taskId, texturePrompt, keys: await meshKeys() });
       await logAiCall({ ...baseLog(request, 'model_3d_refine', 'meshy'), input: { taskId, texturePrompt: texturePrompt || '' }, output: result });
       // The refined model is posted as an AI message by the server (browsers cannot post as the AI)
       const name = String(title).slice(0, 200);

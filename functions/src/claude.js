@@ -2,15 +2,18 @@ import Anthropic from '@anthropic-ai/sdk';
 import { getSystemConfig } from './config.js';
 
 let client = null;
+let clientKey = null;
 let clientWorkspace = null;
 
 /**
  * Keys created outside a workspace must name one via the anthropic-workspace-id header;
  * set config/system.anthropicWorkspaceId in that case (workspace-scoped keys need nothing).
+ * The client is rebuilt when the key changes (the admin page can replace it at any time).
  */
 export const getClient = (apiKey, workspaceId = null) => {
-  if (!client || clientWorkspace !== workspaceId) {
+  if (!client || clientKey !== apiKey || clientWorkspace !== workspaceId) {
     client = new Anthropic({ apiKey, ...(workspaceId ? { defaultHeaders: { 'anthropic-workspace-id': workspaceId } } : {}) });
+    clientKey = apiKey;
     clientWorkspace = workspaceId;
   }
   return client;

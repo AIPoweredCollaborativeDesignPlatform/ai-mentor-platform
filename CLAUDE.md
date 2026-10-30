@@ -28,7 +28,7 @@ npm run deploy:dry         # 只 build 驗證，不部署、不改版本
 
 ## 架構重點
 
-- **AI 全在 Cloud Functions**（`functions/index.js` 入口，邏輯在 `functions/src/`）：前端只透過 `services/ai.ts` 的 `httpsCallable` 呼叫，不持有任何金鑰。金鑰為 Functions secrets（`ANTHROPIC_API_KEY`、`FAL_KEY`、`MESHY_API_KEY`、`TRIPO_API_KEY`，不用的可設 `none`）。Firestore 仍是唯一的即時同步匯流排。
+- **AI 全在 Cloud Functions**（`functions/index.js` 入口，邏輯在 `functions/src/`）：前端只透過 `services/ai.ts` 的 `httpsCallable` 呼叫，不持有任何金鑰。金鑰為 Functions secrets（`ANTHROPIC_API_KEY`、`FAL_KEY`、`MESHY_API_KEY`、`TRIPO_API_KEY`，不用的可設 `none`）；後台「系統設定」可覆寫（`privateConfig/apiKeys`，僅伺服器，`src/apiKeys.js` 的 `resolveKeys`，30 秒快取）並一鍵測試。新增讀金鑰的程式要走 `engineSecrets()`／`anthropicKey()`，不要直接 `.value()`。Firestore 仍是唯一的即時同步匯流排。
   - `onRoomMessage`（messages 觸發）→ `src/engine.js` 的 `handleNewMessage`：每房一個決策者，計數存 `roomAi/{roomId}.state`；@mention 立即回覆，否則在停頓／達最多則數／停滯時檢查；非 proactive 或冷卻中的檢查以「影子判斷」只寫研究紀錄。Claude 呼叫在 `src/mentor.js`、`src/claude.js`，提示詞在 `src/prompts.js`（`PROMPT_VERSION`），呼叫紀錄 `src/log.js`。
   - 其他 callable：`mentorRespond`（重試）、`assignRoomProfile`、`adminDeleteRoom`（後台刪房＝標 `deletedAt`，資料保留；進行中須先結束）、`whiteboardVision`、`generateSvg`／`sketchToSvg`、`refineModel3D`（3D 生成在 engine 內；上色結果由伺服器發 AI 訊息）、`proxyGlb`（Hosting rewrite `/api/proxy`，只代抓 https 的 3D 模型網域）。AI 類 callable 一律先 `requireRoomMember`（房主／已核准參與者／觀察員）；瀏覽器不能發 AI 或系統訊息（改暱稱／頭貼走 `updateRoomProfile`、改房名走 `updateStudyRoomDetails`，由伺服器寫入並發通知）。
 - **實驗條件設定檔**（`src/profiles.js`）：`aiProfiles/{id}` 由 `/#/admin`（`views/AdminView.vue`、`services/admin.ts`）編輯並版本化；指派時凍結快照到 `roomAi/{roomId}.profile`，之後修改不影響該房。`mode` = `none | reactive | proactive`；`none` 時前端完全隱藏 AI。`roomAi/*` 僅伺服器/管理者可讀，參與者只看 `rooms/{id}.ai`（`publicAiView`）。系統設定在 `src/config.js`。

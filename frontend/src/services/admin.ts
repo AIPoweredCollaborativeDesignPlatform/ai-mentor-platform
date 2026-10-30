@@ -186,6 +186,37 @@ export async function setObserver(email: string, add: boolean) {
   return (await fn({ email, add })).data;
 }
 
+// ---------- AI provider keys (functions/src/apiKeys.js); the browser only sees the last 4 characters ----------
+export type ApiProvider = 'anthropic' | 'fal' | 'meshy' | 'tripo';
+export interface ApiKeyStatus {
+  provider: ApiProvider;
+  source: 'admin' | 'secret' | 'none';
+  last4: string;
+  updatedAt: number | null;
+  updatedBy: string | null;
+}
+export interface ApiTestResult {
+  provider: ApiProvider;
+  ok: boolean;
+  skipped?: boolean;
+  ms: number;
+  detail?: string;
+  usage?: string;
+}
+
+export async function getApiKeyStatus(): Promise<ApiKeyStatus[]> {
+  return (await httpsCallable<void, { keys: ApiKeyStatus[] }>(functions, 'getApiKeyStatus')()).data.keys;
+}
+
+/** An empty key removes the admin override (the Functions secret is used again). */
+export async function setApiKey(provider: ApiProvider, key: string): Promise<ApiKeyStatus[]> {
+  return (await httpsCallable<{ provider: string; key: string }, { keys: ApiKeyStatus[] }>(functions, 'setApiKey')({ provider, key })).data.keys;
+}
+
+export async function testApiKeys(providers?: ApiProvider[]): Promise<ApiTestResult[]> {
+  return (await httpsCallable<{ providers?: string[] }, { results: ApiTestResult[] }>(functions, 'testApiKeys', { timeout: 70_000 })({ providers })).data.results;
+}
+
 /** Additional administrators (only the primary administrator may change the list). */
 export async function listAdmins(): Promise<StudyObserver[]> {
   const fn = httpsCallable<void, { admins: StudyObserver[] }>(functions, 'listStudyAdmins');

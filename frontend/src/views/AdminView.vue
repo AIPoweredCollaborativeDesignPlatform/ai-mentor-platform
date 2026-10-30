@@ -10,7 +10,8 @@ import {
 } from '../utils/aiProfiles';
 import {
   assignRoomProfile, deleteStudyRoom, exportRoomNow, getDriveAuthUrl, getDriveStatus, getSystemConfig, listProfiles, listStudyRooms, loadUsage,
-  listAdmins, listObservers, listRoomPins, saveProfile, saveSystemConfig, setAdmin, setObserver, type DriveStatus, type StudyObserver, type RoomPins, type StudyRoom, type UsageRow
+  listAdmins, listObservers, listRoomPins, saveProfile, saveSystemConfig, setAdmin, setObserver,
+  getApiKeyStatus, setApiKey, testApiKeys, type ApiKeyStatus, type ApiProvider, type ApiTestResult, type DriveStatus, type StudyObserver, type RoomPins, type StudyRoom, type UsageRow
 } from '../services/admin';
 import { DEFAULT_CONSENT_TEXT, DEFAULT_CONSENT_TEXT_ZH } from '../constants/consent';
 import { intlLocale, t, type MessageKey } from '../i18n';
@@ -80,7 +81,7 @@ const loadAll = async () => {
 onMounted(async () => {
   await authStore.waitForAuthReady().catch(() => {});
   await authStore.waitForRole();
-  if (isAdmin.value) await Promise.all([loadAll(), loadObservers(), loadAdmins()]);
+  if (isAdmin.value) await Promise.all([loadAll(), loadObservers(), loadAdmins(), loadApiKeys()]);
   else if (canView.value) {
     tab.value = 'rooms';
     await loadAll();
@@ -108,6 +109,53 @@ const changeObserver = async (email: string, add: boolean) => {
   } finally {
     observerBusy.value = false;
   }
+};
+
+// ---------- AI provider keys ----------
+const API_NAMES: Record<ApiProvider, string> = { anthropic: 'Claude', fal: 'fal.ai', meshy: 'Meshy', tripo: 'Tripo' };
+const API_SOURCES: Record<ApiKeyStatus['source'], MessageKey> = { admin: 'api.sourceAdmin', secret: 'api.sourceSecret', none: 'api.sourceNone' };
+const apiKeys = ref<ApiKeyStatus[]>([]);
+const apiDrafts = ref<Partial<Record<ApiProvider, string>>>({});
+const apiResults = ref<Partial<Record<ApiProvider, ApiTestResult>>>({});
+const apiTesting = ref(new Set<ApiProvider>());
+const apiBusy = ref(false);
+// "✓ 412 ms claude-… 12+3 tokens" / "✗ 380 ms HTTP 401: Invalid API key"
+const apiResultLine = (p: ApiProvider) => {
+  const r = apiResults.value[p];
+  if (!r) return null;
+  const text = [r.ok ? '✓' : '✗', r.ms ? `${r.ms} ms` : '', r.detail || '', r.usage || ''].filter(Boolean).join(' ');
+  return { text, cls: r.ok ? 'text-emerald-300' : r.skipped ? 'text-slate-500' : 'text-rose-300' };
+};
+const loadApiKeys = async () => {
+  apiKeys.value = await getApiKeyStatus().catch(() => []);
+};
+const runApiTest = async (providers?: ApiProvider[]) => {
+  const list = providers || apiKeys.value.map(k => k.provider);
+  list.forEach(p => apiTesting.value.add(p));
+  try {
+    for (const r of await testApiKeys(providers)) apiResults.value[r.provider] = r;
+  } catch (e: any) {
+    roomStore.pushToast(t('adm.actionFailed'), e?.message || String(e), 'error');
+  } finally {
+    list.forEach(p => apiTesting.value.delete(p));
+  }
+};
+const updateApiKey = async (provider: ApiProvider, key: string) => {
+  apiBusy.value = true;
+  try {
+    apiKeys.value = await setApiKey(provider, key);
+    apiDrafts.value[provider] = '';
+    delete apiResults.value[provider];
+    await runApiTest([provider]); // show right away whether the new key works
+  } catch (e: any) {
+    roomStore.pushToast(t('adm.actionFailed'), e?.message || String(e), 'error');
+  } finally {
+    apiBusy.value = false;
+  }
+};
+const saveApiKey = (provider: ApiProvider) => updateApiKey(provider, apiDrafts.value[provider]?.trim() || '');
+const clearApiKey = (provider: ApiProvider) => {
+  if (window.confirm(t('api.revertConfirm', { name: API_NAMES[provider] }))) updateApiKey(provider, '');
 };
 
 // ---------- Administrators (added by the primary administrator; same rights except this list) ----------
@@ -600,6 +648,31 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
             <label>{{ t('adm.priceSearch') }} <input type="number" step="0.001" v-model.number="system.prices.webSearchPerUse" class="w-20 bg-slate-950 border border-slate-700 rounded px-2 py-1" /></label>
             <label>{{ t('adm.priceImage') }} <input type="number" step="0.001" v-model.number="system.prices.imagePerUnit" class="w-20 bg-slate-950 border border-slate-700 rounded px-2 py-1" /></label>
             <label>{{ t('adm.price3d') }} <input type="number" step="0.01" v-model.number="system.prices.model3DPerUnit" class="w-20 bg-slate-950 border border-slate-700 rounded px-2 py-1" /></label>
+          </div>
+        </div>
+        <!-- AI provider keys: status, replace / revert to the Functions secret, quick test -->
+        <div class="space-y-2 text-xs">
+          <div class="flex items-center gap-2">
+            <h3 class="text-sm font-semibold">{{ t('api.title') }}</h3>
+            <button @click="runApiTest()" :disabled="apiTesting.size > 0" class="ml-auto px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 disabled:opacity-40">{{ t('api.testAll') }}</button>
+          </div>
+          <p class="text-[11px] text-slate-500">{{ t('api.hint') }}</p>
+          <div v-for="k in apiKeys" :key="k.provider" class="p-2.5 rounded-lg border border-slate-800 space-y-1.5">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="font-semibold w-24">{{ API_NAMES[k.provider] }}</span>
+              <span class="text-[11px]" :class="k.source === 'none' ? 'text-amber-300' : 'text-slate-400'">
+                {{ t(API_SOURCES[k.source]) }}<template v-if="k.last4"> · ••••{{ k.last4 }}</template><template v-if="k.source === 'admin' && k.updatedAt"> · {{ fmtTime(k.updatedAt) }}</template>
+              </span>
+              <span v-if="apiResultLine(k.provider)" class="text-[11px]" :class="apiResultLine(k.provider)!.cls">{{ apiResultLine(k.provider)!.text }}</span>
+              <button @click="runApiTest([k.provider])" :disabled="apiTesting.has(k.provider)" class="ml-auto px-2 py-1 rounded border border-slate-700 hover:bg-slate-800 text-[11px] disabled:opacity-40">
+                <Loader2 v-if="apiTesting.has(k.provider)" class="w-3 h-3 animate-spin inline" /> {{ t('api.test') }}
+              </button>
+            </div>
+            <form @submit.prevent="saveApiKey(k.provider)" class="flex items-center gap-2">
+              <input v-model="apiDrafts[k.provider]" type="password" autocomplete="off" :placeholder="t('api.newKey')" class="flex-1 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 font-mono" />
+              <button :disabled="apiBusy || !apiDrafts[k.provider]?.trim()" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold disabled:opacity-40">{{ t('api.save') }}</button>
+              <button v-if="k.source === 'admin'" type="button" @click="clearApiKey(k.provider)" :disabled="apiBusy" class="px-2 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 disabled:opacity-40">{{ t('api.revert') }}</button>
+            </form>
           </div>
         </div>
         <!-- Administrators: everyone with admin rights sees the list, only the primary administrator edits it -->

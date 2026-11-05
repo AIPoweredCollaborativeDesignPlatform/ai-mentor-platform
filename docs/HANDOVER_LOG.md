@@ -1,3 +1,5 @@
+> **歷史文件**：本日誌寫於 2026-10-25，描述 v6.0.0（改版前）的系統。之後 AI 移到 Cloud Functions、入會核准流程與前端 AI 設定已移除。現況請看 `CLAUDE.md` 與 `docs/HANDOFF.md`。
+
 # 🧭 AI Mentor Collaboration Platform — 工程交接日誌
 
 | 項目 | 內容 |

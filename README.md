@@ -1,140 +1,68 @@
 # AI Mentor Collaboration Platform
 
-> **Positioning**: A group conversational intermediary platform fusing the Google AI ecosystem with Group Conversational Agent (GCA) theory. Designed for remote collaborative design and client decision-making, the platform positions AI as a background mediator and visual asset generator that intervenes constructively whenever cognitive gaps or discourse stagnation arise.
+這是一個 AI 輔助協作設計的研究平台（博士研究，預計送 IRB）。
 
----
+- 兩人或小組在線上協作產品設計：聊天、在共用白板畫圖，並取得 AI 產生的發想草圖、意象圖與 3D 模型。
+- AI 導師依實驗條件參與討論：無 AI、被動回應、主動介入。研究者在後台設定條件，事後可重播每一場討論，也能看到 AI 在背景的每一次判斷。
 
-## System Architecture & Interaction Flow
+線上網址：https://ai-mentor-design.web.app（另有 https://ai-mentor-web.web.app）
 
-```mermaid
-graph TD
-    UserGuest["Guest / Google User"] -->|1. Create Room| HostRoom["Host Creates Room (6-digit PIN & URL)"]
-    UserInvited["Invited Member"] -->|2. Enter PIN| WaitingRoom["Waiting Room (Status: Pending)"]
-    WaitingRoom -->|Real-time Listener / Firestore| HostNotify["Host Receives Toast Notification"]
-    HostNotify -->|3. Host Approves in Side Drawer| HostApprove["Status Updated to Approved"]
-    HostApprove -->|Auto-redirect| MainRoom["Collaborative Meeting Room (Messages Stream)"]
-    
-    MainRoom -->|Dialogue Stream| MentorEngine["AI Mentor Agent (FastAPI + Gemini)"]
-    MentorEngine -->|Reads Control Panel Settings| SensitivityRule{"Sensitivity: Strict / Conservative / Exploratory"}
-    SensitivityRule -->|Trigger Met| PublicIntervene["Public De-conflict Mediation & Visual Assets"]
-    
-    PublicIntervene -->|Code-to-3D| ThreeJSViewer["Three.js Parametric Geometry JSON (Real-time)"]
-    PublicIntervene -->|External Mesh| ModelViewer["GLB 3D Viewer (model-viewer)"]
-    PublicIntervene -->|Mood Board| MoodBoard["Visual Mood Board (Palette & Materials)"]
-    PublicIntervene -->|Deliverables| DocViewer["Markdown Meeting Summary & Contract Draft"]
+## 技術架構
+
+```
+瀏覽器（Vue 3 + Pinia + Tailwind + Fabric.js v7）
+   │  Firestore 即時同步（聊天、白板物件、房間狀態）
+   ▼
+Firebase Cloud Functions v2（Node 22）：所有 AI 都在伺服器端
+   ├─ Anthropic Claude：導師判斷與記憶、白板視覺、SVG、草圖描述、設定檔填寫
+   ├─ fal.ai FLUX：意象圖、文字轉草圖、圖生圖（草圖／渲染圖）
+   └─ Meshy（Tripo 為備選）：文字轉 3D、圖片轉 3D
 ```
 
----
+- 前端不持有任何 AI 金鑰。金鑰是 Functions secrets，也可在後台「系統設定」覆寫並測試。
+- 每一次 AI 呼叫都寫進研究紀錄（`aiLogs`），房內每個操作都寫進事件紀錄（`rooms/{id}/events`）。
 
-## Core Specifications & Features
+## 主要功能
 
-### 1. Authentication & Host Approval Flow
-* **Progressive Onboarding**:
-  * **Guest Mode (Default)**: Enter nickname and select an avatar to participate immediately. Stores anonymous UID in `localStorage` with clear indicators regarding local persistence.
-  * **Google Account Upgrade**: One-click upgrade with Firebase Authentication, unlocking the cross-device **Project Dashboard** and historical AI assets.
-* **Waiting Room & Host Approval**:
-  * First creator automatically becomes **Host**, receiving a 6-digit PIN and sharable URL.
-  * Invited participants entering via PIN/URL join a **Waiting Room** displaying an animated pulse indicator ("Waiting for Host Approval...").
-  * Hosts receive real-time **Toast Notifications** and can review applicants via the **Control Drawer** ("Pending" vs. "Approved" lists) with instant Allow/Reject actions.
-  * Upon approval, invited members are automatically redirected into the collaborative session and synced with chat history.
+**實驗流程**
+- 建房時伺服器配發 4 位數 PIN；參與者填暱稱、同意書後進房。
+- 人數到齊時自動開場，依設定的時間提醒，時間到即結束。
+- 設計題目可由後台指派，也可由 AI 在開場時出題，讓大家投票。
 
-### 2. Group Interaction & Tension Control (GCA Mediation)
-* **Proactivity vs. Group Autonomy (Mentor Control Panel)**:
-  * `Strict`: Intervenes only when explicitly addressed with `@Mentor`.
-  * `Conservative` (Default): Intervenes upon detecting 3 consecutive divergent viewpoints, prolonged discussion stagnation, or explicit visual/spatial demands.
-  * `Exploratory`: Proactively provides variant proposals and reference assets.
-  * **Module Toggles**: Individual on/off switches for 3D Prototypes, Mood Boards, Fact Retrieval, and Process Deliverables.
-* **Visibility & Friction Reduction**:
-  * All AI contributions remain strictly **public to all members**.
-  * System prompt enforces objective, asset-oriented, neutral phrasing (e.g., *"To facilitate conceptual visualization, here is a reference:"*), eliminating evaluative interpersonal language.
+**AI 導師**
+- 判斷時機：被 @ 時回應；主動模式會在停頓、冷場或長時間討論時自行判斷是否開口。
+- 會依雙鑽石的階段引導討論，可發「接受建議／先不用」卡片，也會在方向確定後自動為房間命名。
+- 人設、語氣、專業能力都可在後台設定，也能用一句話讓 AI 幫忙填寫。
 
-### 3. Core Capabilities & Dual-Track 3D Engine
-* **Dual-Track 3D Prototype Engine**:
-  * `Code-to-3D`: Gemini generates clean Three.js geometry JSON (primitives, dimensions, PBR materials, annotations). Rendered client-side with zero latency and interactive orbit/wireframe controls.
-  * `External Mesh API`: High-fidelity organic GLB asset pipeline rendered via `<model-viewer>` with 360° inspection and shadow simulation.
-* **Visual Mood Board**: Extracts abstract aesthetic keywords and compiles color swatches with one-click HEX copying, material callouts, and curated visual slices.
-* **Structured Deliverables**: Automatically compiles Markdown meeting minutes and technical contract drafts based on JSON schemas, complete with modal preview and one-click `.md` download.
+**視覺與 3D**
+- 意象圖與發想草圖以拼貼呈現，可多人拖曳排列，也能放到白板上。
+- 白板手繪可轉成乾淨草圖與渲染圖；上傳的圖片可延伸出新草圖。
+- 草圖或照片可直接建立 3D 模型。
 
-### 4. Firestore Security Rules Architecture (`firestore.rules`)
-* `/rooms/{roomId}/participants/{uid}`: Anyone authenticated may create a `status: "pending"` application document. Only `hostUid` can update status to `approved` or `rejected`.
-* `/rooms/{roomId}/messages/{messageId}`: Strict read/write restrictions: Only participants whose status is `approved` can read chat history and dispatch new messages.
+**後台**（`/#/admin`）
+- 管理實驗條件設定檔，並記錄每個版本。
+- 房間管理：指派條件、以唯讀身分進房、批次刪除、上傳研究資料到 Google Drive。
+- 系統設定：模型、金鑰、Meshy 與草圖參數。
+- 重播：聊天、白板與「AI 背景思考」依時間軸同步播放。
 
----
-
-## Project Structure
-
-```text
-ai-mentor-platform/
-├── .gemini/
-│   └── rules.md             # Antigravity AI team collaboration rules
-├── .gitignore               # Excludes secrets, node_modules, and cache
-├── .env.example             # Environment variables template
-├── README.md                # Project documentation and guide
-├── firestore.rules          # Firestore database security rules
-├── backend/                 # Google Cloud Run + FastAPI service
-│   ├── main.py              # API routes & room lifecycle
-│   ├── config.py            # Environment settings
-│   ├── Dockerfile           # Cloud Run deployment container
-│   ├── requirements.txt     # Python dependencies (FastAPI, google-genai)
-│   ├── models/schemas.py    # Pydantic data schemas
-│   └── services/
-│       ├── mentor_agent.py  # GCA mediation engine (sensitivity logic)
-│       └── tools_engine.py  # 3D JSON, GLB, moodboard, and doc tools
-└── frontend/                # Vue 3 + TypeScript + Tailwind CSS
-    ├── package.json         # Three.js, model-viewer, Pinia, Lucide
-    ├── vite.config.ts       # Custom element compiler setup
-    ├── index.html
-    └── src/
-        ├── stores/          # Pinia stores (auth, room, mentor)
-        ├── router/          # Vue Router configurations
-        ├── components/      # 3D viewers, moodboard, drawer, toasts
-        └── views/           # Home, Waiting Room, Meeting Room, Dashboard
-```
-
----
-
-## Quick Start
-
-### 1. Backend Service (FastAPI)
+## 開發
 
 ```powershell
-cd backend
-python -m venv .venv
-.\.venv\Scripts\activate
-pip install -r requirements.txt
-python main.py
+cd frontend; npm install; npm run dev     # http://localhost:5173（連到正式的 Firebase 專案）
+cd frontend; npm run build                # 型別檢查（vue-tsc）＋建置
+cd functions; npm install
+npm run deploy                            # 在專案根目錄執行：升版號 → 建置 → 部署 → commit 與 tag
+npm run deploy -- --functions             # 強制連同 Functions 一起部署
 ```
-> The API server runs at `http://localhost:8000`. Interactive API documentation is available at `http://localhost:8000/docs`.
 
-### 2. Frontend Application (Vue 3 + Vite)
+- 前端的 Firebase 設定已內建在 `frontend/src/firebase/config.ts`，只有要接其他 Firebase 專案時才需要設定 `.env`，可參考 `.env.example`。
+- 部署需要 Firebase CLI 登入，以及專案 `ai-mentor-web` 的權限。
 
-```powershell
-cd frontend
-npm install
-npm run dev
-```
-> The frontend client runs at `http://localhost:5173`.
+## 文件
 
----
-
-## Team Git Workflow
-
-1. **Pull Latest Changes**:
-   ```powershell
-   git pull origin main
-   ```
-
-2. **Create Feature Branch**:
-   ```powershell
-   git checkout -b feature/waiting-room-enhancements
-   ```
-
-3. **Commit & Push**:
-   ```powershell
-   git add .
-   git commit -m "feat: improve host approval notifications"
-   git push origin feature/waiting-room-enhancements
-   ```
-
-4. **Submit Pull Request**:
-   Open a Pull Request on the GitHub Organization repository (`AIPoweredCollaborativeDesignPlatform/ai-mentor-platform`) for code review and automated checks.
+| 檔案 | 內容 |
+|---|---|
+| `CLAUDE.md` | 完整架構說明與開發慣例（繁中，最新） |
+| `AGENTS.md` | 給 Codex 等程式代理的規則與指令 |
+| `docs/HANDOFF.md` | 目前進度、已決定事項、未驗證項目與接續方法 |
+| `docs/HANDOVER_LOG.md` | 2026-10 改版前的舊交接日誌，僅供歷史參考 |

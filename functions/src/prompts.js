@@ -166,6 +166,7 @@ Return ONLY one JSON object:
 }
 - openingText: the welcome posted verbatim when the session opens, in the character's own voice (2-4 sentences; what the session is about, that the team designs together, nothing about grading).
 - taskDescription: only when a task brief is requested below (otherwise empty strings). A design brief of medium difficulty for first- or second-year design students: a piece of furniture or an everyday product, for whom, in which situation, with what to deliver (concept, sketches, a 3D model). 2-4 sentences. If the researcher's sentence names a topic, use it.
+- All Traditional Chinese text uses full-width punctuation (，。、？！：；「」（）), never ASCII , . ? ! : ; ( ) or straight quotes.
 - prompts: rewrite each block given below so the character's attitude, voice and expert knowledge show in it. Keep the purpose, every rule and every {{placeholder}} exactly (same names, same double braces); do not add or drop placeholders; write the blocks in English.`;
 
 /** Placeholders available in each block (shown in the admin editor). */

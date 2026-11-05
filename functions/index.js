@@ -338,7 +338,16 @@ export const getPromptDefaults = onCall({ maxInstances: 2 }, async request => {
 /** Profile editor: fills name, persona, expertise and tone from one sentence; the admin reviews before saving. */
 const placeholdersOf = s => [...new Set(String(s).match(/\{\{\w+\}\}/g) || [])].sort().join(',');
 const samePlaceholders = (a, b) => placeholdersOf(a) === placeholdersOf(b);
-const localizedPair = v => ({ 'zh-TW': String(v?.['zh-TW'] || '').slice(0, 2000), en: String(v?.en || '').slice(0, 2000) });
+// Chinese text gets full-width punctuation even if the model slips (only next to CJK, so 3.5 or URLs stay intact)
+const CJK = '[\u3400-\u9fff\uff00-\uffef\u3000-\u303f]';
+const FULL = { ',': '，', '.': '。', '?': '？', '!': '！', ':': '：', ';': '；', '(': '（', ')': '）' };
+const toFull = text => String(text)
+  .replace(new RegExp(`(${CJK})[ \t]*([,.?!:;)])`, 'g'), (_, c, p) => c + FULL[p])
+  .replace(new RegExp(`([,?!:;(])[ \t]*(?=${CJK})`, 'g'), (_, p) => FULL[p])
+  .replace(new RegExp(`"(?=${CJK})([^"]*?)"`, 'g'), '「$1」');
+// Twice, so runs like "）!" are caught too
+const fullWidth = text => toFull(toFull(text));
+const localizedPair = v => ({ 'zh-TW': fullWidth(String(v?.['zh-TW'] || '').slice(0, 2000)), en: String(v?.en || '').slice(0, 2000) });
 const DRAFT_MODEL = 'claude-sonnet-5-5';
 // Blocks the one-sentence fill may rewrite in the character's voice; the rest (format, rules for assets) stays built-in
 const DRAFT_BLOCKS = ['role', 'designThinking', 'style', 'sessionKickoff', 'sessionKickoffTopics', 'sessionReminder', 'sessionTimeUp'];
@@ -361,7 +370,7 @@ export const draftAiProfile = onCall({ secrets: [ANTHROPIC_API_KEY], timeoutSeco
     const out = parseJsonObject(responseText(response));
     const clamp = (n, lo, hi, d) => (Number.isFinite(Number(n)) ? Math.min(hi, Math.max(lo, Math.round(Number(n)))) : d);
     const draft = {
-      displayName: { 'zh-TW': String(out.displayName?.['zh-TW'] || '').slice(0, 30), en: String(out.displayName?.en || '').slice(0, 30) },
+      displayName: { 'zh-TW': fullWidth(String(out.displayName?.['zh-TW'] || '').slice(0, 30)), en: String(out.displayName?.en || '').slice(0, 30) },
       persona: String(out.persona || '').slice(0, 1500),
       expertise: String(out.expertise || '').slice(0, 200),
       casualness: clamp(out.casualness, 1, 5, 3),

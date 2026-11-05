@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
-import { Box, Check, CornerUpLeft, FileText, Loader2, Palette, Paperclip, Send, Sparkles, X } from 'lucide-vue-next';
+import { Box, Check, CornerUpLeft, FileText, Loader2, Palette, Paperclip, PenTool, Send, Sparkles, X } from 'lucide-vue-next';
 import { useAuthStore } from '../../stores/auth';
 import { useRoomStore } from '../../stores/room';
 import type { MessageItem } from '../../types';
@@ -35,6 +35,7 @@ const quickTags = computed(() => {
   return [
     { tag: `@${aiName.value}`, label: `@${aiName.value}`, icon: Sparkles, iconClass: '', accent: true, show: true },
     { tag: `@${aiName.value} ${t('quick.3dText')}`, label: t('quick.3d'), icon: Box, iconClass: 'text-sky-400', show: m.enable3D },
+    { tag: `@${aiName.value} ${t('quick.sketchText')}`, label: t('quick.sketch'), icon: PenTool, iconClass: 'text-sky-400', show: m.enableSketch !== false },
     { tag: `@${aiName.value} ${t('quick.moodText')}`, label: t('quick.mood'), icon: Palette, iconClass: 'text-amber-400', show: m.enableMoodboard },
     { tag: `@${aiName.value} ${t('quick.factText')}`, label: t('quick.fact'), icon: Check, iconClass: 'text-emerald-400', show: m.enableFactRetrieval },
     { tag: `@${aiName.value} ${t('quick.summaryText')}`, label: t('quick.summary'), icon: FileText, iconClass: 'text-purple-400', show: m.enableSummary }

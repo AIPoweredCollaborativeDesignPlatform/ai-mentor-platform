@@ -144,6 +144,7 @@ export interface RoomAiView {
     enableFactRetrieval: boolean;
     enableSummary: boolean;
     enableWhiteboardAi: boolean;
+    enableSketch?: boolean;
   };
 }
 

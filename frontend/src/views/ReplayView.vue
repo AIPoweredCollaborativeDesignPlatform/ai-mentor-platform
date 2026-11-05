@@ -202,7 +202,7 @@ const votersOf = (m: ReplayMessage, option: string) => Object.values(m.pollVotes
 const aliasOfUid = (uid: string) => members.value.get(uid)?.alias || '?';
 const isUrl = (u?: string) => Boolean(u && /^(https?:|data:image)/.test(u));
 const ASSET_KEYS: Record<string, MessageKey> = {
-  summary: 'rp.assetSummary', fact_check: 'rp.assetFact', moodboard: 'rp.assetMood', mesh_3d: 'rp.assetMesh', parametric_3d: 'rp.assetParam',
+  summary: 'rp.assetSummary', fact_check: 'rp.assetFact', moodboard: 'rp.assetMood', sketch: 'rp.assetSketch', mesh_3d: 'rp.assetMesh', parametric_3d: 'rp.assetParam',
   image: 'rp.assetImage', vector: 'rp.assetVector', text: 'rp.assetText', contract: 'rp.assetContract'
 };
 const assetLabel = (type?: string) => (type && ASSET_KEYS[type] ? tr(ASSET_KEYS[type]) : type || '');
@@ -328,7 +328,7 @@ onMounted(async () => {
                   <div v-if="m.assetPayload?.details" class="text-slate-400">{{ m.assetPayload.details }}</div>
                   <a v-for="r in m.assetPayload?.references || []" :key="r" :href="r" target="_blank" rel="noopener" class="block text-sky-400 hover:underline truncate">{{ r }}</a>
                 </template>
-                <template v-else-if="m.assetType === 'moodboard'">
+                <template v-else-if="m.assetType === 'moodboard' || m.assetType === 'sketch'">
                   <div v-if="m.assetPayload?.keywords?.length" class="text-slate-400">{{ m.assetPayload.keywords.join(', ') }}</div>
                   <div class="grid grid-cols-3 xs:grid-cols-4 gap-1">
                     <div v-for="(img, k) in m.assetPayload?.images || []" :key="k" class="aspect-[4/3] rounded bg-slate-800 overflow-hidden" :title="img.prompt || img.title">

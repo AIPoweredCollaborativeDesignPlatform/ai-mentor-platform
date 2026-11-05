@@ -27,6 +27,7 @@ const emit = defineEmits<{
   (e: 'open-document', title: string, content: string): void;
   (e: 'open-pdf', title: string, url: string): void;
   (e: 'preview-media', url: string): void;
+  (e: 'to-whiteboard', url: string): void;
   (e: 'reply', msg: MessageItem): void;
 }>();
 
@@ -408,8 +409,10 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
         <ModelViewerGLB v-else-if="isAsset('mesh_3d')" :assetData="msg.assetPayload" :message="msg" :isResizing="isResizing" :readOnly="isMeetingClosed" @refine="refineModel" />
 
         <MoodBoardViewer
-          v-if="isAsset('moodboard')"
+          v-if="isAsset('moodboard', 'sketch')"
           :assetData="msg.assetPayload"
+          :kind="isAsset('sketch') ? 'sketch' : 'moodboard'"
+          @to-whiteboard="emit('to-whiteboard', $event)"
           :layout="msg.collage"
           :editable="canAct() && !roomStore.isHost && roomStore.myStatus !== 'observer'"
           @arrange="(i, p) => roomStore.arrangeCollage(msg.id, i, p)"

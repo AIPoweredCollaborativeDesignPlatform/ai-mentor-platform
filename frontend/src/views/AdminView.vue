@@ -28,6 +28,8 @@ const SYSTEM_DEFAULTS = {
   engine3D: 'meshy',
   notificationVolume: DEFAULT_NOTIFICATION_VOLUME,
   meshy: { aiModel: 'meshy-7.1', geometryResolution: 'standard', autoRefine: false, textureResolution: '2k', enablePbr: true },
+  sketchModel: 'fal-ai/flux/dev',
+  sketchRefineModel: 'fal-ai/flux/dev/image-to-image',
   defaultProfileId: null as string | null,
   consentText: DEFAULT_CONSENT_TEXT,
   consentTextZh: DEFAULT_CONSENT_TEXT_ZH,
@@ -447,8 +449,8 @@ const savingSystem = ref(false);
 const saveSystem = async () => {
   savingSystem.value = true;
   try {
-    const { models, memoryModel, mentorEffort, engine3D, meshy, notificationVolume, prices, consentText, consentTextZh } = system.value;
-    await saveSystemConfig({ models, memoryModel, mentorEffort, engine3D, meshy, notificationVolume, prices, consentText, consentTextZh });
+    const { models, memoryModel, mentorEffort, engine3D, meshy, sketchModel, sketchRefineModel, notificationVolume, prices, consentText, consentTextZh } = system.value;
+    await saveSystemConfig({ models, memoryModel, mentorEffort, engine3D, meshy, sketchModel, sketchRefineModel, notificationVolume, prices, consentText, consentTextZh });
     roomStore.pushToast(t('adm.saved'), t('adm.systemSaved'), 'success');
   } finally {
     savingSystem.value = false;
@@ -816,6 +818,19 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
           <label class="space-y-1"><span class="text-slate-400">{{ t('adm.engine3d') }}</span>
             <select v-model="system.engine3D" :class="[select, 'w-full']"><option value="meshy">Meshy</option><option value="tripo">Tripo</option></select>
           </label>
+        </div>
+        <!-- Idea sketches (fal.ai, functions/src/images.js); fixed during a study run, recorded with every sketch -->
+        <div class="space-y-2 text-xs p-3 rounded-xl border border-slate-800">
+          <h3 class="text-sm font-semibold">{{ t('adm.sketchTitle') }}</h3>
+          <p class="text-[11px] text-slate-500">{{ t('adm.sketchHint') }}</p>
+          <div class="grid sm:grid-cols-2 gap-3">
+            <label class="space-y-1"><span class="text-slate-400">{{ t('adm.sketchModel') }}</span>
+              <input v-model.trim="system.sketchModel" :class="[select, 'w-full font-mono']" />
+            </label>
+            <label class="space-y-1"><span class="text-slate-400">{{ t('adm.sketchRefineModel') }}</span>
+              <input v-model.trim="system.sketchRefineModel" :class="[select, 'w-full font-mono']" />
+            </label>
+          </div>
         </div>
         <!-- Meshy detail (functions/src/mesh3d.js); fixed during a study run, recorded with every model -->
         <div v-if="system.engine3D === 'meshy'" class="space-y-2 text-xs p-3 rounded-xl border border-slate-800">

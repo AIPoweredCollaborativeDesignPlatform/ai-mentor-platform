@@ -13,6 +13,9 @@ export const DEFAULT_SYSTEM_CONFIG = {
   webSearchTool: 'web_search_20250305',
   webSearchMaxUses: 3,
   imageModel: 'fal-ai/flux/schnell',
+  // Idea sketches (fal.ai): text -> sketch, and whiteboard drawing -> clean sketch / render (image-to-image)
+  sketchModel: 'fal-ai/flux/dev',
+  sketchRefineModel: 'fal-ai/flux/dev/image-to-image',
   engine3D: 'meshy',
   // Meshy text-to-3D (src/mesh3d.js; docs.meshy.ai/en/api/text-to-3d). Preview = untextured mesh,
   // refine = textures. 2k/4k geometry needs meshy-7.1; autoRefine adds a texturing pass after every preview.

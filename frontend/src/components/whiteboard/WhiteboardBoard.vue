@@ -13,7 +13,7 @@ import { useAuthStore } from '../../stores/auth';
 import { useRoomStore } from '../../stores/room';
 import { useRoomAi } from '../../composables/useRoomAi';
 import { isOwnBoard } from '../../utils/chat';
-import { generateSvgForWhiteboard, redrawSketchToSvg } from '../../services/ai';
+import { generateSvgForWhiteboard, redrawSketchToSvg, sketchFromBoard } from '../../services/ai';
 import {
   STICKY_COLORS, StickyNote, assignBoardIdentity, createImage, createShape, createSticky, createText, enliven,
   isBoardObject, normalizeTextScale, resizeShape, serialize, svgToDataUrl, type BoardObject, type ShapeKind
@@ -40,6 +40,7 @@ const isMine = computed(() => !board.value || isOwnBoard(board.value, authStore.
 const isPrivate = computed(() => board.value?.metadata?.isPrivate ?? true);
 const creatorName = computed(() => board.value?.metadata?.creatorName || board.value?.senderName || authStore.displayName || t('wb.my'));
 const showWhiteboardAi = computed(() => aiModules.value.enableWhiteboardAi);
+const showSketch = computed(() => aiModules.value.enableSketch !== false);
 
 // ---------- tools ----------
 type Tool = 'select' | 'hand' | 'pen' | 'eraser' | 'sticky' | 'text' | 'rect' | 'ellipse' | 'arrow';
@@ -1059,6 +1060,17 @@ async function insertImageFile(file: File, at?: fabric.Point) {
     showToast(t('wb.imageFailed'));
   }
 }
+/** An image by URL (AI sketch from the chat), in the middle of the view. */
+async function insertImageUrl(url: string) {
+  try {
+    await ensureBoard();
+    await addObjects([await createImage(url, viewportCenter(), 480, nextZ())]);
+    showToast(t('wb.imageAdded'));
+  } catch (e) {
+    console.error('[whiteboard] image insert failed', e);
+    showToast(t('wb.imageFailed'));
+  }
+}
 const onFilePicked = (e: Event) => {
   const input = e.target as HTMLInputElement;
   const file = input.files?.[0];
@@ -1141,6 +1153,25 @@ async function sketchToSvg() {
     showToast(t('wb.sketchConverted'));
   } catch (e: any) {
     showToast(e?.title || t('wb.sketchFailed'));
+  } finally {
+    ai.busy = false;
+  }
+}
+
+/** Selected drawing -> a clean sketch and a render (fal.ai); they arrive in the chat as an AI message. */
+async function boardToSketch() {
+  const list = selection.value.filter(o => !(o instanceof fabric.Textbox));
+  if (!list.length || ai.busy || !canvas) return;
+  ai.busy = true;
+  showToast(t('wb.sketching', { name: aiName.value }), true);
+  try {
+    const png = await renderObjects(list, { maxW: 1024, maxH: 1024, format: 'png', background: '#ffffff' });
+    const notes = selection.value.filter(o => o instanceof fabric.Textbox).map(o => (o as fabric.Textbox).text || '').join(' ').slice(0, 300);
+    await sketchFromBoard(png, notes);
+    showToast(t('wb.sketchSent'));
+  } catch (e) {
+    console.error('[whiteboard] sketch failed', e);
+    showToast(t('wb.sketchGenFailed'));
   } finally {
     ai.busy = false;
   }
@@ -1386,7 +1417,7 @@ const handleCloseRequest = async () => {
   emit('close');
 };
 
-defineExpose({ flush: writeThumbnail, handleCloseRequest });
+defineExpose({ flush: writeThumbnail, handleCloseRequest, insertImageUrl });
 
 const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(() => [
   { id: 'select', icon: MousePointer2, label: t('wb.toolSelect'), key: 'V' },
@@ -1560,6 +1591,13 @@ const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(()
             :title="t('wb.sketchTitle')"
             @click="sketchToSvg"
           ><Wand2 class="w-3.5 h-3.5" /> {{ t('wb.sketchToSvg') }}</button>
+          <button
+            v-if="showSketch && selectionKinds.sketchable"
+            class="wb-chip text-sky-300"
+            :disabled="ai.busy"
+            :title="t('wb.boardSketchTitle')"
+            @click="boardToSketch"
+          ><ImageIcon class="w-3.5 h-3.5" /> {{ t('wb.boardSketch') }}</button>
           <button class="wb-tool !w-7 !h-7 text-rose-400" :title="t('wb.delete')" @click="deleteSelection"><Trash2 class="w-3.5 h-3.5" /></button>
         </template>
       </div>

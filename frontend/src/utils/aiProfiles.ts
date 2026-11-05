@@ -24,7 +24,7 @@ export interface AiProfile {
     cooldownSeconds: number;
   };
   memory: { updateEveryMessages: number; updateOnWhiteboardShare: boolean };
-  modules: { enable3D: boolean; enableMoodboard: boolean; enableFactRetrieval: boolean; enableSummary: boolean; enableWhiteboardAi: boolean };
+  modules: { enable3D: boolean; enableMoodboard: boolean; enableFactRetrieval: boolean; enableSummary: boolean; enableWhiteboardAi: boolean; enableSketch: boolean };
   /** Experiment flow (functions/src/session.js) */
   session: {
     expectedParticipants: number;
@@ -71,7 +71,7 @@ const base = (): AiProfile => ({
   expertise: 'Industrial and furniture design',
   triggers: { pauseSeconds: 8, minNewMessages: 3, maxMessagesBetweenChecks: 12, stallSeconds: 90, cooldownSeconds: 180 },
   memory: { updateEveryMessages: 15, updateOnWhiteboardShare: true },
-  modules: { enable3D: true, enableMoodboard: true, enableFactRetrieval: true, enableSummary: true, enableWhiteboardAi: true },
+  modules: { enable3D: true, enableMoodboard: true, enableFactRetrieval: true, enableSummary: true, enableWhiteboardAi: true, enableSketch: true },
   session: { expectedParticipants: 3, maxParticipants: 3, openingText: { 'zh-TW': '', en: '' }, taskDescription: { 'zh-TW': '', en: '' }, taskMode: 'assigned', taskMinutes: 30, reminderMinutes: [5] },
   style: { casualness: 4, maxSentences: 2 },
   prompts: {},
@@ -94,6 +94,7 @@ export const withDefaults = (p: AiProfile): AiProfile => {
     ...p,
     session: { ...session, openingText: localizedOf(session.openingText), taskDescription: localizedOf(session.taskDescription) },
     triggers: { ...base().triggers, ...(p.triggers || {}) },
+    modules: { ...base().modules, ...(p.modules || {}) },
     style: { ...base().style, ...(p.style || {}) },
     prompts: { ...(p.prompts || {}) }
   };

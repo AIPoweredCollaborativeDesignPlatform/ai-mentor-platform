@@ -258,6 +258,15 @@ watch(() => roomStore.myStatus, status => {
 // ---------- Access verification & lifecycle ----------
 const isVerifyingAccess = ref(true);
 let accessCheckTimer: ReturnType<typeof setTimeout> | undefined;
+// A sketch from the chat goes onto the open whiteboard, or a new private draft
+const putOnWhiteboard = async (url: string) => {
+  if (!isWhiteboardOpen.value) await wb.openNewWhiteboard();
+  if (!isWhiteboardOpen.value) return; // locked (session not running, observer)
+  if (isStacked.value) switchPane('board');
+  for (let i = 0; i < 30 && !whiteboardRef.value?.insertImageUrl; i++) await new Promise(r => setTimeout(r, 100));
+  await whiteboardRef.value?.insertImageUrl?.(url);
+};
+
 const switchToParticipant = () => {
   roomStore.setViewOnly(false);
   roomStore.stopListening();
@@ -453,6 +462,7 @@ onUnmounted(() => {
                 @open-document="openDocument"
                 @open-pdf="openPdf"
                 @preview-media="previewMediaUrl = $event"
+                @to-whiteboard="putOnWhiteboard"
                 @reply="composerRef?.setReply($event)"
               />
             </div>

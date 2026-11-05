@@ -32,7 +32,8 @@ export const DEFAULT_PROFILE = {
     enableMoodboard: true,
     enableFactRetrieval: true,
     enableSummary: true,
-    enableWhiteboardAi: true
+    enableWhiteboardAi: true,
+    enableSketch: true // idea sketches (fal.ai): AI asset and whiteboard drawing -> sketch / render
   },
   // Experiment flow (src/session.js): the session opens itself once expectedParticipants are online
   session: {
@@ -78,6 +79,6 @@ export const publicAiView = profile => ({
   enabled: profile.mode !== 'none',
   displayName: profile.displayName,
   modules: profile.mode === 'none'
-    ? { enable3D: false, enableMoodboard: false, enableFactRetrieval: false, enableSummary: false, enableWhiteboardAi: false }
+    ? { enable3D: false, enableMoodboard: false, enableFactRetrieval: false, enableSummary: false, enableWhiteboardAi: false, enableSketch: false }
     : profile.modules
 });

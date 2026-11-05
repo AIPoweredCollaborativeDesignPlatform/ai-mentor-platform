@@ -8,8 +8,19 @@ const props = defineProps<{
   /** Shared arrangement (message.collage); missing entries use the starting collage */
   layout?: Record<string, { x: number; y: number; w: number; z?: number }>;
   editable?: boolean;
+  /** 'sketch' = AI idea sketches (same collage, different labels) */
+  kind?: 'moodboard' | 'sketch';
 }>();
-const emit = defineEmits<{ (e: 'arrange', index: number, pos: { x: number; y: number; w: number; z: number }): void }>();
+const emit = defineEmits<{
+  (e: 'arrange', index: number, pos: { x: number; y: number; w: number; z: number }): void;
+  (e: 'to-whiteboard', url: string): void;
+}>();
+const isSketch = computed(() => props.kind === 'sketch');
+const putOnWhiteboard = () => {
+  if (!selectedItem.value) return;
+  emit('to-whiteboard', selectedItem.value.url);
+  closePreview();
+};
 
 const copiedHex = ref<string | null>(null);
 const selectedItem = ref<{
@@ -191,7 +202,7 @@ const startDrag = (e: PointerEvent, i: number, mode: 'move' | 'resize') => {
       <div class="flex items-center gap-2 min-w-0">
         <Palette class="w-4 h-4 sm:w-5 sm:h-5 text-slate-400 shrink-0" />
         <h4 class="font-semibold text-slate-100 text-xs sm:text-sm tracking-wide truncate">
-          {{ assetData?.title || t('mood.title') }}
+          {{ assetData?.title || t(isSketch ? 'sketch.title' : 'mood.title') }}
         </h4>
       </div>
       <span class="text-[9px] sm:text-[10px] bg-slate-800 text-slate-400 font-mono px-2 py-0.5 rounded-full border border-slate-700 whitespace-nowrap shrink-0">
@@ -215,7 +226,7 @@ const startDrag = (e: PointerEvent, i: number, mode: 'move' | 'resize') => {
     <!-- Collage: loose layout the team can rearrange together (drag to move, corner to resize) -->
     <div v-if="items.length" class="mb-3">
       <h5 class="text-xs font-semibold text-slate-400 mb-1.5 flex items-center justify-between gap-2">
-        <span>{{ t('mood.imagery') }}</span>
+        <span>{{ t(isSketch ? 'sketch.imagery' : 'mood.imagery') }}</span>
         <span v-if="editable" class="text-[10px] font-normal text-slate-500">{{ t('mood.arrangeHint') }}</span>
       </h5>
       <div ref="boardRef" class="relative w-full aspect-[4/3] sm:aspect-[16/10] rounded-xl bg-slate-950 border border-slate-800 overflow-hidden select-none">
@@ -324,8 +335,16 @@ const startDrag = (e: PointerEvent, i: number, mode: 'move' | 'resize') => {
             </div>
 
             <div class="flex items-center gap-2">
+              <button
+                v-if="editable && !selectedItem.url.startsWith('data:')"
+                type="button"
+                @click="putOnWhiteboard"
+                class="px-2.5 py-1 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium transition"
+              >
+                {{ t('mood.toWhiteboard') }}
+              </button>
               <a
-                v-if="selectedItem.sourceUrl"
+                v-if="selectedItem.sourceUrl && !isSketch"
                 :href="selectedItem.sourceUrl"
                 target="_blank"
                 rel="noopener noreferrer"

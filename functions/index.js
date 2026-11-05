@@ -10,6 +10,7 @@ import { getSystemConfig } from './src/config.js';
 import { classifyError, createMessage, extractSvg, imageBlockFromDataUrl, parseJsonObject, responseText } from './src/claude.js';
 import { PROFILE_DRAFT_PROMPT, PROMPT_DEFAULTS, PROMPT_PLACEHOLDERS, PROMPT_VERSION, sketchToSvgPrompt, textToSvgPrompt, visionPrompt } from './src/prompts.js';
 import { refineMeshy } from './src/mesh3d.js';
+import { refineSketch } from './src/images.js';
 import { logAiCall } from './src/log.js';
 import { FRIENDLY_ERRORS } from './src/mentor.js';
 import { assignProfileToRoom, ensureRoomAi, handleNewMessage, handlePollVote, handleSuggestionAnswer, loadProfile, postAiMessage, runCheck } from './src/engine.js';
@@ -524,6 +525,34 @@ export const whiteboardVision = onCall(
       await logAiCall({ ...baseLog(request, 'whiteboard_vision', sys.models.vision), error: { message: String(err?.message || err).slice(0, 500) } });
       throw toHttpsError(err, 'whiteboardVision');
     }
+  }
+);
+
+// ---------- Whiteboard drawing -> clean sketch and render (fal.ai image-to-image), posted to the chat ----------
+export const sketchFromBoard = onCall(
+  { secrets: ALL_SECRETS, timeoutSeconds: 180, maxInstances: 10 },
+  async request => {
+    await requireRoomMember(request);
+    const roomId = request.data.roomId;
+    const imageDataUrl = String(request.data?.imageDataUrl || '');
+    if (!imageDataUrl.startsWith('data:image/')) throw new HttpsError('invalid-argument', 'Missing drawing');
+    const roomAi = await ensureRoomAi(roomId);
+    if (roomAi.profile?.mode === 'none' || roomAi.profile?.modules?.enableSketch === false) throw new HttpsError('failed-precondition', 'Sketches are off in this room');
+    const sys = await getSystemConfig();
+    const notes = String(request.data?.notes || '').slice(0, 300);
+    const secrets = await engineSecrets();
+    const urls = await refineSketch(imageDataUrl, notes, { falKey: secrets.fal, model: sys.sketchRefineModel, folder: `sketch/${roomId}` });
+    await logAiCall({ ...baseLog(request, 'sketch_refine', sys.sketchRefineModel), input: { imageBytes: imageDataUrl.length, notes }, output: { urls } });
+    if (!urls.some(Boolean)) throw new HttpsError('internal', 'Sketch generation failed');
+    const room = (await getFirestore().doc(`rooms/${roomId}`).get()).data() || {};
+    const titles = room.language === 'en' ? ['Clean sketch', 'Render'] : ['乾淨草圖', '渲染圖'];
+    await postAiMessage(roomId, room, roomAi.profile, {
+      content: str('sketchRefined', room.language),
+      assetType: 'sketch',
+      assetPayload: { title: titles[0], fromBoard: true, model: sys.sketchRefineModel, images: urls.map((url, i) => ({ title: titles[i], url, size: i === 0 ? 'large' : 'medium', isAiGenerated: true })) },
+      meta: { model: sys.sketchRefineModel, callerUid: request.auth.uid }
+    });
+    return { ok: true };
   }
 );
 

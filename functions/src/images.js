@@ -2,14 +2,18 @@ import { randomUUID } from 'node:crypto';
 import { rehostToStorage } from './storage.js';
 
 /**
- * Text-to-image via fal.ai (FLUX schnell by default). fal result URLs are temporary,
- * so each image is copied into Firebase Storage.
+ * Text-to-image via fal.ai (FLUX schnell by default), or image-to-image when `imageUrl` is given
+ * (a URL or data URI; `strength` 0-1 = how far it may move away from the input). fal result URLs are
+ * temporary, so each image is copied into Firebase Storage.
  */
-export async function generateImage(prompt, { falKey, model, folder }) {
+export async function generateImage(prompt, { falKey, model, folder, imageUrl = null, strength = 0.85 }) {
+  const body = imageUrl
+    ? { prompt, image_url: imageUrl, strength, num_images: 1, enable_safety_checker: true }
+    : { prompt, image_size: 'landscape_4_3', num_images: 1, enable_safety_checker: true };
   const res = await fetch(`https://fal.run/${model}`, {
     method: 'POST',
     headers: { Authorization: `Key ${falKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt, image_size: 'landscape_4_3', num_images: 1, enable_safety_checker: true })
+    body: JSON.stringify(body)
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
@@ -29,4 +33,22 @@ export async function generateImages(prompts, opts) {
     console.warn(`[images] prompt ${i} failed:`, r.reason?.message || r.reason);
     return '';
   });
+}
+
+// Sketch look added to every sketch prompt, so the style stays the same whatever the AI writes
+export const SKETCH_STYLE = 'loose pencil product design idea sketch on white paper, black line art with light grey shading, a few construction lines, no text, no colour';
+const REFINE_STYLES = [
+  'clean, confident product design presentation sketch of the same object, black pencil line art with light grey shading on white paper, same form and proportions, no text',
+  'photorealistic product render of the same object, soft studio lighting, neutral light background, same form and proportions, no text'
+];
+
+/** Idea sketches from text prompts (AI asset "sketch"); failed ones keep an empty url. */
+export const generateSketches = (prompts, opts) => generateImages(prompts.map(p => `${p}. ${SKETCH_STYLE}`), opts);
+
+/** A whiteboard drawing -> a clean sketch and a render of the same object (image-to-image). */
+export async function refineSketch(imageDataUrl, notes, opts) {
+  const hint = notes ? ` The designers describe it as: ${notes}.` : '';
+  const results = await Promise.allSettled(REFINE_STYLES.map((style, i) =>
+    generateImage(`${style}.${hint}`, { ...opts, imageUrl: imageDataUrl, strength: i === 0 ? 0.75 : 0.85 })));
+  return results.map(r => (r.status === 'fulfilled' ? r.value : ''));
 }

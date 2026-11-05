@@ -11,6 +11,8 @@ export interface WhiteboardHandle {
   /** Writes the latest thumbnail before the board closes or the page is left. */
   flush?: () => Promise<void> | void;
   handleCloseRequest?: () => void;
+  /** Places an image (e.g. an AI sketch from the chat) in the middle of the view. */
+  insertImageUrl?: (url: string) => Promise<void>;
 }
 
 const newBoardId = () => `wb_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;

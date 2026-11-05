@@ -1,7 +1,7 @@
 import { getSystemConfig } from './config.js';
 import { Anthropic, classifyError, createMessage, parseJsonObject, responseText } from './claude.js';
 import { PROMPT_VERSION, buildTranscript, memoryPrompt, mentorSystemPrompt } from './prompts.js';
-import { generateImages } from './images.js';
+import { generateImages, generateSketches } from './images.js';
 import { countWebSearches, logAiCall } from './log.js';
 
 export const FRIENDLY_ERRORS = {
@@ -92,7 +92,7 @@ export async function analyze({ apiKey, falKey, roomId, room, messages, particip
       result.aiMessage ||= language === 'en' ? 'How can I help your design discussion?' : '需要我協助你們的設計討論嗎？';
     }
     // Disabled modules never produce assets, whatever the model returned
-    const allowed = { parametric_3d: modules.enable3D, moodboard: modules.enableMoodboard, fact_check: modules.enableFactRetrieval, summary: modules.enableSummary !== false };
+    const allowed = { parametric_3d: modules.enable3D, moodboard: modules.enableMoodboard, sketch: modules.enableSketch !== false, fact_check: modules.enableFactRetrieval, summary: modules.enableSummary !== false };
     if (result.assetType && !allowed[result.assetType]) {
       result.assetType = null;
       result.assetData = null;
@@ -105,6 +105,14 @@ export async function analyze({ apiKey, falKey, roomId, room, messages, particip
         folder: `moodboard/${roomId}`
       });
       result.assetData.images = result.assetData.images.map((img, i) => ({ ...img, url: urls[i], isAiGenerated: true }));
+    }
+
+    // Idea sketches: shown with the same collage as moodboards (assetData.images), the first one large
+    if (visible && result.shouldIntervene && result.assetType === 'sketch' && Array.isArray(result.assetData?.sketches)) {
+      const sketches = result.assetData.sketches.slice(0, 4);
+      const urls = await generateSketches(sketches.map(s => s.prompt || s.title || 'product idea'), { falKey, model: sys.sketchModel, folder: `sketch/${roomId}` });
+      result.assetData.images = sketches.map((s, i) => ({ title: s.title || '', prompt: s.prompt || '', url: urls[i], size: i === 0 ? 'large' : 'medium', isAiGenerated: true }));
+      result.assetData.model = sys.sketchModel;
     }
 
     const meta = { model, promptVersion: PROMPT_VERSION, usage: usageOf(response), profileId: profile.id || null, profileVersion: profile.version ?? null };

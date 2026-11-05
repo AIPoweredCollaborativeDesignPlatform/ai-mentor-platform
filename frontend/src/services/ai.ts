@@ -77,6 +77,11 @@ export async function generateSvgForWhiteboard(prompt: string, _config?: unknown
   }
 }
 
+/** Whiteboard drawing → a clean sketch and a render via fal.ai; the server posts them to the chat. */
+export async function sketchFromBoard(imageDataUrl: string, notes = ''): Promise<void> {
+  await call<{ imageDataUrl: string; notes: string }, { ok: boolean }>('sketchFromBoard', { imageDataUrl, notes });
+}
+
 /** Hand-drawn strokes or an uploaded sketch image → SVG. */
 export async function redrawSketchToSvg(imageDataUrl: string, notes = '', language: string = currentLocale.value, _tier?: string, abortSignal?: AbortSignal): Promise<string> {
   try {

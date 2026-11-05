@@ -22,7 +22,8 @@ const MODULES: { key: keyof AiProfile['modules']; label: MessageKey }[] = [
   { key: 'enableMoodboard', label: 'pe.modMood' },
   { key: 'enableFactRetrieval', label: 'pe.modFact' },
   { key: 'enableSummary', label: 'pe.modSummary' },
-  { key: 'enableWhiteboardAi', label: 'pe.modWb' }
+  { key: 'enableWhiteboardAi', label: 'pe.modWb' },
+  { key: 'enableSketch', label: 'pe.modSketch' }
 ];
 const LANGS = [{ code: 'zh-TW', label: 'pe.zh' }, { code: 'en', label: 'pe.en' }] as const;
 

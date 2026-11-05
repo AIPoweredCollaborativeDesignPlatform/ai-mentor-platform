@@ -2,7 +2,7 @@
 // Profiles may override any block (profile.prompts); the profile version then identifies the wording used.
 import { localized } from './i18n.js';
 
-export const PROMPT_VERSION = 'v14-2026-11-05';
+export const PROMPT_VERSION = 'v15-2026-11-05';
 
 const LANGUAGE_NAMES = { en: 'English', 'zh-TW': 'Traditional Chinese (繁體中文)' };
 export const languageName = code => LANGUAGE_NAMES[code] || LANGUAGE_NAMES['zh-TW'];
@@ -75,7 +75,8 @@ Ready to move on when: a concept is chosen and checked.`,
     Give each image "size": "large" (at most one, the main visual) | "medium" | "small".
     Each image "prompt" must be a concrete, vivid ENGLISH visual description for an image generator (for sketches say "loose pencil sketch on white paper").
     When you post an asset, the aiMessage just hands it over in one casual line.
-12. Never evaluate or grade people.`,
+12. Idea sketches ("sketch"): when the team is generating forms, or words are not enough to picture an idea, draw 2-4 quick idea sketches of what they discussed: variations of form or mechanism, or different views of one idea. Each sketch "prompt" is a concrete ENGLISH description of the object and view only (the pencil-sketch style is added automatically). The aiMessage hands them over in one casual line.
+13. Never evaluate or grade people.`,
 
   outputFormat: `Before deciding, write short working notes in "assessment". They are ALWAYS required (also when you stay silent), are written in English, are kept for the research log and drive the stage display; never write them into aiMessage. Use your own words.
 
@@ -93,10 +94,11 @@ Return ONLY one JSON object (no prose before or after):
   "aiMessage": "short chat message in {{lang}}",
   "offer": boolean,
   "actionOptions": ["Option A", "Option B"],
-  "assetType": "parametric_3d" | "moodboard" | "summary" | "fact_check" | null,
+  "assetType": "parametric_3d" | "moodboard" | "sketch" | "summary" | "fact_check" | null,
   "assetData": {
     // parametric_3d: { "title", "prompt3D": "detailed text-to-3D prompt (shape, materials, textures, style)", "meshType": "group", "components": [ { "shape": "box"|"cylinder"|"sphere"|"torus", "dimensions": {}, "position": {}, "material": { "color", "roughness", "metalness" } } ] }
     // moodboard: { "title", "description", "keywords": [], "images": [ { "title", "category", "size", "isAiGenerated": true, "prompt" } ], "palette": [ { "hex", "name" } ], "materials": [ { "name", "feature" } ] }
+    // sketch: { "title", "description", "sketches": [ { "title", "prompt" } ] }
     // summary: { "title", "content": "rich Markdown with tables and action items" }
     // fact_check: { "claim", "verdict", "details", "references": ["https://..."] }
   }
@@ -317,7 +319,7 @@ export function mentorSystemPrompt({ config, language, whiteboardMemories, parti
     task ? `The team's design task (keep the discussion anchored to it, while ideas may roam widely): ${task}`
       : profile?.session?.taskMode === 'ai_suggest' ? block(prompts, 'taskOpen') : '',
     `Always write user-facing text in ${lang}.`,
-    `Modules enabled: 3D=${config.enable3D}, Moodboard=${config.enableMoodboard}, FactRetrieval=${config.enableFactRetrieval}, Summary=${config.enableSummary !== false}. Never produce an asset type whose module is disabled.`,
+    `Modules enabled: 3D=${config.enable3D}, Moodboard=${config.enableMoodboard}, Sketch=${config.enableSketch !== false}, FactRetrieval=${config.enableFactRetrieval}, Summary=${config.enableSummary !== false}. Never produce an asset type whose module is disabled.`,
     renderMemory(memory),
     memories ? `Recent whiteboard evolution:\n${memories}` : '',
     teamDynamics(participants, messages),

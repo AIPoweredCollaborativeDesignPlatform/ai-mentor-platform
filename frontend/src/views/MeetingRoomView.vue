@@ -417,9 +417,9 @@ onUnmounted(() => {
         class="flex flex-col h-full w-full min-w-0"
         :class="[isResizingWhiteboard ? 'transition-none' : 'transition-all duration-75', !showChatPane ? '!hidden' : isWhiteboardOpen && !isStacked ? 'flex-1 min-w-[260px]' : 'flex-1']"
       >
-        <!-- Double Diamond stage and milestones, judged by the AI (hidden in no-AI rooms) -->
-        <DesignProgress :compact="isStacked" />
-
+        <!-- Double Diamond stage and milestones, judged by the AI, in the margin beside the chat (hidden in no-AI rooms) -->
+        <div class="relative flex-1 min-h-0 flex flex-col">
+          <DesignProgress />
         <main ref="chatContainerRef" @scroll="handleScroll" class="flex-1 overflow-y-auto w-full relative custom-scrollbar" :class="{ 'is-scrolling': isScrolling }">
           <div class="max-w-5xl mx-auto w-full p-3 sm:p-5 space-y-3">
             <div v-for="(msg, idx) in visibleChatMessages" :key="msg.id" :id="'msg_' + msg.id" :data-ai-msg="isAiMessage(msg) ? msg.id : undefined" class="transition-colors duration-500 rounded-xl">
@@ -451,6 +451,7 @@ onUnmounted(() => {
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
           </button>
         </main>
+        </div>
 
         <!-- Fixed slot above the composer: typing / AI status never shifts the messages -->
         <ChatStatusBubbles />

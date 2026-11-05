@@ -88,7 +88,8 @@ onMounted(async () => {
   await authStore.waitForRole();
   // ?as=participant: the creator of a room made "as a participant" goes straight to the form
   if (route.query.as === 'participant') asParticipant.value = true;
-  else if (authStore.isObserver && !check.isHost) {
+  // ?as=observer (Admin > Room assignment): straight in, read-only and invisible
+  else if (authStore.isObserver && !check.isHost && route.query.as !== 'observer') {
     view.value = 'choose';
     return;
   }

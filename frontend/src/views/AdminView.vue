@@ -333,13 +333,34 @@ const deleteSelectedRooms = async () => {
   const ids = [...selectedRooms.value];
   if (!ids.length || !window.confirm(t('adm.deleteManyConfirm', { count: ids.length }))) return;
   deletingRooms.value = true;
-  const failed: string[] = [];
-  await Promise.all(ids.map(id => deleteStudyRoom(id).catch(() => failed.push(id))));
-  rooms.value = rooms.value.filter(r => !ids.includes(r.roomId) || failed.includes(r.roomId));
+  // One at a time, keeping the server's reason for any room it refuses
+  const failed = new Map<string, string>();
+  for (const id of ids) {
+    await deleteStudyRoom(id).catch((e: any) => failed.set(id, e?.message || String(e)));
+  }
+  // The page stays as it was (manage mode, filter, expanded list); only the deleted cards go
+  rooms.value = rooms.value.filter(r => !ids.includes(r.roomId) || failed.has(r.roomId));
   writeCache({ rooms: rooms.value });
+  selectedRooms.value = new Set(failed.keys());
   deletingRooms.value = false;
-  exitManage();
-  if (failed.length) roomStore.pushToast(t('adm.deleteFailed'), t('adm.deleteManyFailed', { count: failed.length }), 'error');
+  if (failed.size) {
+    const [id, reason] = [...failed][0];
+    roomStore.pushToast(t('adm.deleteFailed'), t('adm.deleteManyFailedReason', { count: failed.size, room: id.slice(5), reason }), 'error');
+  }
+  // Confirm against the server quietly (PIN list included), without the loading state
+  refreshRoomsQuietly();
+};
+const refreshRoomsQuietly = async () => {
+  try {
+    const list = await listStudyRooms();
+    const creators = Object.fromEntries(rooms.value.map(r => [r.roomId, r.creator]));
+    list.forEach(r => (r.creator = creators[r.roomId]));
+    rooms.value = list;
+    writeCache({ rooms: list });
+  } catch {
+    // the next visit refreshes anyway
+  }
+  loadPins();
 };
 
 // One confirmation, as agreed for the study protocol
@@ -683,6 +704,7 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
             <button v-if="r.session && r.session.phase !== 'ended'" @click="endOrReopen(r, true)" class="w-20 px-2 py-1.5 rounded-lg border border-rose-800 text-rose-200 hover:bg-rose-900/40 text-xs">{{ t('common.end') }}</button>
             <button v-else-if="r.session" @click="endOrReopen(r, false)" class="w-20 px-2 py-1.5 rounded-lg border border-emerald-800 text-emerald-200 hover:bg-emerald-900/40 text-xs">{{ t('common.reopen') }}</button>
             </template>
+            <router-link :to="`/waiting/${r.roomId}?as=observer`" class="adm-link inline-flex items-center px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs" :title="t('adm.enterObserverHint')">{{ t('adm.enterObserver') }}</router-link>
             <router-link v-if="r.session" :to="`/admin/replay/${r.roomId}`" class="adm-link inline-flex items-center px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs">{{ t('adm.replay') }}</router-link>
           </div>
         </div>

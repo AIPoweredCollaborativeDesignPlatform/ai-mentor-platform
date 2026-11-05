@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue';
-import { Diamond } from 'lucide-vue-next';
 import { t, type MessageKey } from '../../i18n';
 import { useRoomStore } from '../../stores/room';
 import { useRoomAi } from '../../composables/useRoomAi';
@@ -8,7 +7,7 @@ import type { DesignStage } from '../../types';
 
 /**
  * Double Diamond display, drawn vertically in the empty margin beside the chat (no background).
- * Where the margin is too narrow it folds into a small button with a popover. Stage and milestones
+ * Hidden where the margin is too narrow (phones, tablets, whiteboard open): the chat keeps all the space. Stage and milestones
  * come from the AI's assessments (rooms/{id}.progress, functions/src/engine.js updateProgress).
  * The parent must be position: relative; this component takes no space in the layout.
  */
@@ -32,6 +31,8 @@ const NODES: { y: number; label: MessageKey; reached: () => boolean }[] = [
 ];
 const stage = computed(() => STAGES.find(s => s.key === progress.value?.stage) || null);
 const nextNode = computed(() => NODES.find(n => !n.reached()) || null);
+// Details stay in the tooltip so the diagram itself carries almost no text
+const hint = computed(() => [t('dd.title'), nextNode.value ? t('dd.next') + t(nextNode.value.label) : t('dd.allReached'), t('dd.hint')].join('\n'));
 
 // Width of the margin left of the centred chat column (max-w-5xl = 1024px)
 const root = ref<HTMLElement | null>(null);
@@ -46,27 +47,11 @@ onMounted(() => {
 onUnmounted(() => observer?.disconnect());
 const RAIL_WIDTH = 132;
 const wide = computed(() => margin.value >= RAIL_WIDTH);
-const open = ref(false);
 </script>
 
 <template>
-  <div v-if="visible" ref="root" class="absolute top-3 left-3 z-10 text-slate-400">
-    <button
-      v-if="!wide"
-      type="button"
-      @click="open = !open"
-      class="inline-flex items-center gap-1.5 px-2 py-1 pointer-coarse:py-1.5 rounded-full border border-slate-700 bg-slate-950/80 text-[11px]"
-      :title="t('dd.title')"
-    >
-      <Diamond class="w-3.5 h-3.5" :class="stage ? 'text-sky-400' : ''" />
-      <span>{{ stage ? t(stage.label) : t('dd.notYet') }}</span>
-    </button>
-
-    <div
-      v-if="wide || open"
-      :class="wide ? 'w-[120px]' : 'mt-1.5 w-[200px] p-3 rounded-xl border border-slate-700 bg-slate-950/95 shadow-xl'"
-    >
-      <div class="text-[11px] font-semibold text-slate-300 mb-1.5">{{ t('dd.title') }}</div>
+  <div v-if="visible" ref="root" class="absolute left-3 top-1/2 -translate-y-1/2 z-10 text-slate-400" :title="hint">
+    <div v-if="wide" class="w-24">
       <div class="relative h-[240px]">
         <svg viewBox="0 0 40 240" class="absolute left-0 top-0 w-10 h-[240px]" role="img" :aria-label="t('dd.title')">
           <polygon
@@ -91,16 +76,11 @@ const open = ref(false);
         <span
           v-for="s in STAGES"
           :key="s.key"
-          class="absolute left-12 -translate-y-1/2 text-[11px]"
+          class="absolute left-12 -translate-y-1/2 text-[11px] whitespace-nowrap"
           :class="stage?.key === s.key ? 'text-sky-300 font-semibold' : ''"
           :style="{ top: `${s.y}px` }"
         >{{ t(s.label) }}</span>
       </div>
-      <p class="mt-2 text-[10px] leading-snug">
-        <template v-if="nextNode">{{ t('dd.next') }}<span class="text-slate-200">{{ t(nextNode.label) }}</span></template>
-        <span v-else class="text-emerald-300">{{ t('dd.allReached') }}</span>
-      </p>
-      <p class="mt-1 text-[10px] leading-snug text-slate-500">{{ t('dd.hint') }}</p>
     </div>
   </div>
 </template>

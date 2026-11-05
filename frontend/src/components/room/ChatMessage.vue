@@ -12,7 +12,7 @@ import type { MessageItem } from '../../types';
 import { formatMessageText, formatTime, highlightMentions, isMentioning, type MentionTarget } from '../../utils/chat';
 import { useRoomAi } from '../../composables/useRoomAi';
 import { revertRoomName } from '../../services/session';
-import { sketchFromImage } from '../../services/ai';
+import { model3DFromImage, sketchFromImage } from '../../services/ai';
 import ParametricViewer3D from '../ParametricViewer3D.vue';
 import ModelViewerGLB from '../ModelViewerGLB.vue';
 import MoodBoardViewer from '../MoodBoardViewer.vue';
@@ -111,6 +111,22 @@ const moreSketches = async (url: string) => {
     roomStore.pushToast(t('sketch.failed'), e?.message || String(e), 'error');
   } finally {
     sketching.value = false;
+  }
+};
+
+// A sketch or photo -> a 3D model built from the image (takes a few minutes; arrives in the chat)
+const can3d = computed(() => aiEnabled.value && aiModules.value.enable3D);
+const making3d = ref(false);
+const make3d = async (url: string) => {
+  if (making3d.value) return;
+  making3d.value = true;
+  roomStore.pushToast(t('sketch.making3d'), t('sketch.making3dText', { name: aiName.value }), 'info');
+  try {
+    await model3DFromImage(url, msg.value.type === 'file' ? msg.value.content : '');
+  } catch (e: any) {
+    roomStore.pushToast(t('sketch.make3dFailed'), e?.message || String(e), 'error');
+  } finally {
+    making3d.value = false;
   }
 };
 
@@ -433,6 +449,8 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
           :assetData="msg.assetPayload"
           :kind="isAsset('sketch') ? 'sketch' : 'moodboard'"
           :canSketch="canSketch"
+          :can3d="can3d"
+          @make-3d="make3d"
           @to-whiteboard="emit('to-whiteboard', $event)"
           @more-sketches="moreSketches"
           :layout="msg.collage"
@@ -509,8 +527,19 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
       </div>
 
       <!-- An uploaded sketch or photo: the AI develops it into more idea sketches -->
-      <div v-if="isSketchSource && canMakeSketches" class="mt-1 flex" :class="isMine ? 'justify-end' : 'justify-start'">
+      <div v-if="isSketchSource && (canMakeSketches || (can3d && canAct() && !roomStore.isHost && roomStore.myStatus !== 'observer'))" class="mt-1 flex gap-1.5" :class="isMine ? 'justify-end' : 'justify-start'">
         <button
+          v-if="can3d"
+          type="button"
+          @click="make3d(msg.fileData!.url)"
+          :disabled="making3d"
+          class="inline-flex items-center gap-1 px-2.5 py-1 pointer-coarse:py-1.5 rounded-lg border border-slate-700 text-[11px] text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+        >
+          <Loader2 v-if="making3d" class="w-3 h-3 animate-spin" />
+          {{ t('sketch.make3d') }}
+        </button>
+        <button
+          v-if="canMakeSketches"
           type="button"
           @click="moreSketches(msg.fileData!.url)"
           :disabled="sketching"

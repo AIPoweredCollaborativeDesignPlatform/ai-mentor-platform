@@ -12,11 +12,14 @@ const props = defineProps<{
   kind?: 'moodboard' | 'sketch';
   /** The sketch module is on: offer "more sketches" from any image */
   canSketch?: boolean;
+  /** The 3D module is on: offer a model built from the image */
+  can3d?: boolean;
 }>();
 const emit = defineEmits<{
   (e: 'arrange', index: number, pos: { x: number; y: number; w: number; z: number }): void;
   (e: 'to-whiteboard', url: string): void;
   (e: 'more-sketches', url: string): void;
+  (e: 'make-3d', url: string): void;
 }>();
 const isSketch = computed(() => props.kind === 'sketch');
 const putOnWhiteboard = () => {
@@ -338,6 +341,14 @@ const startDrag = (e: PointerEvent, i: number, mode: 'move' | 'resize') => {
             </div>
 
             <div class="flex items-center gap-2">
+              <button
+                v-if="editable && can3d && !selectedItem.url.startsWith('data:')"
+                type="button"
+                @click="emit('make-3d', selectedItem.url); closePreview()"
+                class="px-2.5 py-1 rounded-xl border border-slate-600 hover:bg-slate-800 text-slate-200 text-xs font-medium transition"
+              >
+                {{ t('sketch.make3d') }}
+              </button>
               <button
                 v-if="editable && canSketch && !selectedItem.url.startsWith('data:')"
                 type="button"

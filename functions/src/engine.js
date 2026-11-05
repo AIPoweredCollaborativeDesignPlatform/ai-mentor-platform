@@ -2,6 +2,7 @@ import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 import { roomLanguage, str } from './i18n.js';
 import { analyze, updateMemory } from './mentor.js';
 import { generate3D } from './mesh3d.js';
+import { imageTo3D } from './imageTo3d.js';
 import { getSystemConfig } from './config.js';
 import { loadDefaultProfile, loadProfile, publicAiView } from './profiles.js';
 import { logAiCall } from './log.js';
@@ -30,6 +31,9 @@ const CONTEXT_MESSAGES = 60;
 const AI_UIDS = new Set(['ai_mentor', 'ai_mentor_3d', 'system']);
 
 const isPrivateBoard = m => m.type === 'whiteboard_state' && m.metadata?.isPrivate !== false;
+// The image a message carries (an upload, or the first AI sketch / moodboard image); 3D can be built from it
+const imageOf = m => (m.type === 'file' && m.fileData?.type === 'image' ? m.fileData.url
+  : ['sketch', 'moodboard'].includes(m.assetType) ? m.assetPayload?.images?.find(i => i?.url)?.url : null) || null;
 
 const EMPTY_STATE = { msgsSinceCheck: 0, msgsSinceMemory: 0, lastCheckAt: 0, lastInterventionAt: 0, lastMessageId: null, lastMessageAt: 0, lastStallMessageId: null, lockUntil: 0 };
 
@@ -72,7 +76,7 @@ export async function fetchContext(roomId) {
   ]);
   const messages = msgSnap.docs.reverse().map(d => {
     const m = d.data();
-    return { id: d.id, senderUid: m.senderUid, senderName: m.senderName, content: String(m.content || '').slice(0, 1500), timestamp: m.timestamp, reactions: m.reactions || {}, actionOptions: m.actionOptions || [], pollVotes: m.pollVotes || {}, suggestion: m.suggestion || null, assetType: m.assetType || null, privateBoard: isPrivateBoard(m) };
+    return { id: d.id, senderUid: m.senderUid, senderName: m.senderName, content: String(m.content || '').slice(0, 1500), timestamp: m.timestamp, reactions: m.reactions || {}, actionOptions: m.actionOptions || [], pollVotes: m.pollVotes || {}, suggestion: m.suggestion || null, assetType: m.assetType || null, imageUrl: imageOf(m), privateBoard: isPrivateBoard(m) };
     // Private whiteboard drafts are personal scratch space: the AI never sees their cards
   }).filter(m => m.senderUid !== 'system' && !m.privateBoard);
   const room = roomSnap.data() || {};
@@ -228,7 +232,9 @@ export async function runCheck(roomId, secrets, { reason, forced = false, caller
       const suggestion = out.result.offer === true && !assetType && !actionOptions?.length ? { responses: {} } : null;
       if (assetType === 'parametric_3d') {
         // The mesh is generated after the lock is released; the instant parametric preview is the fallback
-        pending3D = { aiMessage, assetData, prompt: assetData?.prompt3D || assetData?.title || 'product prototype', meta: out.meta, room };
+        // "fromImage": the id of an image message in the transcript; the model is then built from that image
+        const fromImage = assetData?.fromImage ? messages.find(m => m.id === assetData.fromImage)?.imageUrl : null;
+        pending3D = { aiMessage, assetData, prompt: assetData?.prompt3D || assetData?.title || 'product prototype', meta: out.meta, room, fromImage };
       } else {
         // Automatic interventions also show the AI typing for a moment before the message lands
         const stopTyping = stopPresence ? null : startPresence(roomId, 'text');
@@ -276,16 +282,21 @@ async function updateProgress(roomId, previous, assessment, messages) {
   await roomRef(roomId).update({ progress: { stage, milestones, updatedAt: Date.now() } }).catch(() => {});
 }
 
-async function run3D(roomId, profile, secrets, { aiMessage, assetData, prompt, meta, room }) {
+async function run3D(roomId, profile, secrets, { aiMessage, assetData, prompt, meta, room, fromImage = null }) {
   const sys = await getSystemConfig();
   const stop = startPresence(roomId, 'mesh', { type: '3D Model Generation', prompt: String(prompt).slice(0, 100) });
   try {
-    const res = await generate3D({ engine: sys.engine3D, prompt, keys: { meshy: secrets.meshy, tripo: secrets.tripo }, meshy: sys.meshy });
-    await logAiCall({ kind: 'model_3d', roomId, model: sys.engine3D, input: { prompt, meshy: sys.engine3D === 'meshy' ? sys.meshy : null }, output: res });
+    let res;
+    if (fromImage) {
+      res = await imageTo3D({ roomId, roomAi: await ensureRoomAi(roomId), image: fromImage, notes: prompt, secrets });
+    } else {
+      res = await generate3D({ engine: sys.engine3D, prompt, keys: { meshy: secrets.meshy, tripo: secrets.tripo }, meshy: sys.meshy });
+      await logAiCall({ kind: 'model_3d', roomId, model: sys.engine3D, input: { prompt, meshy: sys.engine3D === 'meshy' ? sys.meshy : null }, output: res });
+    }
     await postAiMessage(roomId, room, profile, {
       content: aiMessage,
       assetType: 'mesh_3d',
-      assetPayload: { title: prompt, provider: res.provider, taskId: res.taskId, modelUrl: res.modelUrl, originalModelUrl: res.originalModelUrl, ...(res.thumbnailUrl ? { posterUrl: res.thumbnailUrl } : {}), isRefined: res.isRefined, isInteractive: true },
+      assetPayload: { title: prompt, provider: res.provider, taskId: res.taskId, modelUrl: res.modelUrl, originalModelUrl: res.originalModelUrl, ...(res.thumbnailUrl ? { posterUrl: res.thumbnailUrl } : {}), ...(res.render ? { inputRender: res.render } : {}), isRefined: res.isRefined, isInteractive: true },
       meta
     });
   } catch (err) {

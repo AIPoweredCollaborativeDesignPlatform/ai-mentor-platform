@@ -25,13 +25,14 @@ async function postJson(url, token, body, label) {
 }
 
 const MESHY_TASKS = 'https://api.meshy.ai/openapi/v2/text-to-3d';
+const MESHY_IMAGE_TASKS = 'https://api.meshy.ai/openapi/v1/image-to-3d';
 
-async function meshyTask(token, body) {
-  const created = await postJson(MESHY_TASKS, token, body, 'Meshy');
+async function meshyTask(token, body, base = MESHY_TASKS) {
+  const created = await postJson(base, token, body, 'Meshy');
   const taskId = created.result || created.id;
   if (!taskId) throw new Error('Failed to obtain Meshy task ID.');
   return pollUntilDone({
-    url: `${MESHY_TASKS}/${taskId}`,
+    url: `${base}/${taskId}`,
     headers: { Authorization: `Bearer ${token}` },
     intervalMs: 2500,
     maxAttempts: 120,
@@ -103,6 +104,20 @@ export async function generate3D({ engine, prompt, keys, meshy = {} }) {
   }
   const storedUrl = await rehostToStorage(preview.modelUrl, `models/${preview.taskId}.glb`, 'model/gltf-binary');
   return { ...preview, originalModelUrl: preview.modelUrl, modelUrl: storedUrl, isRefined: false };
+}
+
+/**
+ * Meshy image-to-3D (docs.meshy.ai/en/api/image-to-3d): `imageUrl` is a public URL or a data URI.
+ * Textured in the same task, so the result needs no separate refine.
+ */
+export async function meshyImageTo3D({ imageUrl, keys, meshy = {} }) {
+  const aiModel = meshy.aiModel || 'meshy-7.1';
+  const body = { image_url: imageUrl, ai_model: aiModel, should_texture: true, should_remesh: true, enable_pbr: meshy.enablePbr !== false };
+  if (meshy.geometryResolution && meshy.geometryResolution !== 'standard' && ['meshy-7.1', 'latest'].includes(aiModel)) body.geometry_resolution = meshy.geometryResolution;
+  if (meshy.textureResolution && meshy.textureResolution !== '2k' && aiModel !== 'meshy-6-lite') body.texture_resolution = meshy.textureResolution;
+  const result = await meshyTask(keys.meshy, body, MESHY_IMAGE_TASKS);
+  const storedUrl = await rehostToStorage(result.modelUrl, `models/${result.taskId}.glb`, 'model/gltf-binary');
+  return { ...result, originalModelUrl: result.modelUrl, modelUrl: storedUrl, provider: `Meshy ${aiModel} Image-to-3D`, isRefined: true };
 }
 
 /** Meshy texturing pass on an existing preview task. */

@@ -2,7 +2,7 @@
 // Profiles may override any block (profile.prompts); the profile version then identifies the wording used.
 import { localized } from './i18n.js';
 
-export const PROMPT_VERSION = 'v15-2026-11-05';
+export const PROMPT_VERSION = 'v16-2026-11-05';
 
 const LANGUAGE_NAMES = { en: 'English', 'zh-TW': 'Traditional Chinese (繁體中文)' };
 export const languageName = code => LANGUAGE_NAMES[code] || LANGUAGE_NAMES['zh-TW'];
@@ -70,7 +70,7 @@ Ready to move on when: a concept is chosen and checked.`,
    | Criteria | Option A | Option B | Consensus / Trade-off |
    Documents use sections: ## 1. Objectives & Consensus, ## 2. Comparison Matrix, ## 3. Key Discussion Points, ## 4. Action Items & Owners.
 9. Fact checks: verify with the web search tool when available and cite REAL, direct http(s) URLs in "references".
-10. 3D: describe a static, watertight product prototype (no animation).
+10. 3D: describe a static, watertight product prototype (no animation). When the team wants a 3D model of a sketch or image in the conversation (marked [image id=...]), set assetData.fromImage to that id: the model is then built from the image itself, and prompt3D only describes it.
 11. Moodboards (image boards) are a loose collage the designers can rearrange, not a grid. Provide a title, a one-sentence description, keywords, a palette (hex + name), materials (name + feature) and 4-6 images chosen for what the team needs now, for example: a rendered view of the concept, the product in its usage scene, reference products or analogies from other fields, loose pencil form sketches, a material or detail close-up.
     Give each image "size": "large" (at most one, the main visual) | "medium" | "small".
     Each image "prompt" must be a concrete, vivid ENGLISH visual description for an image generator (for sketches say "loose pencil sketch on white paper").
@@ -96,7 +96,7 @@ Return ONLY one JSON object (no prose before or after):
   "actionOptions": ["Option A", "Option B"],
   "assetType": "parametric_3d" | "moodboard" | "sketch" | "summary" | "fact_check" | null,
   "assetData": {
-    // parametric_3d: { "title", "prompt3D": "detailed text-to-3D prompt (shape, materials, textures, style)", "meshType": "group", "components": [ { "shape": "box"|"cylinder"|"sphere"|"torus", "dimensions": {}, "position": {}, "material": { "color", "roughness", "metalness" } } ] }
+    // parametric_3d: { "title", "prompt3D": "detailed text-to-3D prompt (shape, materials, textures, style)", "fromImage": "image message id (optional)", "meshType": "group", "components": [ { "shape": "box"|"cylinder"|"sphere"|"torus", "dimensions": {}, "position": {}, "material": { "color", "roughness", "metalness" } } ] }
     // moodboard: { "title", "description", "keywords": [], "images": [ { "title", "category", "size", "isAiGenerated": true, "prompt" } ], "palette": [ { "hex", "name" } ], "materials": [ { "name", "feature" } ] }
     // sketch: { "title", "description", "sketches": [ { "title", "prompt" } ] }
     // summary: { "title", "content": "rich Markdown with tables and action items" }
@@ -252,7 +252,7 @@ function teamDynamics(participants, messages) {
 /** Last 20 messages with reactions and live poll results inlined. */
 export function buildTranscript(messages, participants) {
   return messages.slice(-20).map(m => {
-    let line = `${m.senderName}: ${m.content}`;
+    let line = `${m.senderName}: ${m.content}${m.imageUrl ? ` [image id=${m.id}]` : ''}`;
     const reactions = Object.entries(m.reactions || {})
       .filter(([, uids]) => Array.isArray(uids) && uids.length)
       .map(([emoji, uids]) => `${emoji} x${uids.length} (${uids.map(uid => participants?.[uid]?.displayName || 'Member').join(', ')})`);

@@ -73,3 +73,8 @@ export async function sketchVariations(imageUrl, notes, opts, items = null) {
     generateImage(items?.[i] ? `${items[i].prompt}. ${SKETCH_STYLE}` : `${style}. ${SKETCH_STYLE}.${hint}`, { ...opts, imageUrl, strength: i === 0 ? 0.7 : 0.82 })));
   return results.map(r => (r.status === 'fulfilled' ? r.value : ''));
 }
+
+/** A sketch or photo -> one clean product render of the same object (the input for image-to-3D). */
+export async function renderFromImage(image, description, opts) {
+  return generateImage(`${REFINE_STYLES[1]}, plain white background, whole object visible. The object: ${description}`, { ...opts, imageUrl: image, strength: 0.75 });
+}

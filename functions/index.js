@@ -12,9 +12,10 @@ import { PROFILE_DRAFT_PROMPT, PROMPT_DEFAULTS, PROMPT_PLACEHOLDERS, PROMPT_VERS
 import { refineMeshy } from './src/mesh3d.js';
 import { refineSketch, sketchVariations } from './src/images.js';
 import { sketchBrief } from './src/sketchBrief.js';
+import { imageTo3D } from './src/imageTo3d.js';
 import { logAiCall } from './src/log.js';
 import { FRIENDLY_ERRORS } from './src/mentor.js';
-import { assignProfileToRoom, ensureRoomAi, handleNewMessage, handlePollVote, handleSuggestionAnswer, loadProfile, postAiMessage, runCheck } from './src/engine.js';
+import { assignProfileToRoom, ensureRoomAi, handleNewMessage, handlePollVote, handleSuggestionAnswer, loadProfile, postAiMessage, runCheck, startPresence } from './src/engine.js';
 import { endSession, joinRoom, maybeStartSession, reopenSession, runSessionJob, sessionTick } from './src/session.js';
 import { logBoardObjectChange, logMessageChange } from './src/events.js';
 import { authUrl, exportRoom, handleCallback, runDueExports } from './src/drive.js';
@@ -565,6 +566,37 @@ export const sketchFromImage = onCall(
       meta: { model: sys.sketchRefineModel, callerUid: request.auth.uid }
     });
     return { ok: true };
+  }
+);
+
+// ---------- A sketch or photo -> 3D model that keeps its form (src/imageTo3d.js), posted to the chat ----------
+export const model3DFromImage = onCall(
+  { secrets: ALL_SECRETS, timeoutSeconds: 540, memory: '512MiB', maxInstances: 10 },
+  async request => {
+    await requireRoomMember(request);
+    const roomId = request.data.roomId;
+    const image = String(request.data?.imageUrl || '');
+    const isUpload = image.startsWith('data:image/') && image.length < 8_000_000;
+    if (!isUpload && !/^https:\/\/(firebasestorage\.googleapis\.com|storage\.googleapis\.com)\//.test(image)) throw new HttpsError('invalid-argument', 'Unsupported image');
+    const roomAi = await ensureRoomAi(roomId);
+    if (roomAi.profile?.mode === 'none' || !roomAi.profile?.modules?.enable3D) throw new HttpsError('failed-precondition', '3D is off in this room');
+    const stop = startPresence(roomId, 'mesh', { type: '3D Model Generation', callerUid: request.auth.uid, prompt: '' });
+    try {
+      const res = await imageTo3D({ roomId, roomAi, image, notes: String(request.data?.notes || '').slice(0, 300), secrets: await engineSecrets() });
+      const room = (await getFirestore().doc(`rooms/${roomId}`).get()).data() || {};
+      await postAiMessage(roomId, room, roomAi.profile, {
+        content: str('model3dFromImage', room.language),
+        assetType: 'mesh_3d',
+        assetPayload: { title: res.title || res.description, provider: res.provider, taskId: res.taskId, modelUrl: res.modelUrl, originalModelUrl: res.originalModelUrl, ...(res.thumbnailUrl ? { posterUrl: res.thumbnailUrl } : {}), ...(res.render ? { inputRender: res.render } : {}), isRefined: res.isRefined, isInteractive: true },
+        meta: { model: res.provider, callerUid: request.auth.uid }
+      });
+      return { ok: true };
+    } catch (err) {
+      await logAiCall({ ...baseLog(request, 'model_3d', 'image'), error: { message: String(err?.message || err).slice(0, 500) } });
+      throw new HttpsError('internal', String(err?.message || err).slice(0, 200));
+    } finally {
+      await stop();
+    }
   }
 );
 

@@ -66,7 +66,9 @@ export const wasTruncated = (fabric: Record<string, any>) =>
 export interface AiThought {
   id: string;
   at: number;
-  kind: 'mentor' | 'memory_update';
+  /** tool = 3D model or sketch generation (with its error, if it failed) */
+  kind: 'mentor' | 'memory_update' | 'tool';
+  tool?: string;
   trigger: string;
   /** false = shadow check (the AI could not have spoken) */
   visible: boolean;
@@ -83,11 +85,12 @@ export async function loadAiThoughts(roomId: string): Promise<AiThought[]> {
   const snap = await getDocs(query(collection(db, 'aiLogs'), where('roomId', '==', roomId)));
   return snap.docs
     .map(d => ({ id: d.id, ...(d.data() as any) }))
-    .filter(x => x.kind === 'mentor' || x.kind === 'memory_update')
+    .filter(x => ['mentor', 'memory_update', 'model_3d', 'sketch_brief', 'sketch_refine', 'sketch_variations'].includes(x.kind))
     .map(x => ({
       id: x.id,
       at: x.createdAt?.toMillis?.() ?? 0,
-      kind: x.kind,
+      kind: x.kind === 'mentor' || x.kind === 'memory_update' ? x.kind : 'tool',
+      tool: x.kind,
       trigger: x.trigger || '',
       visible: x.visible !== false,
       spoke: x.visible !== false && Boolean(x.output?.shouldIntervene),
@@ -95,7 +98,7 @@ export async function loadAiThoughts(roomId: string): Promise<AiThought[]> {
       aiMessage: x.output?.result?.aiMessage || '',
       error: x.error ? `${x.error.category || ''} ${x.error.message || ''}`.trim() : '',
       rawText: x.output?.rawText || '',
-      memorySummary: x.output?.memory?.summary || ''
+      memorySummary: x.output?.memory?.summary || (x.kind === 'sketch_brief' ? x.output?.brief?.subject || '' : x.output?.provider || '')
     }))
     .sort((a, b) => a.at - b.at);
 }

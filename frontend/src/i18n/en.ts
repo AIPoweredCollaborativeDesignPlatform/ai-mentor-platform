@@ -198,6 +198,8 @@ export default {
   "sketch.making3d": "Building the 3D model",
   "sketch.making3dText": "{name} is building it from the image; it takes a few minutes and will appear in the chat.",
   "sketch.make3dFailed": "Could not build the 3D model",
+  "rp.aiTool": "3D / sketch",
+  "rp.aiToolFailed": "3D / sketch failed",
   "adm.created": "Created {at}",
   "adm.current": "Current: {value}",
   "adm.default": "Default",

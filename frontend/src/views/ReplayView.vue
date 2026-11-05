@@ -146,12 +146,13 @@ const showSilent = ref(true);
 const showMemory = ref(false);
 const segThoughts = computed(() => thoughts.value.filter(th =>
   th.at >= segment.value.start && th.at < segment.value.until &&
-  (th.kind === 'mentor' ? showSilent.value || th.spoke : showMemory.value)));
+  (th.kind === 'mentor' ? showSilent.value || th.spoke : th.kind === 'tool' ? true : showMemory.value)));
 const thoughtsSoFar = computed(() => segThoughts.value.filter(th => th.at <= t.value).length);
 const currentThoughtId = computed(() => segThoughts.value.filter(th => th.at <= t.value).at(-1)?.id || null);
 const jumpToThought = (th: AiThought) => (t.value = Math.min(Math.max(th.at, t0.value), tEnd.value));
 const thoughtBadge = (th: AiThought): { label: MessageKey; cls: string } =>
-  th.kind === 'memory_update' ? { label: 'rp.aiMemory', cls: 'border-slate-600 text-slate-300' }
+  th.kind === 'tool' ? { label: th.error ? 'rp.aiToolFailed' : 'rp.aiTool', cls: th.error ? 'border-rose-500/50 text-rose-300' : 'border-slate-600 text-slate-300' }
+  : th.kind === 'memory_update' ? { label: 'rp.aiMemory', cls: 'border-slate-600 text-slate-300' }
   : th.error ? { label: 'rp.aiFailed', cls: 'border-rose-500/50 text-rose-300' }
   : th.spoke ? { label: 'rp.aiSpoke', cls: 'border-emerald-500/50 text-emerald-300' }
   : th.visible ? { label: 'rp.aiSilent', cls: 'border-slate-600 text-slate-300' }
@@ -421,7 +422,11 @@ onMounted(async () => {
                 <pre class="mt-1 whitespace-pre-wrap max-h-60 overflow-y-auto">{{ th.rawText || '—' }}</pre>
               </details>
             </template>
-            <p v-else class="text-slate-300">{{ th.memorySummary || '—' }}</p>
+            <template v-else>
+              <p v-if="th.kind === 'tool'" class="text-[10px] text-slate-500 font-mono">{{ th.tool }}</p>
+              <p class="text-slate-300">{{ th.memorySummary || '—' }}</p>
+              <p v-if="th.error" class="text-rose-300 break-words">{{ th.error }}</p>
+            </template>
           </div>
         </div>
       </section>

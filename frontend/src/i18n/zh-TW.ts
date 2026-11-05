@@ -200,6 +200,8 @@ const zhTW: Record<keyof typeof en, string> = {
   "sketch.making3d": "3D 模型建立中",
   "sketch.making3dText": "{name} 正依這張圖建立模型，約需幾分鐘，完成後會出現在聊天室。",
   "sketch.make3dFailed": "3D 模型建立失敗",
+  "rp.aiTool": "3D／草圖",
+  "rp.aiToolFailed": "3D／草圖失敗",
   "adm.created": "建立 {at}",
   "adm.current": "目前：{value}",
   "adm.default": "預設",

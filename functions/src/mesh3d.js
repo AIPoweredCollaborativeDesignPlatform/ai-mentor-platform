@@ -20,7 +20,11 @@ async function postJson(url, token, body, label) {
     body: JSON.stringify(body)
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.message || `${label} API error (${res.status})`);
+  if (!res.ok) {
+    const err = new Error(`${label} API error ${res.status}: ${data.message || JSON.stringify(data).slice(0, 200)}`);
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
 
@@ -115,7 +119,15 @@ export async function meshyImageTo3D({ imageUrl, keys, meshy = {} }) {
   const body = { image_url: imageUrl, ai_model: aiModel, should_texture: true, should_remesh: true, enable_pbr: meshy.enablePbr !== false };
   if (meshy.geometryResolution && meshy.geometryResolution !== 'standard' && ['meshy-7.1', 'latest'].includes(aiModel)) body.geometry_resolution = meshy.geometryResolution;
   if (meshy.textureResolution && meshy.textureResolution !== '2k' && aiModel !== 'meshy-6-lite') body.texture_resolution = meshy.textureResolution;
-  const result = await meshyTask(keys.meshy, body, MESHY_IMAGE_TASKS);
+  let result;
+  try {
+    result = await meshyTask(keys.meshy, body, MESHY_IMAGE_TASKS);
+  } catch (err) {
+    // Some model / texture combinations reject optional settings (400): retry with the required fields only
+    if (err.status !== 400) throw err;
+    console.warn('[meshyImageTo3D] retrying with defaults:', err.message);
+    result = await meshyTask(keys.meshy, { image_url: imageUrl, ai_model: aiModel, should_texture: true }, MESHY_IMAGE_TASKS);
+  }
   const storedUrl = await rehostToStorage(result.modelUrl, `models/${result.taskId}.glb`, 'model/gltf-binary');
   return { ...result, originalModelUrl: result.modelUrl, modelUrl: storedUrl, provider: `Meshy ${aiModel} Image-to-3D`, isRefined: true };
 }

@@ -592,8 +592,9 @@ export const model3DFromImage = onCall(
       });
       return { ok: true };
     } catch (err) {
+      console.error('[model3DFromImage]', err?.message || err);
       await logAiCall({ ...baseLog(request, 'model_3d', 'image'), error: { message: String(err?.message || err).slice(0, 500) } });
-      throw new HttpsError('internal', String(err?.message || err).slice(0, 200));
+      throw new HttpsError('internal', String(err?.message || err).slice(0, 300));
     } finally {
       await stop();
     }

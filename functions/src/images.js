@@ -52,3 +52,18 @@ export async function refineSketch(imageDataUrl, notes, opts) {
     generateImage(`${style}.${hint}`, { ...opts, imageUrl: imageDataUrl, strength: i === 0 ? 0.75 : 0.85 })));
   return results.map(r => (r.status === 'fulfilled' ? r.value : ''));
 }
+
+// An uploaded sketch or photo -> new idea sketches that develop it further (image-to-image)
+const VARIATION_STYLES = [
+  'product design idea sketch developing the object in the input image: the same idea with a cleaner, more resolved form',
+  'product design idea sketch of a bolder variation of the object in the input image: change the overall form and proportions',
+  'product design idea sketch of a variation of the object in the input image: a different mechanism, joint or way of use'
+];
+
+/** Uploaded sketch or photo (https URL) -> 3 idea sketches that take it further. */
+export async function sketchVariations(imageUrl, notes, opts) {
+  const hint = notes ? ` The designers say: ${notes}.` : '';
+  const results = await Promise.allSettled(VARIATION_STYLES.map((style, i) =>
+    generateImage(`${style}. ${SKETCH_STYLE}.${hint}`, { ...opts, imageUrl, strength: i === 0 ? 0.8 : 0.92 })));
+  return results.map(r => (r.status === 'fulfilled' ? r.value : ''));
+}

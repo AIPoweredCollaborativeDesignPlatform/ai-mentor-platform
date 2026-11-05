@@ -10,7 +10,7 @@ import { getSystemConfig } from './src/config.js';
 import { classifyError, createMessage, extractSvg, imageBlockFromDataUrl, parseJsonObject, responseText } from './src/claude.js';
 import { PROFILE_DRAFT_PROMPT, PROMPT_DEFAULTS, PROMPT_PLACEHOLDERS, PROMPT_VERSION, sketchToSvgPrompt, textToSvgPrompt, visionPrompt } from './src/prompts.js';
 import { refineMeshy } from './src/mesh3d.js';
-import { refineSketch } from './src/images.js';
+import { refineSketch, sketchVariations } from './src/images.js';
 import { logAiCall } from './src/log.js';
 import { FRIENDLY_ERRORS } from './src/mentor.js';
 import { assignProfileToRoom, ensureRoomAi, handleNewMessage, handlePollVote, handleSuggestionAnswer, loadProfile, postAiMessage, runCheck } from './src/engine.js';
@@ -528,6 +528,41 @@ export const whiteboardVision = onCall(
   }
 );
 
+/** Room check shared by the sketch callables: AI on and the sketch module enabled. */
+const sketchRoom = async roomId => {
+  const roomAi = await ensureRoomAi(roomId);
+  if (roomAi.profile?.mode === 'none' || roomAi.profile?.modules?.enableSketch === false) throw new HttpsError('failed-precondition', 'Sketches are off in this room');
+  return roomAi;
+};
+
+// ---------- Uploaded sketch / photo, or an AI sketch -> more idea sketches (fal.ai image-to-image) ----------
+export const sketchFromImage = onCall(
+  { secrets: ALL_SECRETS, timeoutSeconds: 180, maxInstances: 10 },
+  async request => {
+    await requireRoomMember(request);
+    const roomId = request.data.roomId;
+    const imageUrl = String(request.data?.imageUrl || '');
+    // Only images stored by this project (chat uploads and generated sketches)
+    if (!/^https:\/\/(firebasestorage\.googleapis\.com|storage\.googleapis\.com)\//.test(imageUrl)) throw new HttpsError('invalid-argument', 'Unsupported image');
+    const roomAi = await sketchRoom(roomId);
+    const sys = await getSystemConfig();
+    const notes = String(request.data?.notes || '').slice(0, 300);
+    const secrets = await engineSecrets();
+    const urls = await sketchVariations(imageUrl, notes, { falKey: secrets.fal, model: sys.sketchRefineModel, folder: `sketch/${roomId}` });
+    await logAiCall({ ...baseLog(request, 'sketch_variations', sys.sketchRefineModel), input: { imageUrl, notes }, output: { urls } });
+    if (!urls.some(Boolean)) throw new HttpsError('internal', 'Sketch generation failed');
+    const room = (await getFirestore().doc(`rooms/${roomId}`).get()).data() || {};
+    const titles = room.language === 'en' ? ['Resolved', 'Bolder form', 'Other mechanism'] : ['更完整', '大膽造型', '不同機構'];
+    await postAiMessage(roomId, room, roomAi.profile, {
+      content: str('sketchVariations', room.language),
+      assetType: 'sketch',
+      assetPayload: { title: str('sketchVariations', room.language), source: imageUrl, model: sys.sketchRefineModel, images: urls.map((url, i) => ({ title: titles[i], url, size: i === 0 ? 'large' : 'medium', isAiGenerated: true })) },
+      meta: { model: sys.sketchRefineModel, callerUid: request.auth.uid }
+    });
+    return { ok: true };
+  }
+);
+
 // ---------- Whiteboard drawing -> clean sketch and render (fal.ai image-to-image), posted to the chat ----------
 export const sketchFromBoard = onCall(
   { secrets: ALL_SECRETS, timeoutSeconds: 180, maxInstances: 10 },
@@ -536,8 +571,7 @@ export const sketchFromBoard = onCall(
     const roomId = request.data.roomId;
     const imageDataUrl = String(request.data?.imageDataUrl || '');
     if (!imageDataUrl.startsWith('data:image/')) throw new HttpsError('invalid-argument', 'Missing drawing');
-    const roomAi = await ensureRoomAi(roomId);
-    if (roomAi.profile?.mode === 'none' || roomAi.profile?.modules?.enableSketch === false) throw new HttpsError('failed-precondition', 'Sketches are off in this room');
+    const roomAi = await sketchRoom(roomId);
     const sys = await getSystemConfig();
     const notes = String(request.data?.notes || '').slice(0, 300);
     const secrets = await engineSecrets();

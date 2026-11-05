@@ -26,6 +26,7 @@ const STRINGS = {
   system: { 'zh-TW': '系統', en: 'System' },
   refinedMessage: { 'zh-TW': '已為「{title}」加上彩色 PBR 材質與細節。', en: 'Refined "{title}" with color PBR textures and details.' },
   profileUpdated: { 'zh-TW': '{old} 已將名稱改為 {name} {avatar}', en: '{old} updated profile to {name} {avatar}' },
+  sketchVariations: { 'zh-TW': '依這張圖延伸畫了幾張發想草圖', en: 'A few idea sketches developed from this image' },
   sketchRefined: { 'zh-TW': '依白板上的草圖畫了乾淨的草圖與渲染圖', en: 'A clean sketch and a render of the drawing from the whiteboard' },
   aiRenamed: { 'zh-TW': 'AI 依討論方向把房間名稱改為「{name}」', en: 'The AI renamed the room to "{name}" after your design direction' },
   renameReverted: { 'zh-TW': '房間名稱已改回「{name}」', en: 'Room name changed back to "{name}"' },

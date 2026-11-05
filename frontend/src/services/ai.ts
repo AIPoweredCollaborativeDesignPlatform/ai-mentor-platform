@@ -82,6 +82,11 @@ export async function sketchFromBoard(imageDataUrl: string, notes = ''): Promise
   await call<{ imageDataUrl: string; notes: string }, { ok: boolean }>('sketchFromBoard', { imageDataUrl, notes });
 }
 
+/** Uploaded sketch / photo or an AI sketch → more idea sketches; the server posts them to the chat. */
+export async function sketchFromImage(imageUrl: string, notes = ''): Promise<void> {
+  await call<{ imageUrl: string; notes: string }, { ok: boolean }>('sketchFromImage', { imageUrl, notes });
+}
+
 /** Hand-drawn strokes or an uploaded sketch image → SVG. */
 export async function redrawSketchToSvg(imageDataUrl: string, notes = '', language: string = currentLocale.value, _tier?: string, abortSignal?: AbortSignal): Promise<string> {
   try {

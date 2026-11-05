@@ -12,6 +12,7 @@ import type { MessageItem } from '../../types';
 import { formatMessageText, formatTime, highlightMentions, isMentioning, type MentionTarget } from '../../utils/chat';
 import { useRoomAi } from '../../composables/useRoomAi';
 import { revertRoomName } from '../../services/session';
+import { sketchFromImage } from '../../services/ai';
 import ParametricViewer3D from '../ParametricViewer3D.vue';
 import ModelViewerGLB from '../ModelViewerGLB.vue';
 import MoodBoardViewer from '../MoodBoardViewer.vue';
@@ -65,7 +66,7 @@ const displayHtml = computed(() => {
 });
 
 // @mentions of me, of the AI and of other members get their own colours
-const { aiEnabled, aiName } = useRoomAi();
+const { aiEnabled, aiName, aiModules } = useRoomAi();
 const mentionTargets = computed<MentionTarget[]>(() => [
   ...roomStore.approvedParticipants.map(p => ({ name: p.displayName, kind: (p.uid === authStore.uid ? 'me' : 'member') as MentionTarget['kind'] })),
   ...(aiEnabled.value ? [{ name: aiName.value, kind: 'ai' as const }, { name: 'Mentor', kind: 'ai' as const }] : [])
@@ -91,6 +92,24 @@ const revertName = async () => {
     roomStore.pushToast(t('msg.renameRevertFailed'), e?.message || String(e), 'error');
   } finally {
     reverting.value = false;
+  }
+};
+
+// Sketches from an image: a chat photo / sketch, or one of the AI's sketches
+const canSketch = computed(() => aiModules.value.enableSketch !== false && aiEnabled.value);
+const canMakeSketches = computed(() => canSketch.value && canAct() && !roomStore.isHost && roomStore.myStatus !== 'observer');
+const isSketchSource = computed(() => msg.value.type === 'file' && msg.value.fileData?.type === 'image' && /^https:/.test(msg.value.fileData?.url || ''));
+const sketching = ref(false);
+const moreSketches = async (url: string) => {
+  if (sketching.value) return;
+  sketching.value = true;
+  roomStore.pushToast(t('sketch.working'), t('sketch.workingText', { name: aiName.value }), 'info');
+  try {
+    await sketchFromImage(url, msg.value.type === 'file' ? msg.value.content.replace(/^Shared (image|video|document):.*$/, '') : '');
+  } catch (e: any) {
+    roomStore.pushToast(t('sketch.failed'), e?.message || String(e), 'error');
+  } finally {
+    sketching.value = false;
   }
 };
 
@@ -412,7 +431,9 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
           v-if="isAsset('moodboard', 'sketch')"
           :assetData="msg.assetPayload"
           :kind="isAsset('sketch') ? 'sketch' : 'moodboard'"
+          :canSketch="canSketch"
           @to-whiteboard="emit('to-whiteboard', $event)"
+          @more-sketches="moreSketches"
           :layout="msg.collage"
           :editable="canAct() && !roomStore.isHost && roomStore.myStatus !== 'observer'"
           @arrange="(i, p) => roomStore.arrangeCollage(msg.id, i, p)"
@@ -484,6 +505,19 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
             </div>
           </div>
         </template>
+      </div>
+
+      <!-- An uploaded sketch or photo: the AI develops it into more idea sketches -->
+      <div v-if="isSketchSource && canMakeSketches" class="mt-1 flex" :class="isMine ? 'justify-end' : 'justify-start'">
+        <button
+          type="button"
+          @click="moreSketches(msg.fileData!.url)"
+          :disabled="sketching"
+          class="inline-flex items-center gap-1 px-2.5 py-1 pointer-coarse:py-1.5 rounded-lg border border-slate-700 text-[11px] text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+        >
+          <Loader2 v-if="sketching" class="w-3 h-3 animate-spin" />
+          {{ t('sketch.fromImage') }}
+        </button>
       </div>
 
       <!-- Existing reactions stay in the flow; their size never changes on hover -->

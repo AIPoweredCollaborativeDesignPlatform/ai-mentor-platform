@@ -332,13 +332,14 @@ defineExpose({ setReply, sendFile });
         </button>
       </div>
 
-      <div class="flex items-center gap-2">
+      <!-- One 44px row; buttons stay at the bottom when the text box grows -->
+      <div class="flex items-end gap-2">
         <input ref="fileInputRef" type="file" class="hidden" accept="image/*,video/*,.pdf,.doc,.docx,.txt" @change="onFileSelected" />
 
         <button
           @click="!isMeetingClosed && fileInputRef?.click()"
           :disabled="isBlocked || isUploadingFile"
-          class="p-2.5 rounded-xl border border-slate-700 bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-sky-400 transition disabled:opacity-40 disabled:cursor-not-allowed shrink-0 min-h-[44px] min-w-[44px] flex items-center justify-center cursor-pointer"
+          class="p-2.5 rounded-xl border border-slate-700 bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-sky-400 transition disabled:opacity-40 disabled:cursor-not-allowed shrink-0 h-11 min-w-[44px] flex items-center justify-center cursor-pointer"
           :title="t('composer.attach')"
         >
           <Paperclip class="w-4 h-4" :class="{ 'animate-spin': isUploadingFile }" />
@@ -347,7 +348,7 @@ defineExpose({ setReply, sendFile });
         <button
           @click="emit('open-whiteboard')"
           :disabled="isBlocked || isWhiteboardOpen"
-          class="p-2.5 rounded-xl border border-indigo-500/40 bg-indigo-950/40 hover:bg-indigo-900/60 text-indigo-300 hover:text-ink transition disabled:opacity-40 disabled:cursor-not-allowed shrink-0 min-h-[44px] min-w-[44px] flex items-center justify-center cursor-pointer"
+          class="p-2.5 rounded-xl border border-indigo-500/40 bg-indigo-950/40 hover:bg-indigo-900/60 text-indigo-300 hover:text-ink transition disabled:opacity-40 disabled:cursor-not-allowed shrink-0 h-11 min-w-[44px] flex items-center justify-center cursor-pointer"
           :title="t('composer.openWhiteboard')"
         >
           <Palette class="w-4 h-4 text-indigo-400" />
@@ -393,7 +394,7 @@ defineExpose({ setReply, sendFile });
             :placeholder="isMeetingClosed
               ? lockedText || t('room.closedReadOnly')
               : isMuted ? t('room.mutedText') : aiEnabled ? t('composer.placeholderAi') : t('composer.placeholder')"
-            class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-base sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500 transition resize-none min-h-[44px] max-h-32 overflow-y-auto disabled:opacity-50"
+            class="block w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-[11px] leading-5 text-base sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500 transition resize-none min-h-[44px] max-h-32 overflow-y-auto disabled:opacity-50"
             rows="1"
           ></textarea>
         </div>
@@ -402,7 +403,7 @@ defineExpose({ setReply, sendFile });
           v-if="!inputMessage.trim() && !stagedAttachment"
           @click="sendQuickThumbsUp"
           :disabled="isBlocked"
-          class="px-3 py-2.5 bg-slate-800 hover:bg-slate-700 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed text-sky-400 rounded-xl font-semibold shadow transition flex items-center justify-center shrink-0 min-h-[44px] min-w-[44px] cursor-pointer text-lg select-none"
+          class="px-3 py-2.5 bg-slate-800 hover:bg-slate-700 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed text-sky-400 rounded-xl font-semibold shadow transition flex items-center justify-center shrink-0 h-11 min-w-[44px] cursor-pointer text-lg select-none"
           :title="t('composer.thumbsUp')"
         >
           👍
@@ -411,7 +412,7 @@ defineExpose({ setReply, sendFile });
           v-else
           @click="handleSend"
           :disabled="isBlocked || (mentionsMentor && (roomStore.aiCooldownRemaining > 0 || roomStore.isAnalyzing))"
-          class="px-3.5 py-2.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl font-semibold shadow transition flex items-center justify-center gap-1.5 shrink-0 min-h-[44px] min-w-[44px] cursor-pointer"
+          class="px-3.5 py-2.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl font-semibold shadow transition flex items-center justify-center gap-1.5 shrink-0 h-11 min-w-[44px] cursor-pointer"
           :title="mentionsMentor && roomStore.aiCooldownRemaining > 0 ? t('composer.cooldown', { seconds: roomStore.aiCooldownRemaining }) : t('composer.send')"
         >
           <span v-if="mentionsMentor && roomStore.aiCooldownRemaining > 0" class="text-xs font-mono text-amber-200">{{ roomStore.aiCooldownRemaining }}s</span>

@@ -15,6 +15,7 @@ import { isOnline } from './session.js';
  *    after maxMessagesBetweenChecks, or after stallSeconds of silence
  *  - automatic checks are visible only in 'proactive' mode outside the cooldown;
  *    all other checks run as invisible shadow assessments (if enabled) for the research log
+ *  - every assessment updates the Double Diamond display (rooms/{id}.progress) unless the condition has no AI
  * roomAi/{roomId} is server/admin-only; participants only see rooms/{id}.ai (publicAiView).
  */
 
@@ -70,7 +71,7 @@ export async function fetchContext(roomId) {
   ]);
   const messages = msgSnap.docs.reverse().map(d => {
     const m = d.data();
-    return { id: d.id, senderUid: m.senderUid, senderName: m.senderName, content: String(m.content || '').slice(0, 1500), timestamp: m.timestamp, reactions: m.reactions || {}, actionOptions: m.actionOptions || [], pollVotes: m.pollVotes || {}, privateBoard: isPrivateBoard(m) };
+    return { id: d.id, senderUid: m.senderUid, senderName: m.senderName, content: String(m.content || '').slice(0, 1500), timestamp: m.timestamp, reactions: m.reactions || {}, actionOptions: m.actionOptions || [], pollVotes: m.pollVotes || {}, suggestion: m.suggestion || null, assetType: m.assetType || null, privateBoard: isPrivateBoard(m) };
     // Private whiteboard drafts are personal scratch space: the AI never sees their cards
   }).filter(m => m.senderUid !== 'system' && !m.privateBoard);
   const room = roomSnap.data() || {};
@@ -116,7 +117,7 @@ export async function acquireLock(roomId) {
 }
 export const releaseLock = roomId => roomAiRef(roomId).set({ state: { lockUntil: 0 } }, { merge: true });
 
-export async function postAiMessage(roomId, room, profile, { content, assetType = null, assetPayload = null, actionOptions = [], meta }, replaceMessageId) {
+export async function postAiMessage(roomId, room, profile, { content, assetType = null, assetPayload = null, actionOptions = [], suggestion = null, meta }, replaceMessageId) {
   const language = room.language || 'zh-TW';
   const fields = {
     senderUid: 'ai_mentor',
@@ -125,6 +126,7 @@ export async function postAiMessage(roomId, room, profile, { content, assetType 
     type: assetType ? 'ai_asset' : 'text',
     content,
     actionOptions: actionOptions || [],
+    ...(suggestion ? { suggestion } : {}),
     ...(assetType ? { assetType, assetPayload } : {}),
     metadata: { ai: meta || null }
   };
@@ -151,7 +153,7 @@ export async function runCheck(roomId, secrets, { reason, forced = false, caller
   const shadow = !visible && profile.shadowAssessment;
 
   if (!visible && !shadow) {
-    await logAiCall({ kind: 'trigger_skip', roomId, reason: forced ? 'mention_in_no_ai_condition' : reason, detail: profile.mode === 'proactive' ? 'cooldown' : `mode=${profile.mode}`, mode: profile.mode });
+    await logAiCall({ kind: 'trigger_skip', roomId, reason: forced ? 'mention_in_no_ai_condition' : reason, detail: `mode=${profile.mode}`, mode: profile.mode });
     return;
   }
 
@@ -204,6 +206,8 @@ export async function runCheck(roomId, secrets, { reason, forced = false, caller
     const stateUpdate = { msgsSinceCheck: 0, lastCheckAt: Date.now(), roster };
     const memoryUpdate = {};
 
+    if (out.assessment && profile.mode !== 'none') await updateProgress(roomId, latestRoom.progress, out.assessment, messages);
+
     if (aborted) {
       await logAiCall({ kind: 'trigger_skip', roomId, reason, detail: 'aborted_by_user' });
     } else if (out.error) {
@@ -218,6 +222,8 @@ export async function runCheck(roomId, secrets, { reason, forced = false, caller
       // Polls stay rare: none right after a settled poll, and none while one of the AI's last 3 messages had one
       const recentPoll = messages.filter(m => m.senderUid === 'ai_mentor').slice(-3).some(m => m.actionOptions?.length);
       const actionOptions = reason === 'poll_settled' || recentPoll ? [] : out.result.actionOptions;
+      // Offers are shown as a card with Accept / Not now; every answer is kept on the message (handleSuggestionAnswer)
+      const suggestion = out.result.offer === true && !assetType && !actionOptions?.length ? { responses: {} } : null;
       if (assetType === 'parametric_3d') {
         // The mesh is generated after the lock is released; the instant parametric preview is the fallback
         pending3D = { aiMessage, assetData, prompt: assetData?.prompt3D || assetData?.title || 'product prototype', meta: out.meta, room };
@@ -225,7 +231,7 @@ export async function runCheck(roomId, secrets, { reason, forced = false, caller
         // Automatic interventions also show the AI typing for a moment before the message lands
         const stopTyping = stopPresence ? null : startPresence(roomId, 'text');
         if (stopTyping) await sleep(TYPING_BEFORE_POST_MS);
-        await postAiMessage(roomId, room, profile, { content: aiMessage, assetType, assetPayload: assetData, actionOptions, meta: out.meta }, retryMessageId);
+        await postAiMessage(roomId, room, profile, { content: aiMessage, assetType, assetPayload: assetData, actionOptions, suggestion, meta: out.meta }, retryMessageId);
         await stopTyping?.();
       }
       stateUpdate.lastInterventionAt = Date.now();
@@ -249,6 +255,23 @@ export async function runCheck(roomId, secrets, { reason, forced = false, caller
   }
 
   if (pending3D) await run3D(roomId, profile, secrets, pending3D);
+}
+
+const STAGES = new Set(['discover', 'define', 'develop', 'deliver']);
+const MILESTONES = ['pain_points', 'problem_statement', 'ideas', 'concept_selected'];
+const MODEL_ASSETS = new Set(['mesh_3d', 'parametric_3d']);
+
+/**
+ * Double Diamond display (rooms/{id}.progress, read by participants): the stage follows the latest
+ * judgement and stays put on "unclear"; milestones only ever switch on. model3d = a 3D model was posted.
+ */
+async function updateProgress(roomId, previous, assessment, messages) {
+  const stage = STAGES.has(assessment.stage) ? assessment.stage : previous?.stage || null;
+  const milestones = Object.fromEntries(MILESTONES.map(k => [k, Boolean(previous?.milestones?.[k] || assessment.milestones?.[k])]));
+  milestones.model3d = Boolean(previous?.milestones?.model3d || messages.some(m => MODEL_ASSETS.has(m.assetType)));
+  const changed = stage !== (previous?.stage || null) || Object.keys(milestones).some(k => milestones[k] !== Boolean(previous?.milestones?.[k]));
+  if (!changed) return;
+  await roomRef(roomId).update({ progress: { stage, milestones, updatedAt: Date.now() } }).catch(() => {});
 }
 
 async function run3D(roomId, profile, secrets, { aiMessage, assetData, prompt, meta, room }) {
@@ -366,4 +389,29 @@ export async function handlePollVote(roomId, messageId, before, after, secrets) 
     + 'Treat the leading option as the direction the team has chosen (if there is a tie, name the tie and help them break it). '
     + 'Briefly confirm it and move the discussion forward by asking about the next step as an open question in plain text. Do not ask the same question again and do not start another poll.';
   await runCheck(roomId, secrets, { reason: 'poll_settled', forced: true, note });
+}
+
+/**
+ * Suggestion cards: the first "Accept" makes the AI carry out its offer (once per card); "Not now" only
+ * stays on the card, where the next check reads it from the transcript (RESPECT_PAUSE).
+ */
+export async function handleSuggestionAnswer(roomId, messageId, before, after, secrets) {
+  if (after?.senderUid !== 'ai_mentor' || !after.suggestion) return;
+  const accepted = m => Object.values(m?.suggestion?.responses || {}).filter(r => r.choice === 'accept');
+  if (!accepted(after).length || accepted(before).length) return;
+
+  const room = (await roomRef(roomId).get()).data();
+  if (!room?.appVersion || (room.session && room.session.phase !== 'running')) return;
+  const claimed = await db().runTransaction(async tx => {
+    const snap = await tx.get(roomAiRef(roomId));
+    const done = snap.data()?.state?.acceptedSuggestions || [];
+    if (done.includes(messageId)) return false;
+    tx.set(roomAiRef(roomId), { state: { acceptedSuggestions: [...done, messageId].slice(-50) } }, { merge: true });
+    return true;
+  });
+  if (!claimed) return;
+
+  const who = accepted(after).map(r => r.name).join(', ');
+  const note = `${who} accepted your suggestion "${String(after.content || '').slice(0, 300)}". Carry it out now, briefly and in plain text; do not ask for permission again.`;
+  await runCheck(roomId, secrets, { reason: 'suggestion_accepted', forced: true, callerName: who, note });
 }

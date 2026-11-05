@@ -9,8 +9,8 @@ import LocaleSwitch from '../components/LocaleSwitch.vue';
 import ThemeSwitch from '../components/ThemeSwitch.vue';
 import BoardReplayCanvas from '../components/admin/BoardReplayCanvas.vue';
 import {
-  KIND_GROUPS, describe, fmtOffset, groupOf, indexAt, loadEvents, segmentsOf, loadFinalBoard, membersOf, stateAt, wasTruncated,
-  type ReplayMessage, type ReplayObject, type ResearchEvent
+  KIND_GROUPS, describe, fmtOffset, groupOf, indexAt, loadAiThoughts, loadEvents, segmentsOf, loadFinalBoard, membersOf, stateAt, wasTruncated,
+  type AiThought, type ReplayMessage, type ReplayObject, type ResearchEvent
 } from '../utils/replay';
 import { formatMessageText } from '../utils/chat';
 
@@ -139,6 +139,59 @@ watch(idx, async () => {
   if (top < box.scrollTop || top + row.offsetHeight > box.scrollTop + box.clientHeight) box.scrollTop = top - box.clientHeight / 2;
 });
 
+// ---------- AI background thinking (aiLogs) ----------
+const thoughts = ref<AiThought[]>([]);
+const thoughtsError = ref('');
+const showSilent = ref(true);
+const showMemory = ref(false);
+const segThoughts = computed(() => thoughts.value.filter(th =>
+  th.at >= segment.value.start && th.at < segment.value.until &&
+  (th.kind === 'mentor' ? showSilent.value || th.spoke : showMemory.value)));
+const thoughtsSoFar = computed(() => segThoughts.value.filter(th => th.at <= t.value).length);
+const currentThoughtId = computed(() => segThoughts.value.filter(th => th.at <= t.value).at(-1)?.id || null);
+const jumpToThought = (th: AiThought) => (t.value = Math.min(Math.max(th.at, t0.value), tEnd.value));
+const thoughtBadge = (th: AiThought): { label: MessageKey; cls: string } =>
+  th.kind === 'memory_update' ? { label: 'rp.aiMemory', cls: 'border-slate-600 text-slate-300' }
+  : th.error ? { label: 'rp.aiFailed', cls: 'border-rose-500/50 text-rose-300' }
+  : th.spoke ? { label: 'rp.aiSpoke', cls: 'border-emerald-500/50 text-emerald-300' }
+  : th.visible ? { label: 'rp.aiSilent', cls: 'border-slate-600 text-slate-300' }
+  : { label: 'rp.aiShadow', cls: 'border-sky-500/50 text-sky-300' };
+const TRIGGERS: Record<string, MessageKey> = {
+  pause: 'rp.trigPause', stall: 'rp.trigStall', max_messages: 'rp.trigMax', forced: 'rp.trigMention',
+  poll_settled: 'rp.trigPoll', suggestion_accepted: 'rp.trigAccepted'
+};
+// Shadow checks log "pause (shadow)" etc.
+const triggerLabel = (trigger: string) => {
+  const base = String(trigger || '').split(' ')[0];
+  return TRIGGERS[base] ? tr(TRIGGERS[base]) : trigger;
+};
+const STAGE_KEYS: Record<string, MessageKey> = { discover: 'dd.discover', define: 'dd.define', develop: 'dd.develop', deliver: 'dd.deliver' };
+const stageLabel = (s: string) => (STAGE_KEYS[s] ? tr(STAGE_KEYS[s]) : s);
+const NOTE_KEYS: Record<string, MessageKey> = { observation: 'rp.aiObservation', teamNeed: 'rp.aiNeed', decision: 'rp.aiDecision' };
+// The AI's own notes first; fields of older prompt versions are shown as they were stored
+const noteRows = (th: AiThought): [string, string][] => {
+  const a = th.assessment || {};
+  const rows: [string, string][] = Object.keys(NOTE_KEYS).filter(k => a[k]).map(k => [tr(NOTE_KEYS[k]), String(a[k])]);
+  for (const [k, v] of Object.entries(a)) {
+    if (k in NOTE_KEYS || k === 'stage' || k === 'participants' || k === 'milestones' || v === null || v === '') continue;
+    rows.push([k, typeof v === 'object' ? JSON.stringify(v) : String(v)]);
+  }
+  const reached = Object.entries(a.milestones || {}).filter(([, v]) => v).map(([k]) => k);
+  if (reached.length) rows.push([tr('rp.aiMilestones'), reached.join(', ')]);
+  if (Array.isArray(a.participants) && a.participants.length) {
+    rows.push([tr('rp.aiPeople'), a.participants.map((p: any) => `${p.name}: ${p.engagement || '?'}${p.stance ? ` (${p.stance})` : ''}`).join('; ')]);
+  }
+  return rows;
+};
+const thoughtRef = ref<HTMLElement | null>(null);
+watch(currentThoughtId, async () => {
+  await nextTick();
+  const box = thoughtRef.value;
+  const row = box?.querySelector<HTMLElement>('[data-current="true"]');
+  if (!box || !row || !followTimeline.value) return;
+  if (row.offsetTop < box.scrollTop || row.offsetTop + row.offsetHeight > box.scrollTop + box.clientHeight) box.scrollTop = row.offsetTop - 8;
+});
+
 // The chat box follows new messages by scrolling itself only (the page stays put)
 const chatRef = ref<HTMLElement | null>(null);
 watch(() => state.value.messages.length, async () => {
@@ -184,6 +237,10 @@ onMounted(async () => {
     loading.value = false;
     return;
   }
+  // The AI log is optional: the replay still works if it cannot be read
+  loadAiThoughts(roomId)
+    .then(list => (thoughts.value = list))
+    .catch(e => (thoughtsError.value = tr('rp.aiLoadFailed', { error: e?.message || String(e) })));
   try {
     events.value = await loadEvents(roomId);
     t.value = t0.value;
@@ -325,6 +382,49 @@ onMounted(async () => {
           </div>
         </section>
       </div>
+
+      <!-- AI background thinking: every check up to this moment, also the silent and shadow ones (aiLogs) -->
+      <section class="rounded-2xl border border-amber-500/30 bg-slate-900/70">
+        <div class="px-3 py-2 border-b border-slate-800 flex flex-wrap items-center gap-x-3 gap-y-2 text-[11px]">
+          <h2 class="text-xs font-semibold text-amber-300">{{ tr('rp.aiThinking', { count: thoughtsSoFar }) }}</h2>
+          <label class="flex items-center gap-1 text-slate-400"><input type="checkbox" v-model="showSilent" />{{ tr('rp.aiShowSilent') }}</label>
+          <label class="flex items-center gap-1 text-slate-400"><input type="checkbox" v-model="showMemory" />{{ tr('rp.aiShowMemory') }}</label>
+          <span class="text-slate-500">{{ tr('rp.aiHint') }}</span>
+          <span v-if="thoughtsError" class="text-rose-300">{{ thoughtsError }}</span>
+        </div>
+        <div ref="thoughtRef" class="relative max-h-[50dvh] lg:max-h-80 overflow-y-auto divide-y divide-slate-800 text-xs">
+          <p v-if="!segThoughts.length" class="p-3 text-slate-500">{{ tr('rp.aiNone') }}</p>
+          <div
+            v-for="th in segThoughts"
+            :key="th.id"
+            :data-current="th.id === currentThoughtId"
+            class="px-3 py-2 space-y-1"
+            :class="[th.at > t ? 'opacity-40' : '', th.id === currentThoughtId ? 'bg-amber-500/5' : '']"
+          >
+            <button type="button" @click="jumpToThought(th)" class="flex flex-wrap items-center gap-2 text-[10px] text-left pointer-coarse:py-1">
+              <span class="font-mono text-slate-500">{{ fmtOffset(th.at - t0) }}</span>
+              <span class="px-1.5 py-px rounded border" :class="thoughtBadge(th).cls">{{ tr(thoughtBadge(th).label) }}</span>
+              <span class="text-slate-500">{{ triggerLabel(th.trigger) }}</span>
+              <span v-if="th.assessment?.stage" class="text-sky-300">{{ stageLabel(th.assessment.stage) }}</span>
+            </button>
+            <template v-if="th.kind === 'mentor'">
+              <dl class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5">
+                <template v-for="row in noteRows(th)" :key="row[0]">
+                  <dt class="text-slate-500">{{ row[0] }}</dt>
+                  <dd class="text-slate-200 break-words">{{ row[1] }}</dd>
+                </template>
+              </dl>
+              <p v-if="th.spoke && th.aiMessage" class="text-amber-200">→ {{ th.aiMessage }}</p>
+              <p v-if="th.error" class="text-rose-300">{{ th.error }}</p>
+              <details class="text-[10px] text-slate-400">
+                <summary class="cursor-pointer select-none pointer-coarse:py-1">{{ tr('rp.aiRaw') }}</summary>
+                <pre class="mt-1 whitespace-pre-wrap max-h-60 overflow-y-auto">{{ th.rawText || '—' }}</pre>
+              </details>
+            </template>
+            <p v-else class="text-slate-300">{{ th.memorySummary || '—' }}</p>
+          </div>
+        </div>
+      </section>
 
       <!-- Timeline -->
       <section class="rounded-2xl border border-slate-800 bg-slate-900/70">

@@ -137,6 +137,8 @@ export const useRoomStore = defineStore('room', () => {
     sendFileMessage: messages.sendFileMessage,
     toggleMessageReaction: messages.toggleMessageReaction,
     votePollOption: messages.votePollOption,
+    answerSuggestion: messages.answerSuggestion,
+    arrangeCollage: messages.arrangeCollage,
     addCustomPollOption: messages.addCustomPollOption,
 
     createBoard: whiteboard.createBoard,

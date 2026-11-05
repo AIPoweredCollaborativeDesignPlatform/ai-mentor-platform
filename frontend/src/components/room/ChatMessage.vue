@@ -69,6 +69,16 @@ const mentionTargets = computed<MentionTarget[]>(() => [
   ...(aiEnabled.value ? [{ name: aiName.value, kind: 'ai' as const }, { name: 'Mentor', kind: 'ai' as const }] : [])
 ]);
 
+// AI suggestion card (Accept / Not now); every answer stays on the message for the study
+const suggestionAnswers = computed(() => Object.values(msg.value.suggestion?.responses || {}));
+const mySuggestionAnswer = computed(() => msg.value.suggestion?.responses?.[authStore.uid]?.choice);
+const answeredBy = (choice: 'accept' | 'decline') => suggestionAnswers.value.filter(a => a.choice === choice).map(a => a.name).join(', ');
+const suggestionSummary = computed(() => [
+  answeredBy('accept') && t('msg.suggestAccepted', { names: answeredBy('accept') }),
+  answeredBy('decline') && t('msg.suggestDeclined', { names: answeredBy('decline') })
+].filter(Boolean).join(' · '));
+const answerSuggestion = (choice: 'accept' | 'decline') => canAct() && !roomStore.isHost && roomStore.answerSuggestion(msg.value.id, choice);
+
 // Polls
 const voters = (option: string) => Object.values(msg.value.pollVotes || {}).filter(v => v?.option === option);
 const isMyVote = (option: string) => msg.value.pollVotes?.[authStore.uid]?.option === option;
@@ -297,6 +307,27 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
           </div>
         </div>
 
+        <!-- AI suggestion card -->
+        <div v-if="msg.suggestion" class="mt-3 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            @click="answerSuggestion('accept')"
+            class="px-3 py-1.5 pointer-coarse:py-2 rounded-lg border text-xs font-semibold transition"
+            :class="mySuggestionAnswer === 'accept' ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/10'"
+          >
+            {{ t('msg.suggestAccept') }}
+          </button>
+          <button
+            type="button"
+            @click="answerSuggestion('decline')"
+            class="px-3 py-1.5 pointer-coarse:py-2 rounded-lg border text-xs font-semibold transition"
+            :class="mySuggestionAnswer === 'decline' ? 'bg-slate-600 border-slate-600 text-white' : 'border-slate-600 text-slate-300 hover:bg-slate-800'"
+          >
+            {{ t('msg.suggestDecline') }}
+          </button>
+          <span v-if="suggestionSummary" class="text-[11px] text-slate-400">{{ suggestionSummary }}</span>
+        </div>
+
         <!-- Attachment inside a captioned bubble -->
         <div v-if="msg.type === 'file' && msg.fileData" :class="{ 'mt-2': msg.content }">
           <div
@@ -352,7 +383,13 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
         <ParametricViewer3D v-else-if="isAsset('parametric_3d')" :assetData="msg.assetPayload" />
         <ModelViewerGLB v-else-if="isAsset('mesh_3d')" :assetData="msg.assetPayload" :message="msg" :isResizing="isResizing" :readOnly="isMeetingClosed" @refine="refineModel" />
 
-        <MoodBoardViewer v-if="isAsset('moodboard')" :assetData="msg.assetPayload" />
+        <MoodBoardViewer
+          v-if="isAsset('moodboard')"
+          :assetData="msg.assetPayload"
+          :layout="msg.collage"
+          :editable="canAct() && !roomStore.isHost && roomStore.myStatus !== 'observer'"
+          @arrange="(i, p) => roomStore.arrangeCollage(msg.id, i, p)"
+        />
 
         <div v-if="isAsset('summary', 'contract')" class="mt-3 p-3 bg-slate-950/80 border border-slate-700 rounded-xl flex items-center justify-between">
           <div class="flex items-center gap-2">

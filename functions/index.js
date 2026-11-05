@@ -7,12 +7,12 @@ import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 import { getSystemConfig } from './src/config.js';
-import { classifyError, createMessage, extractSvg, imageBlockFromDataUrl, responseText } from './src/claude.js';
-import { PROMPT_DEFAULTS, PROMPT_PLACEHOLDERS, PROMPT_VERSION, sketchToSvgPrompt, textToSvgPrompt, visionPrompt } from './src/prompts.js';
+import { classifyError, createMessage, extractSvg, imageBlockFromDataUrl, parseJsonObject, responseText } from './src/claude.js';
+import { PROFILE_DRAFT_PROMPT, PROMPT_DEFAULTS, PROMPT_PLACEHOLDERS, PROMPT_VERSION, sketchToSvgPrompt, textToSvgPrompt, visionPrompt } from './src/prompts.js';
 import { refineMeshy } from './src/mesh3d.js';
 import { logAiCall } from './src/log.js';
 import { FRIENDLY_ERRORS } from './src/mentor.js';
-import { assignProfileToRoom, ensureRoomAi, handleNewMessage, handlePollVote, loadProfile, postAiMessage, runCheck } from './src/engine.js';
+import { assignProfileToRoom, ensureRoomAi, handleNewMessage, handlePollVote, handleSuggestionAnswer, loadProfile, postAiMessage, runCheck } from './src/engine.js';
 import { endSession, joinRoom, maybeStartSession, reopenSession, runSessionJob, sessionTick } from './src/session.js';
 import { logBoardObjectChange, logMessageChange } from './src/events.js';
 import { authUrl, exportRoom, handleCallback, runDueExports } from './src/drive.js';
@@ -102,10 +102,17 @@ export const onRoomMessage = onDocumentCreated(
   }
 );
 
-// Votes on the AI's polls: once a majority has voted, the AI follows up on the result (engine.js handlePollVote)
+// Answers to the AI's polls and suggestion cards: a settled poll or an accepted offer makes the AI follow up
+// (engine.js handlePollVote / handleSuggestionAnswer)
 export const onPollVote = onDocumentUpdated(
   { document: 'rooms/{roomId}/messages/{messageId}', secrets: ALL_SECRETS, timeoutSeconds: 300, memory: '512MiB', cpu: 1, concurrency: 80, maxInstances: 10 },
-  async event => handlePollVote(event.params.roomId, event.params.messageId, event.data?.before?.data(), event.data?.after?.data(), await engineSecrets())
+  async event => {
+    const { roomId, messageId } = event.params;
+    const before = event.data?.before?.data();
+    const after = event.data?.after?.data();
+    if (after?.suggestion) return handleSuggestionAnswer(roomId, messageId, before, after, await engineSecrets());
+    return handlePollVote(roomId, messageId, before, after, await engineSecrets());
+  }
 );
 
 // New rooms from this site get the default profile snapshot immediately
@@ -313,6 +320,38 @@ export const listRoomCreators = onCall({ maxInstances: 2 }, async request => {
 export const getPromptDefaults = onCall({ maxInstances: 2 }, async request => {
   requireAdmin(request);
   return { version: PROMPT_VERSION, defaults: PROMPT_DEFAULTS, placeholders: PROMPT_PLACEHOLDERS };
+});
+
+/** Profile editor: fills name, persona, expertise and tone from one sentence; the admin reviews before saving. */
+export const draftAiProfile = onCall({ secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 60, maxInstances: 2 }, async request => {
+  requireAdmin(request);
+  const text = String(request.data?.text || '').trim().slice(0, 500);
+  if (!text) throw new HttpsError('invalid-argument', 'Describe the AI in one sentence.');
+  const sys = await getSystemConfig();
+  const model = sys.models.mentor;
+  try {
+    const response = await createMessage(await anthropicKey(), {
+      model,
+      max_tokens: 1500,
+      output_config: { effort: 'low' },
+      system: PROFILE_DRAFT_PROMPT,
+      messages: [{ role: 'user', content: text }]
+    });
+    const out = parseJsonObject(responseText(response));
+    const clamp = (n, lo, hi, d) => (Number.isFinite(Number(n)) ? Math.min(hi, Math.max(lo, Math.round(Number(n)))) : d);
+    const draft = {
+      displayName: { 'zh-TW': String(out.displayName?.['zh-TW'] || '').slice(0, 30), en: String(out.displayName?.en || '').slice(0, 30) },
+      persona: String(out.persona || '').slice(0, 1500),
+      expertise: String(out.expertise || '').slice(0, 200),
+      casualness: clamp(out.casualness, 1, 5, 3),
+      maxSentences: clamp(out.maxSentences, 1, 8, 2)
+    };
+    await logAiCall({ kind: 'profile_draft', uid: request.auth.uid, model, promptVersion: PROMPT_VERSION, input: { text }, output: { draft } });
+    return draft;
+  } catch (err) {
+    await logAiCall({ kind: 'profile_draft', uid: request.auth.uid, model, input: { text }, error: { message: String(err?.message || err).slice(0, 500) } });
+    throw toHttpsError(err, 'draftAiProfile');
+  }
 });
 
 // ---------- Experiment flow (src/session.js) ----------

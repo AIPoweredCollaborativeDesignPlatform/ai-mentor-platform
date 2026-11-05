@@ -14,6 +14,8 @@ export interface AiProfile {
   shadowAssessment: boolean;
   displayName: { 'zh-TW': string; en: string };
   persona: string;
+  /** Professional background written into the AI's role, e.g. 'Industrial and furniture design' */
+  expertise: string;
   triggers: {
     pauseSeconds: number;
     minNewMessages: number;
@@ -37,8 +39,6 @@ export interface AiProfile {
   };
   /** Chat tone: casualness 1 (formal) ... 5 (very casual); maxSentences caps each chat message */
   style: { casualness: number; maxSentences: number };
-  /** With a time limit, this share of the time leans divergent (0-1) */
-  facilitation: { divergeShare: number };
   /** Overrides of the server's prompt blocks (functions/src/prompts.js PROMPT_DEFAULTS); missing = built-in */
   prompts: Record<string, string>;
   /** Optional basis / literature per field path, e.g. rationale['triggers.pauseSeconds'] */
@@ -66,12 +66,12 @@ const base = (): AiProfile => ({
   shadowAssessment: true,
   displayName: { 'zh-TW': 'AI 導師', en: 'AI Mentor' },
   persona: 'A calm, neutral design mentor who supports the team\'s own decisions, keeps track of what was agreed, and speaks briefly.',
+  expertise: 'Industrial and furniture design',
   triggers: { pauseSeconds: 8, minNewMessages: 3, maxMessagesBetweenChecks: 12, stallSeconds: 90, cooldownSeconds: 180 },
   memory: { updateEveryMessages: 15, updateOnWhiteboardShare: true },
   modules: { enable3D: true, enableMoodboard: true, enableFactRetrieval: true, enableSummary: true, enableWhiteboardAi: true },
   session: { expectedParticipants: 3, maxParticipants: 3, openingText: { 'zh-TW': '', en: '' }, taskDescription: { 'zh-TW': '', en: '' }, taskMinutes: 30, reminderMinutes: [5] },
   style: { casualness: 4, maxSentences: 2 },
-  facilitation: { divergeShare: 0.5 },
   prompts: {},
   rationale: {}
 });
@@ -91,8 +91,8 @@ export const withDefaults = (p: AiProfile): AiProfile => {
     ...base(),
     ...p,
     session: { ...session, openingText: localizedOf(session.openingText), taskDescription: localizedOf(session.taskDescription) },
+    triggers: { ...base().triggers, ...(p.triggers || {}) },
     style: { ...base().style, ...(p.style || {}) },
-    facilitation: { ...base().facilitation, ...(p.facilitation || {}) },
     prompts: { ...(p.prompts || {}) }
   };
 };

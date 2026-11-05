@@ -66,6 +66,19 @@ export async function getPromptDefaults(): Promise<PromptDefaults> {
   return (await httpsCallable<void, PromptDefaults>(functions, 'getPromptDefaults')()).data;
 }
 
+export interface ProfileDraft {
+  displayName: { 'zh-TW': string; en: string };
+  persona: string;
+  expertise: string;
+  casualness: number;
+  maxSentences: number;
+}
+
+/** One sentence -> name, persona, expertise and tone (functions/index.js draftAiProfile); nothing is saved. */
+export async function draftAiProfile(text: string): Promise<ProfileDraft> {
+  return (await httpsCallable<{ text: string }, ProfileDraft>(functions, 'draftAiProfile')({ text })).data;
+}
+
 /** Rooms created by the redesigned site (they carry appVersion), newest first. */
 export async function listStudyRooms(max = 100): Promise<StudyRoom[]> {
   const snap = await getDocs(query(collection(db, 'rooms'), orderBy('appVersion'), limit(max)));

@@ -151,6 +151,33 @@ export function useRoomMessages(ctx: RoomContext, setMyTyping: (typing: boolean)
     await patchMessage(msg, { pollVotes });
   };
 
+  // AI suggestion card: one answer per person (a new click replaces it); written by path so two
+  // people answering at once do not overwrite each other
+  const answerSuggestion = async (messageId: string, choice: 'accept' | 'decline') => {
+    const msg = findMessage(messageId);
+    if (!msg?.suggestion) return;
+    const answer = { uid: authStore.uid, name: authStore.displayName || t('common.participant'), choice, at: Date.now() };
+    msg.suggestion = { ...msg.suggestion, responses: { ...(msg.suggestion.responses || {}), [authStore.uid]: answer } };
+    try {
+      await updateDoc(roomDocRef(currentRoom.value!.roomId, 'messages', msg.id), { [`suggestion.responses.${authStore.uid}`]: answer });
+    } catch (e) {
+      console.warn('Failed to answer suggestion:', e);
+    }
+  };
+
+  // Moodboard collage: one image's position, written by path so two people arranging at once both land
+  const arrangeCollage = async (messageId: string, index: number, pos: { x: number; y: number; w: number; z: number }) => {
+    const msg = findMessage(messageId);
+    if (!msg) return;
+    const entry = { ...pos, by: authStore.uid, at: Date.now() };
+    msg.collage = { ...(msg.collage || {}), [index]: entry };
+    try {
+      await updateDoc(roomDocRef(currentRoom.value!.roomId, 'messages', msg.id), { [`collage.${index}`]: entry });
+    } catch (e) {
+      console.warn('Failed to arrange collage:', e);
+    }
+  };
+
   const addCustomPollOption = async (messageId: string, customOption: string) => {
     const cleanOption = customOption.trim();
     const msg = cleanOption ? findMessage(messageId) : undefined;
@@ -169,6 +196,8 @@ export function useRoomMessages(ctx: RoomContext, setMyTyping: (typing: boolean)
     updateCustomMessage,
     toggleMessageReaction,
     votePollOption,
+    answerSuggestion,
+    arrangeCollage,
     addCustomPollOption
   };
 }

@@ -52,6 +52,10 @@ export interface MessageItem {
   content: string;
   actionOptions?: string[];
   pollVotes?: Record<string, { uid: string; name: string; avatar: string; option: string }>;
+  /** AI offer shown as a card; each participant answers once per card (functions/src/engine.js) */
+  suggestion?: { responses: Record<string, SuggestionAnswer> };
+  /** Moodboard collage positions by image index, in % of the board (components/MoodBoardViewer.vue) */
+  collage?: Record<string, { x: number; y: number; w: number; z?: number; by?: string; at?: number }>;
   timestamp: number;
   status?: 'sending' | 'delivered' | 'failed';
   replyTo?: {
@@ -107,6 +111,23 @@ export interface RoomData {
   ai?: RoomAiView;
   /** Experiment flow, written only by Cloud Functions (functions/src/session.js) */
   session?: RoomSession;
+  progress?: RoomProgress;
+}
+
+export interface SuggestionAnswer {
+  uid: string;
+  name: string;
+  choice: 'accept' | 'decline';
+  at: number;
+}
+
+export type DesignStage = 'discover' | 'define' | 'develop' | 'deliver';
+
+/** Double Diamond display, written only by Cloud Functions from the AI's assessments */
+export interface RoomProgress {
+  stage: DesignStage | null;
+  milestones: { pain_points?: boolean; problem_statement?: boolean; ideas?: boolean; concept_selected?: boolean; model3d?: boolean };
+  updatedAt: number;
 }
 
 export interface RoomSession {

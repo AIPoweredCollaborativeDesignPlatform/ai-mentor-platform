@@ -172,7 +172,7 @@ service cloud.firestore {
           isRoomHost(roomId) ||
           (isAuthenticated() && resource.data.senderUid == request.auth.uid) ||
           (isApprovedParticipant(roomId) && (
-            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions', 'pollVotes', 'actionOptions']) ||
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions', 'pollVotes', 'actionOptions', 'suggestion', 'collage']) ||
             (resource.data.type == 'whiteboard_state' &&
               request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fileData', 'metadata']) &&
               request.resource.data.get('fileData', {}).diff(resource.data.get('fileData', {})).affectedKeys().hasOnly(['url']) &&

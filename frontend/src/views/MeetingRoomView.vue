@@ -16,6 +16,7 @@ import { setRoomLocale, t } from '../i18n';
 
 import RoomHeader from '../components/room/RoomHeader.vue';
 import ChatMessage from '../components/room/ChatMessage.vue';
+import DesignProgress from '../components/room/DesignProgress.vue';
 import ChatStatusBubbles from '../components/room/ChatStatusBubbles.vue';
 import ChatComposer from '../components/room/ChatComposer.vue';
 import AssetsDrawer from '../components/room/AssetsDrawer.vue';
@@ -416,6 +417,9 @@ onUnmounted(() => {
         class="flex flex-col h-full w-full min-w-0"
         :class="[isResizingWhiteboard ? 'transition-none' : 'transition-all duration-75', !showChatPane ? '!hidden' : isWhiteboardOpen && !isStacked ? 'flex-1 min-w-[260px]' : 'flex-1']"
       >
+        <!-- Double Diamond stage and milestones, judged by the AI (hidden in no-AI rooms) -->
+        <DesignProgress :compact="isStacked" />
+
         <main ref="chatContainerRef" @scroll="handleScroll" class="flex-1 overflow-y-auto w-full relative custom-scrollbar" :class="{ 'is-scrolling': isScrolling }">
           <div class="max-w-5xl mx-auto w-full p-3 sm:p-5 space-y-3">
             <div v-for="(msg, idx) in visibleChatMessages" :key="msg.id" :id="'msg_' + msg.id" :data-ai-msg="isAiMessage(msg) ? msg.id : undefined" class="transition-colors duration-500 rounded-xl">

@@ -1,11 +1,15 @@
 <script setup lang="ts">
 import { t } from '../i18n';
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { Palette, Copy, Check, ExternalLink, Sparkles, X } from 'lucide-vue-next';
 
 const props = defineProps<{
   assetData: any;
+  /** Shared arrangement (message.collage); missing entries use the starting collage */
+  layout?: Record<string, { x: number; y: number; w: number; z?: number }>;
+  editable?: boolean;
 }>();
+const emit = defineEmits<{ (e: 'arrange', index: number, pos: { x: number; y: number; w: number; z: number }): void }>();
 
 const copiedHex = ref<string | null>(null);
 const selectedItem = ref<{
@@ -99,6 +103,85 @@ const openPreview = (img: any, index: number) => {
 const closePreview = () => {
   selectedItem.value = null;
 };
+
+// ---------- Collage ----------
+// Positions are % of the board (x, y = top-left; height follows the 4:3 image). Every participant sees
+// the same arrangement: moves are stored on the message (messages.collage.{index}, stores/room/messages.ts).
+type Pos = { x: number; y: number; w: number; z: number };
+const items = computed<any[]>(() =>
+  props.assetData?.images || props.assetData?.slices || (props.assetData?.keywords || []).slice(0, 4).map((kw: string) => ({ title: kw, caption: kw }))
+);
+// Loose starting slots, largest first; the AI's "size" (large / medium / small) picks the slot
+const SLOTS: Omit<Pos, 'z'>[] = [
+  { x: 2, y: 4, w: 44 },
+  { x: 63, y: 38, w: 34 },
+  { x: 29, y: 55, w: 30 },
+  { x: 49, y: 3, w: 26 },
+  { x: 3, y: 61, w: 22 },
+  { x: 78, y: 6, w: 20 }
+];
+const SIZE_RANK: Record<string, number> = { large: 0, medium: 1, small: 2 };
+const defaultLayout = computed<Pos[]>(() => {
+  const order = items.value
+    .map((img, i) => ({ i, rank: SIZE_RANK[img?.size] ?? (i === 0 ? 0 : 1) }))
+    .sort((a, b) => a.rank - b.rank || a.i - b.i);
+  const out: Pos[] = [];
+  order.forEach(({ i }, slot) => {
+    const s = SLOTS[slot] || { x: 4 + (slot % 4) * 22, y: 8 + Math.floor(slot / 4) * 30, w: 20 };
+    out[i] = { ...s, z: slot + 1 };
+  });
+  return out;
+});
+const dragging = ref<{ i: number; pos: Pos } | null>(null);
+const pos = (i: number): Pos => {
+  if (dragging.value?.i === i) return dragging.value.pos;
+  const saved = props.layout?.[i];
+  return saved ? { x: saved.x, y: saved.y, w: saved.w, z: saved.z ?? 1 } : defaultLayout.value[i];
+};
+
+const boardRef = ref<HTMLElement | null>(null);
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+const startDrag = (e: PointerEvent, i: number, mode: 'move' | 'resize') => {
+  if (!props.editable || !boardRef.value) return;
+  const rect = boardRef.value.getBoundingClientRect();
+  const start = pos(i);
+  const topZ = Math.max(...items.value.map((_, k) => pos(k).z)) + 1;
+  const sx = e.clientX;
+  const sy = e.clientY;
+  let moved = false;
+  dragging.value = { i, pos: { ...start, z: topZ } };
+  const target = e.currentTarget as HTMLElement;
+  target.setPointerCapture?.(e.pointerId);
+
+  const onMove = (ev: PointerEvent) => {
+    const dx = ((ev.clientX - sx) / rect.width) * 100;
+    const dy = ((ev.clientY - sy) / rect.height) * 100;
+    if (Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) > 4) moved = true;
+    const p = dragging.value!.pos;
+    if (mode === 'move') {
+      p.x = clamp(start.x + dx, -start.w / 2, 100 - start.w / 2);
+      p.y = clamp(start.y + dy, -10, 90);
+    } else {
+      p.w = clamp(start.w + dx, 12, 80);
+    }
+  };
+  const onUp = () => {
+    target.removeEventListener('pointermove', onMove);
+    target.removeEventListener('pointerup', onUp);
+    target.removeEventListener('pointercancel', onUp);
+    const final = dragging.value!.pos;
+    // A tap without movement opens the preview instead
+    if (moved) emit('arrange', i, { x: Math.round(final.x * 10) / 10, y: Math.round(final.y * 10) / 10, w: Math.round(final.w * 10) / 10, z: final.z });
+    else if (mode === 'move') openPreview(items.value[i], i);
+    // Keep the local position until the shared one arrives
+    const session = dragging.value;
+    if (!moved) dragging.value = null;
+    else setTimeout(() => dragging.value === session && (dragging.value = null), 1200);
+  };
+  target.addEventListener('pointermove', onMove);
+  target.addEventListener('pointerup', onUp);
+  target.addEventListener('pointercancel', onUp);
+};
 </script>
 
 <template>
@@ -127,63 +210,41 @@ const closePreview = () => {
       </span>
     </div>
 
-    <!-- Concept Imagery Grid -->
-    <div v-if="(assetData?.images?.length || assetData?.slices?.length || assetData?.keywords?.length)" class="mb-3">
-      <h5 class="text-xs font-semibold text-slate-400 mb-1.5 flex items-center justify-between">
+    <p v-if="assetData?.description" class="text-xs text-slate-400 mb-3 leading-relaxed">{{ assetData.description }}</p>
+
+    <!-- Collage: loose layout the team can rearrange together (drag to move, corner to resize) -->
+    <div v-if="items.length" class="mb-3">
+      <h5 class="text-xs font-semibold text-slate-400 mb-1.5 flex items-center justify-between gap-2">
         <span>{{ t('mood.imagery') }}</span>
+        <span v-if="editable" class="text-[10px] font-normal text-slate-500">{{ t('mood.arrangeHint') }}</span>
       </h5>
-      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+      <div ref="boardRef" class="relative w-full aspect-[4/3] sm:aspect-[16/10] rounded-xl bg-slate-950 border border-slate-800 overflow-hidden select-none">
         <div
-          v-for="(img, i) in (assetData.images || assetData.slices || (assetData.keywords || ['concept']).slice(0, 4).map((kw: string) => ({ title: kw, caption: kw })))"
+          v-for="(img, i) in items"
           :key="i"
-          class="group relative rounded-xl overflow-hidden aspect-[4/3] bg-slate-900 border cursor-pointer shadow transition duration-300"
-          :class="isHeroCard(img, i) ? 'border-slate-600 hover:border-slate-500' : 'border-slate-800 hover:border-slate-600'"
-          @click="openPreview(img, i)"
+          class="group absolute rounded-lg overflow-hidden border border-slate-700 bg-slate-900 shadow-lg aspect-[4/3]"
+          :class="editable ? 'cursor-grab active:cursor-grabbing touch-none' : 'cursor-pointer'"
+          :style="{ left: `${pos(i).x}%`, top: `${pos(i).y}%`, width: `${pos(i).w}%`, zIndex: pos(i).z }"
+          @pointerdown="startDrag($event, i, 'move')"
+          @click="!editable && openPreview(img, i)"
         >
           <img
             :src="getImageUrl(img, i)"
             :alt="img?.title || img?.caption || 'Concept'"
             @error="handleImgError($event, img)"
-            class="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+            class="w-full h-full object-cover pointer-events-none"
+            draggable="false"
             loading="lazy"
           />
-
-          <!-- Top Row: Category / Hero Badge & Sleek Direct Source Link -->
-          <div class="absolute top-1.5 left-1.5 right-1.5 flex items-center justify-between z-10 gap-1">
-            <!-- Card 1: Dedicated Hero Concept Badge -->
-            <span
-              v-if="isHeroCard(img, i)"
-              class="bg-indigo-950/85 text-indigo-300 px-1.5 py-0.5 rounded text-[8px] font-semibold border border-indigo-500/40 shadow-xs flex items-center gap-1 shrink-0"
-            >
-              <Sparkles class="w-2.5 h-2.5 text-indigo-400" />
-              <span>{{ t('mood.hero') }}</span>
-            </span>
-            <!-- Other Cards: Specific Category Badge -->
-            <span
-              v-else-if="img?.category"
-              class="bg-black/75 text-white px-1.5 py-0.5 rounded text-[8px] font-semibold border border-amber-500/30 shadow-xs truncate"
-            >
-              {{ categoryLabel(img.category) }}
-            </span>
-            <span v-else></span>
-
-            <!-- Direct Image Source External Link Icon -->
-            <a
-              :href="getSourceUrl(img)"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="bg-black/75 hover:bg-slate-800 text-slate-300 hover:text-white p-1 rounded-md border border-slate-700/80 shadow-xs flex items-center justify-center transition shrink-0"
-              @click.stop
-              :title="t('mood.openRef', { url: getSourceUrl(img) })"
-            >
-              <ExternalLink class="w-2.5 h-2.5 sm:w-3 sm:h-3" />
-            </a>
-          </div>
-
-          <!-- Title Overlay -->
-          <div class="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent flex items-end p-2 opacity-90">
-            <p class="text-[11px] text-slate-200 font-medium truncate">{{ img?.title || img?.caption || t('mood.conceptRef') }}</p>
-          </div>
+          <p class="absolute inset-x-0 bottom-0 px-1.5 py-0.5 bg-slate-950/75 text-[10px] text-slate-200 truncate opacity-0 group-hover:opacity-100 transition-opacity">
+            {{ img?.title || img?.caption || t('mood.conceptRef') }}
+          </p>
+          <span
+            v-if="editable"
+            class="absolute right-0 bottom-0 w-4 h-4 pointer-coarse:w-5 pointer-coarse:h-5 cursor-nwse-resize bg-slate-950/70 border-l border-t border-slate-600 rounded-tl opacity-0 group-hover:opacity-100 pointer-coarse:opacity-100"
+            :title="t('mood.resize')"
+            @pointerdown.stop="startDrag($event, i, 'resize')"
+          ></span>
         </div>
       </div>
     </div>

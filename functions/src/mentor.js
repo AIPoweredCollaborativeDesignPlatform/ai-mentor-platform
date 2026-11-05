@@ -36,7 +36,8 @@ export async function analyze({ apiKey, falKey, roomId, room, messages, particip
     messages,
     profile,
     memory,
-    session: room.session
+    session: room.session,
+    progress: room.progress
   });
   // `note` replaces the generic trigger line for system-initiated responses (e.g. a settled poll)
   const userPrompt = `Conversation transcript:\n${buildTranscript(messages, participants)}\n\n${rosterNote ? `${rosterNote}\n` : ''}${
@@ -57,7 +58,7 @@ export async function analyze({ apiKey, falKey, roomId, room, messages, particip
     kind: 'mentor',
     roomId,
     callerUid: callerUid || null,
-    trigger: forced && reason !== 'poll_settled' ? 'forced' : reason,
+    trigger: forced && !['poll_settled', 'suggestion_accepted'].includes(reason) ? 'forced' : reason,
     visible, // false = shadow assessment (no-AI / reactive conditions, or cooldown)
     triggerMessageId: messages.at(-1)?.id || null,
     profileId: profile.id || null,

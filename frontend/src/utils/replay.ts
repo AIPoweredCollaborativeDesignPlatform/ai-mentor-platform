@@ -1,5 +1,5 @@
 import { t as tr, type MessageKey } from '../i18n';
-import { collection, getDocs, orderBy, query } from 'firebase/firestore';
+import { collection, getDocs, orderBy, query, where } from 'firebase/firestore';
 import { db } from '../firebase/config';
 
 /**
@@ -58,6 +58,47 @@ export async function loadFinalBoard(roomId: string, boardId: string): Promise<M
 
 export const wasTruncated = (fabric: Record<string, any>) =>
   Object.values(fabric || {}).some(v => typeof v === 'string' && v.startsWith('[omitted '));
+
+/**
+ * One AI check from the research log (aiLogs, functions/src/mentor.js): what the AI noticed and decided,
+ * including checks where it stayed silent and shadow checks of conditions where it cannot speak.
+ */
+export interface AiThought {
+  id: string;
+  at: number;
+  kind: 'mentor' | 'memory_update';
+  trigger: string;
+  /** false = shadow check (the AI could not have spoken) */
+  visible: boolean;
+  spoke: boolean;
+  assessment: Record<string, any> | null;
+  aiMessage: string;
+  error: string;
+  rawText: string;
+  memorySummary: string;
+}
+
+export async function loadAiThoughts(roomId: string): Promise<AiThought[]> {
+  // A single equality filter needs no composite index; sorted here
+  const snap = await getDocs(query(collection(db, 'aiLogs'), where('roomId', '==', roomId)));
+  return snap.docs
+    .map(d => ({ id: d.id, ...(d.data() as any) }))
+    .filter(x => x.kind === 'mentor' || x.kind === 'memory_update')
+    .map(x => ({
+      id: x.id,
+      at: x.createdAt?.toMillis?.() ?? 0,
+      kind: x.kind,
+      trigger: x.trigger || '',
+      visible: x.visible !== false,
+      spoke: x.visible !== false && Boolean(x.output?.shouldIntervene),
+      assessment: x.output?.assessment || null,
+      aiMessage: x.output?.result?.aiMessage || '',
+      error: x.error ? `${x.error.category || ''} ${x.error.message || ''}`.trim() : '',
+      rawText: x.output?.rawText || '',
+      memorySummary: x.output?.memory?.summary || ''
+    }))
+    .sort((a, b) => a.at - b.at);
+}
 
 export async function loadEvents(roomId: string): Promise<ResearchEvent[]> {
   const snap = await getDocs(query(collection(db, 'rooms', roomId, 'events'), orderBy('at')));

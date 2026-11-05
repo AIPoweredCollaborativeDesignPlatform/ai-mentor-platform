@@ -15,6 +15,7 @@ export const DEFAULT_PROFILE = {
   shadowAssessment: true,
   displayName: { 'zh-TW': 'AI 導師', en: 'AI Mentor' },
   persona: 'A calm, neutral design mentor who supports the team\'s own decisions, keeps track of what was agreed, and speaks briefly.',
+  expertise: 'Industrial and furniture design',
   triggers: {
     pauseSeconds: 8, // quiet time after the last message before an automatic check
     minNewMessages: 3, // new messages needed for a pause-triggered check
@@ -45,8 +46,6 @@ export const DEFAULT_PROFILE = {
   },
   // Chat tone: 1 formal ... 5 very casual; maxSentences caps every chat message (assets are not limited)
   style: { casualness: 4, maxSentences: 2 },
-  // With a time limit, the first share of the time leans divergent (src/prompts.js pacing)
-  facilitation: { divergeShare: 0.5 },
   // Overrides of src/prompts.js PROMPT_DEFAULTS, by block; empty = built-in text
   prompts: {},
   rationale: {}

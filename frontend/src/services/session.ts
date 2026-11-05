@@ -45,6 +45,11 @@ export async function updateStudyRoomDetails(roomId: string, roomName: string, r
   return (await fn({ roomId, roomName, roomEmoji })).data;
 }
 
+/** "Change back" under the AI's automatic room name (functions/src/rooms.js revertAutoRoomName). */
+export async function revertRoomName(roomId: string, messageId: string): Promise<void> {
+  await httpsCallable<{ roomId: string; messageId: string }, { changed: boolean }>(functions, 'revertRoomName')({ roomId, messageId });
+}
+
 export async function endStudySession(roomId: string): Promise<boolean> {
   const fn = httpsCallable<{ roomId: string }, { ended: boolean }>(functions, 'endStudySession');
   return (await fn({ roomId })).data.ended;

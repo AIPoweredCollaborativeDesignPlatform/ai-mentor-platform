@@ -55,13 +55,17 @@ const fillFromSentence = async () => {
   filling.value = true;
   fillError.value = '';
   try {
-    const d = await draftAiProfile(text);
+    const d = await draftAiProfile(text, draft.value.session.taskMode);
     if (d.displayName['zh-TW']) draft.value.displayName['zh-TW'] = d.displayName['zh-TW'];
     if (d.displayName.en) draft.value.displayName.en = d.displayName.en;
     if (d.persona) draft.value.persona = d.persona;
     if (d.expertise) draft.value.expertise = d.expertise;
     draft.value.style.casualness = d.casualness;
     draft.value.style.maxSentences = d.maxSentences;
+    if (d.openingText?.['zh-TW'] || d.openingText?.en) draft.value.session.openingText = d.openingText;
+    if (d.taskDescription?.['zh-TW'] || d.taskDescription?.en) draft.value.session.taskDescription = d.taskDescription;
+    // Character-specific versions of the role, tone, knowledge and session blocks (Advanced)
+    Object.assign(draft.value.prompts, d.prompts || {});
     draft.value.rationale.persona = t('pe.aiFillRationale', { text });
   } catch (e: any) {
     fillError.value = t('pe.aiFillFailed', { error: e?.message || String(e) });
@@ -314,7 +318,24 @@ const input = 'w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 
           <input v-model.lazy="reminderText" :disabled="noTimeLimit" :class="[input, noTimeLimit ? 'opacity-40' : '']" :placeholder="t('pe.remindersPlaceholder')" />
         </label>
         <!-- One text per language; the room language of this profile is the one used (highlighted) -->
-        <div v-for="field in (['openingText', 'taskDescription'] as const)" :key="field" class="space-y-1">
+        <!-- Design task: given by the study (or none), or suggested by the AI at the start -->
+        <div class="space-y-1">
+          <span class="text-xs text-slate-400">{{ t('pe.taskMode') }}</span>
+          <div class="grid sm:grid-cols-2 gap-2">
+            <button
+              v-for="m in (['assigned', 'ai_suggest'] as const)"
+              :key="m"
+              type="button"
+              @click="draft.session.taskMode = m"
+              class="text-left p-3 rounded-xl border text-xs transition"
+              :class="draft.session.taskMode === m ? 'border-sky-400 bg-sky-500/15 text-sky-100' : 'border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-600'"
+            >
+              <span class="block font-semibold">{{ t(m === 'assigned' ? 'pe.taskAssigned' : 'pe.taskAiSuggest') }}</span>
+              <span class="block text-[11px] text-slate-400 mt-0.5">{{ t(m === 'assigned' ? 'pe.taskAssignedHelp' : 'pe.taskAiSuggestHelp') }}</span>
+            </button>
+          </div>
+        </div>
+        <div v-for="field in (['openingText', 'taskDescription'] as const)" v-show="field === 'openingText' || draft.session.taskMode !== 'ai_suggest'" :key="field" class="space-y-1">
           <span class="text-xs text-slate-400">{{ t(field === 'openingText' ? 'pe.opening' : 'pe.task') }}</span>
           <div class="grid sm:grid-cols-2 gap-2">
             <label v-for="l in LANGS" :key="l.code" class="block space-y-0.5">

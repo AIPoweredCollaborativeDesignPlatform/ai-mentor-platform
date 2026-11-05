@@ -6,6 +6,7 @@ import { getSystemConfig } from './config.js';
 import { loadDefaultProfile, loadProfile, publicAiView } from './profiles.js';
 import { logAiCall } from './log.js';
 import { isOnline } from './session.js';
+import { autoRenameRoom } from './rooms.js';
 
 /**
  * Server-side AI activity manager: one decision-maker per room.
@@ -207,6 +208,7 @@ export async function runCheck(roomId, secrets, { reason, forced = false, caller
     const memoryUpdate = {};
 
     if (out.assessment && profile.mode !== 'none') await updateProgress(roomId, latestRoom.progress, out.assessment, messages);
+    if (out.result?.roomTitle && profile.mode === 'proactive' && !aborted) await autoRenameRoom(roomId, out.result.roomTitle).catch(() => {});
 
     if (aborted) {
       await logAiCall({ kind: 'trigger_skip', roomId, reason, detail: 'aborted_by_user' });

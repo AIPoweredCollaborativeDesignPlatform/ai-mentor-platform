@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 import { getSystemConfig } from './config.js';
-import { createMessage, responseText } from './claude.js';
+import { createMessage, parseJsonObject, responseText } from './claude.js';
 import { buildTranscript, PROMPT_VERSION, sessionMessagePrompt } from './prompts.js';
 import { acquireLock, ensureRoomAi, fetchContext, postAiMessage, releaseLock, startPresence } from './engine.js';
 import { writeEvent } from './events.js';
@@ -255,11 +255,19 @@ async function writeSessionMessage({ apiKey, roomId, room, profile, memory, kind
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       const response = await createMessage(apiKey, { model, max_tokens: 1000, output_config: { effort: 'low' }, system, messages: [{ role: 'user', content: user }] });
-      const text = responseText(response).trim();
+      let text = responseText(response).trim();
       if (!text) throw new Error('Empty response');
+      // Kickoff with AI-suggested briefs: {"message", "topics"} -> message + poll
+      let topics = [];
+      if (kind === 'kickoff' && profile.session?.taskMode === 'ai_suggest') {
+        const out = parseJsonObject(text);
+        if (!out.message) throw new Error('No message in kickoff JSON');
+        text = String(out.message).trim();
+        topics = (Array.isArray(out.topics) ? out.topics : []).map(s => String(s).trim().slice(0, 60)).filter(Boolean).slice(0, 4);
+      }
       const usage = response.usage ? { input: response.usage.input_tokens, output: response.usage.output_tokens } : null;
-      await logAiCall({ ...log, output: { text }, usage, latencyMs: Date.now() - startedAt });
-      return { text, meta: { model, promptVersion: PROMPT_VERSION, usage, profileId: profile.id || null, profileVersion: profile.version ?? null, session: kind } };
+      await logAiCall({ ...log, output: { text, topics }, usage, latencyMs: Date.now() - startedAt });
+      return { text, topics, meta: { model, promptVersion: PROMPT_VERSION, usage, profileId: profile.id || null, profileVersion: profile.version ?? null, session: kind } };
     } catch (err) {
       lastErr = err;
       await sleep(attempt * 4000);
@@ -304,7 +312,7 @@ export async function runSessionJob(job, secrets) {
     const out = await writeSessionMessage({ apiKey: secrets.anthropic, roomId, room, profile, memory: roomAi.memory, kind, minutes });
     if (!out) return;
     if ((await roomRef(roomId).get()).data()?.session?.phase !== 'running') return;
-    await postAiMessage(roomId, room, profile, { content: out.text, meta: out.meta });
+    await postAiMessage(roomId, room, profile, { content: out.text, actionOptions: out.topics || [], meta: out.meta });
     await db().doc(`roomAi/${roomId}`).set({
       state: { lastInterventionAt: Date.now() },
       memory: { aiHistory: [...(roomAi.memory?.aiHistory || []), { at: Date.now(), type: `session_${kind}`, text: out.text.slice(0, 300) }].slice(-20) }

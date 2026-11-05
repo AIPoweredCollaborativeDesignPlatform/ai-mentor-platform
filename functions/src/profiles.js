@@ -41,6 +41,8 @@ export const DEFAULT_PROFILE = {
     // Both may be a plain string (older profiles) or { 'zh-TW', en }; the room language picks one
     openingText: '', // posted verbatim by the AI at the start
     taskDescription: '', // the design task; the AI opens the topic from it and keeps it in mind
+    // 'assigned' = the task above (or none); 'ai_suggest' = the AI opens with a few briefs to pick from
+    taskMode: 'assigned',
     taskMinutes: 30, // 0 = no time limit (no reminders, no time-up message)
     reminderMinutes: [5] // minutes before the end at which the AI writes a reminder
   },

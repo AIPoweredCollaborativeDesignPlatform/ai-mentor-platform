@@ -2,7 +2,7 @@
 // Profiles may override any block (profile.prompts); the profile version then identifies the wording used.
 import { localized } from './i18n.js';
 
-export const PROMPT_VERSION = 'v12-2026-11-05';
+export const PROMPT_VERSION = 'v13-2026-11-05';
 
 const LANGUAGE_NAMES = { en: 'English', 'zh-TW': 'Traditional Chinese (繁體中文)' };
 export const languageName = code => LANGUAGE_NAMES[code] || LANGUAGE_NAMES['zh-TW'];
@@ -123,6 +123,11 @@ Your persona defines your personality and voice; follow it. Never evaluate peopl
 Goal of this message: {{goal}}
 Casualness {{casualness}}/5: {{casualnessLabel}}; match the register (not the content) of: "{{casualnessExample}}". Write at most {{maxSentences}} short sentence(s) in {{lang}}. Reply with the message text only (no JSON, no quotes).`,
   sessionKickoff: `The session has just started and the opening text above has been posted. Say in a few words how long the session lasts ({{duration}}), then open the discussion of the task with one easy, open first question that invites lots of ideas. Do not repeat the opening text.`,
+  sessionKickoffTopics: `The session has just started and the opening text above (if any) has been posted. There is no fixed design task: the team picks its own. Say in a few words how long the session lasts ({{duration}}), then offer 4 design briefs they can pick, combine or replace with their own idea.
+Each brief is a piece of furniture or an everyday product of medium difficulty, the kind first- and second-year design students work on, phrased like "a ... for [a user or situation]", "a ...-style ...", "a ... that can ...". Vary the users, styles and functions; keep each brief under 20 characters in Chinese or 8 words in English.
+Return ONLY one JSON object: {"message": "your chat message (without listing the briefs)", "topics": ["brief 1", "brief 2", "brief 3", "brief 4"]}. The briefs are shown as a poll under your message.`,
+  taskOpen: `There is no fixed design task: the team chooses its own (furniture or an everyday product), from your opening suggestions or their own idea. Treat whatever they agree on in the conversation as the task.`,
+  roomTitle: `The room still has its default name. Once the team's design direction is clear (an agreed problem statement or a chosen concept), add a top-level "roomTitle" to your JSON: a short, plain name for their design in {{lang}} (at most 16 characters in Chinese or 5 words in English). Add it only once, and only when the direction is really settled; otherwise leave it out.`,
   sessionReminder: `About {{minutesLeft}} minute(s) remain in the session. Remind the team of the remaining time and, based on where the discussion stands, suggest one thing worth focusing on. Do not rush them.`,
   sessionTimeUp: `The session time is up. Tell the team that time is up, briefly acknowledge where they ended, and thank them. Do not open new topics.`,
 
@@ -154,8 +159,14 @@ Return ONLY one JSON object:
   "persona": "2-4 sentences in English: personality, attitude towards the designers, and how it talks (sentence length, typical phrases, emoji or not)",
   "expertise": "short English phrase, e.g. Industrial and furniture design",
   "casualness": 1-5 (1 formal ... 5 very casual group chat),
-  "maxSentences": 1-8 (sentences per chat message)
-}`;
+  "maxSentences": 1-8 (sentences per chat message),
+  "openingText": { "zh-TW": "...", "en": "..." },
+  "taskDescription": { "zh-TW": "...", "en": "..." },
+  "prompts": { "<block key>": "rewritten block", ... }
+}
+- openingText: the welcome posted verbatim when the session opens, in the character's own voice (2-4 sentences; what the session is about, that the team designs together, nothing about grading).
+- taskDescription: only when a task brief is requested below (otherwise empty strings). A design brief of medium difficulty for first- or second-year design students: a piece of furniture or an everyday product, for whom, in which situation, with what to deliver (concept, sketches, a 3D model). 2-4 sentences. If the researcher's sentence names a topic, use it.
+- prompts: rewrite each block given below so the character's attitude, voice and expert knowledge show in it. Keep the purpose, every rule and every {{placeholder}} exactly (same names, same double braces); do not add or drop placeholders; write the blocks in English.`;
 
 /** Placeholders available in each block (shown in the admin editor). */
 export const PROMPT_PLACEHOLDERS = {
@@ -167,6 +178,8 @@ export const PROMPT_PLACEHOLDERS = {
   outputFormat: ['lang'],
   sessionMessage: ['name', 'persona', 'task', 'goal', 'casualness', 'casualnessLabel', 'casualnessExample', 'maxSentences', 'lang'],
   sessionKickoff: ['duration'],
+  sessionKickoffTopics: ['duration'],
+  roomTitle: ['lang'],
   sessionReminder: ['minutesLeft'],
   textToSvg: ['svgRules', 'request'],
   sketchToSvg: ['lang', 'svgRules', 'notes']
@@ -291,7 +304,7 @@ function clock(prompts, session) {
   return fill(block(prompts, 'clock'), { elapsed: Math.round(elapsed / 60000), total: Math.round((end - start) / 60000) });
 }
 
-export function mentorSystemPrompt({ config, language, whiteboardMemories, participants, messages, profile, memory, session, progress }) {
+export function mentorSystemPrompt({ config, language, whiteboardMemories, participants, messages, profile, memory, session, progress, roomNaming = false }) {
   const lang = languageName(language);
   const prompts = profile?.prompts;
   const memories = (whiteboardMemories || []).slice(-6)
@@ -301,7 +314,8 @@ export function mentorSystemPrompt({ config, language, whiteboardMemories, parti
 
   return [
     fill(block(prompts, 'role'), { name, persona: profile?.persona || 'calm, neutral and brief', expertise: profile?.expertise || 'design' }),
-    task ? `The team's design task (keep the discussion anchored to it, while ideas may roam widely): ${task}` : '',
+    task ? `The team's design task (keep the discussion anchored to it, while ideas may roam widely): ${task}`
+      : profile?.session?.taskMode === 'ai_suggest' ? block(prompts, 'taskOpen') : '',
     `Always write user-facing text in ${lang}.`,
     `Modules enabled: 3D=${config.enable3D}, Moodboard=${config.enableMoodboard}, FactRetrieval=${config.enableFactRetrieval}, Summary=${config.enableSummary !== false}. Never produce an asset type whose module is disabled.`,
     renderMemory(memory),
@@ -312,7 +326,8 @@ export function mentorSystemPrompt({ config, language, whiteboardMemories, parti
     clock(prompts, session),
     fill(block(prompts, 'style'), styleVars(profile, language)),
     fill(block(prompts, 'rules'), { teamSize: teamSize(participants) }),
-    fill(block(prompts, 'outputFormat'), { lang })
+    fill(block(prompts, 'outputFormat'), { lang }),
+    roomNaming ? fill(block(prompts, 'roomTitle'), { lang }) : ''
   ].filter(Boolean).join('\n\n');
 }
 
@@ -344,8 +359,9 @@ const sessionDuration = profile => {
  */
 export function sessionMessagePrompt({ kind, profile, language, minutesLeft }) {
   const prompts = profile?.prompts;
-  const goalKey = { kickoff: 'sessionKickoff', reminder: 'sessionReminder', time_up: 'sessionTimeUp' }[kind];
-  return fill(block(prompts, 'sessionMessage'), {
+  const goalKey = kind === 'kickoff' && profile?.session?.taskMode === 'ai_suggest' ? 'sessionKickoffTopics'
+    : { kickoff: 'sessionKickoff', reminder: 'sessionReminder', time_up: 'sessionTimeUp' }[kind];
+  const text = fill(block(prompts, 'sessionMessage'), {
     name: profile?.displayName?.[language] || profile?.displayName?.en || 'AI Mentor',
     persona: profile?.persona || 'calm, neutral and brief',
     task: localized(profile?.session?.taskDescription, language) || 'n/a',
@@ -353,4 +369,7 @@ export function sessionMessagePrompt({ kind, profile, language, minutesLeft }) {
     lang: languageName(language),
     ...styleVars(profile, language)
   });
+  // The briefs come back as JSON (session.js turns them into a poll), overriding "message text only"
+  return goalKey === 'sessionKickoffTopics' ? `${text}
+For this message only: reply with the JSON object described in the goal, not plain text.` : text;
 }

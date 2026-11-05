@@ -11,6 +11,7 @@ import { useRoomStore } from '../../stores/room';
 import type { MessageItem } from '../../types';
 import { formatMessageText, formatTime, highlightMentions, isMentioning, type MentionTarget } from '../../utils/chat';
 import { useRoomAi } from '../../composables/useRoomAi';
+import { revertRoomName } from '../../services/session';
 import ParametricViewer3D from '../ParametricViewer3D.vue';
 import ModelViewerGLB from '../ModelViewerGLB.vue';
 import MoodBoardViewer from '../MoodBoardViewer.vue';
@@ -79,6 +80,19 @@ const suggestionSummary = computed(() => [
 ].filter(Boolean).join(' · '));
 const answerSuggestion = (choice: 'accept' | 'decline') => canAct() && !roomStore.isHost && roomStore.answerSuggestion(msg.value.id, choice);
 
+// AI room name: switch back to the old one (server checks membership and posts the notice)
+const reverting = ref(false);
+const revertName = async () => {
+  reverting.value = true;
+  try {
+    await revertRoomName(roomStore.currentRoom!.roomId, msg.value.id);
+  } catch (e: any) {
+    roomStore.pushToast(t('msg.renameRevertFailed'), e?.message || String(e), 'error');
+  } finally {
+    reverting.value = false;
+  }
+};
+
 // Polls
 const voters = (option: string) => Object.values(msg.value.pollVotes || {}).filter(v => v?.option === option);
 const isMyVote = (option: string) => msg.value.pollVotes?.[authStore.uid]?.option === option;
@@ -137,10 +151,20 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
 
 <template>
   <!-- System status pill -->
-  <div v-if="msg.senderUid === 'system'" class="flex justify-center my-2.5">
+  <div v-if="msg.senderUid === 'system'" class="flex flex-col items-center gap-1.5 my-2.5">
     <div class="px-3.5 py-1 rounded-full bg-slate-900/70 border border-slate-800/80 text-[11px] text-slate-400 font-medium shadow-xs text-center max-w-md">
       {{ msg.content }}
     </div>
+    <!-- The AI named the room: anyone in it can switch back to the old name -->
+    <button
+      v-if="msg.metadata?.roomRename && !msg.metadata.roomRename.revertedAt && canAct() && !roomStore.isHost"
+      type="button"
+      @click="revertName"
+      :disabled="reverting"
+      class="px-3 py-1 pointer-coarse:py-1.5 rounded-full border border-slate-700 text-[11px] text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+    >
+      {{ t('msg.renameRevert', { name: msg.metadata.roomRename.previousName }) }}
+    </button>
   </div>
 
   <div v-else class="flex gap-2.5 group relative" :class="isMine ? 'flex-row-reverse' : ''">

@@ -62,6 +62,8 @@ export async function createRoom(uid, { roomName, roomEmoji, language, mentorCon
   const batch = db().batch();
   batch.set(roomDoc, {
     roomId, pin, roomName: name, roomEmoji: emoji,
+    // No name given: the AI may name the room once the design direction is clear (engine.js)
+    nameIsDefault: !String(roomName || '').trim(),
     hostUid: asParticipant ? '' : uid,
     createdBy: uid,
     participantUids: asParticipant ? [] : [uid],
@@ -152,7 +154,43 @@ export async function updateRoomDetails(roomId, uid, isAdmin, { roomName, roomEm
   const name = String(roomName || '').trim().slice(0, 60) || room.roomName;
   const emoji = String(roomEmoji || '').trim().slice(0, 8) || room.roomEmoji || '💡';
   if (name === room.roomName && emoji === room.roomEmoji) return { roomName: name, roomEmoji: emoji, changed: false };
-  await ref.update({ roomName: name, roomEmoji: emoji, updatedAt: Date.now() });
+  await ref.update({ roomName: name, roomEmoji: emoji, updatedAt: Date.now(), ...(name !== room.roomName ? { nameIsDefault: false } : {}) });
   await systemNotice(roomId, room.language, str('detailsUpdated', room.language, { emoji, name }), '📝');
   return { roomName: name, roomEmoji: emoji, changed: true };
+}
+
+/**
+ * The AI names a room that still has its default name, once (proactive condition only; engine.js).
+ * The chat notice carries the old name so any member can switch back (revertAutoRoomName).
+ */
+export async function autoRenameRoom(roomId, title) {
+  const ref = db().doc(`rooms/${roomId}`);
+  const room = (await ref.get()).data();
+  const name = String(title || '').trim().slice(0, 40);
+  if (!room || !name || !room.nameIsDefault || room.autoNamedAt || name === room.roomName) return;
+  await ref.update({ roomName: name, nameIsDefault: false, autoNamedAt: Date.now() });
+  await db().collection(`rooms/${roomId}/messages`).add({
+    senderUid: 'system', senderName: str('system', room.language), senderAvatar: '✨', type: 'text',
+    content: str('aiRenamed', room.language, { name }), timestamp: Date.now(),
+    metadata: { roomRename: { previousName: room.roomName, newName: name } }
+  });
+}
+
+/** "Change back" under the AI's rename notice: any approved member, the host or study staff. */
+export async function revertAutoRoomName(roomId, messageId, uid, isStaff) {
+  const ref = db().doc(`rooms/${roomId}`);
+  const [room, me, msgSnap] = await Promise.all([
+    ref.get().then(d => d.data()),
+    db().doc(`rooms/${roomId}/participants/${uid}`).get().then(d => d.data()),
+    db().doc(`rooms/${roomId}/messages/${messageId}`).get()
+  ]);
+  if (!room) throw new Error('Room not found');
+  if (!isStaff && room.hostUid !== uid && me?.status !== 'approved') throw new Error('Not a member of this room');
+  const rename = msgSnap.data()?.metadata?.roomRename;
+  if (!rename || rename.revertedAt) return { changed: false };
+  // A later manual rename wins: only switch back while the AI's name is still in place
+  if (room.roomName === rename.newName) await ref.update({ roomName: rename.previousName, updatedAt: Date.now() });
+  await msgSnap.ref.update({ 'metadata.roomRename.revertedAt': Date.now(), 'metadata.roomRename.revertedBy': me?.displayName || '' });
+  await systemNotice(roomId, room.language, str('renameReverted', room.language, { name: rename.previousName }), '↩️');
+  return { changed: true };
 }

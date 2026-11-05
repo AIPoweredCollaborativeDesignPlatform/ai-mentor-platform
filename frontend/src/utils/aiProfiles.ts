@@ -32,6 +32,8 @@ export interface AiProfile {
     /** Per language; the room language picks one */
     openingText: Localized;
     taskDescription: Localized;
+    /** 'assigned' = the task above (or none); 'ai_suggest' = the AI opens with a few briefs to pick from */
+    taskMode: 'assigned' | 'ai_suggest';
     /** 0 = no time limit */
     taskMinutes: number;
     /** Minutes before the end at which the AI writes a reminder */
@@ -70,7 +72,7 @@ const base = (): AiProfile => ({
   triggers: { pauseSeconds: 8, minNewMessages: 3, maxMessagesBetweenChecks: 12, stallSeconds: 90, cooldownSeconds: 180 },
   memory: { updateEveryMessages: 15, updateOnWhiteboardShare: true },
   modules: { enable3D: true, enableMoodboard: true, enableFactRetrieval: true, enableSummary: true, enableWhiteboardAi: true },
-  session: { expectedParticipants: 3, maxParticipants: 3, openingText: { 'zh-TW': '', en: '' }, taskDescription: { 'zh-TW': '', en: '' }, taskMinutes: 30, reminderMinutes: [5] },
+  session: { expectedParticipants: 3, maxParticipants: 3, openingText: { 'zh-TW': '', en: '' }, taskDescription: { 'zh-TW': '', en: '' }, taskMode: 'assigned', taskMinutes: 30, reminderMinutes: [5] },
   style: { casualness: 4, maxSentences: 2 },
   prompts: {},
   rationale: {}

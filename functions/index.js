@@ -16,7 +16,7 @@ import { assignProfileToRoom, ensureRoomAi, handleNewMessage, handlePollVote, ha
 import { endSession, joinRoom, maybeStartSession, reopenSession, runSessionJob, sessionTick } from './src/session.js';
 import { logBoardObjectChange, logMessageChange } from './src/events.js';
 import { authUrl, exportRoom, handleCallback, runDueExports } from './src/drive.js';
-import { createRoom, listPins, markRoomDeleted, updateMyProfile, updateRoomDetails } from './src/rooms.js';
+import { createRoom, listPins, markRoomDeleted, revertAutoRoomName, updateMyProfile, updateRoomDetails } from './src/rooms.js';
 import { consentTextFor, roomLanguage, str } from './src/i18n.js';
 import { keyStatus, resolveKeys, setKeyOverride, testProviders } from './src/apiKeys.js';
 import { claimAnonymousRooms, isAdminToken, isObserverToken, isPrimaryAdminToken, listAdmins, listObservers, setAdmin, setObserver, syncRole } from './src/roles.js';
@@ -281,6 +281,19 @@ export const updateStudyRoomDetails = onCall({ maxInstances: 10 }, async request
   }
 });
 
+/** "Change back" under the AI's automatic room name (src/rooms.js revertAutoRoomName). */
+export const revertRoomName = onCall({ maxInstances: 10 }, async request => {
+  requireAuth(request);
+  const roomId = String(request.data?.roomId || '');
+  const messageId = String(request.data?.messageId || '');
+  if (!ROOM_ID.test(roomId) || !messageId) throw new HttpsError('invalid-argument', 'Missing roomId or messageId');
+  try {
+    return await revertAutoRoomName(roomId, messageId, request.auth.uid, isObserverToken(request.auth.token));
+  } catch (err) {
+    throw new HttpsError('permission-denied', err?.message || String(err));
+  }
+});
+
 /** Admin room list "Delete": marks the room deleted (it leaves the lists and can no longer be joined);
  *  messages, boards, logs and the Drive export are kept for the study. A running session must be ended first. */
 export const adminDeleteRoom = onCall({ maxInstances: 2 }, async request => {
@@ -323,19 +336,27 @@ export const getPromptDefaults = onCall({ maxInstances: 2 }, async request => {
 });
 
 /** Profile editor: fills name, persona, expertise and tone from one sentence; the admin reviews before saving. */
-export const draftAiProfile = onCall({ secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 60, maxInstances: 2 }, async request => {
+const placeholdersOf = s => [...new Set(String(s).match(/\{\{\w+\}\}/g) || [])].sort().join(',');
+const samePlaceholders = (a, b) => placeholdersOf(a) === placeholdersOf(b);
+const localizedPair = v => ({ 'zh-TW': String(v?.['zh-TW'] || '').slice(0, 2000), en: String(v?.en || '').slice(0, 2000) });
+const DRAFT_MODEL = 'claude-sonnet-5-5';
+// Blocks the one-sentence fill may rewrite in the character's voice; the rest (format, rules for assets) stays built-in
+const DRAFT_BLOCKS = ['role', 'designThinking', 'style', 'sessionKickoff', 'sessionKickoffTopics', 'sessionReminder', 'sessionTimeUp'];
+
+export const draftAiProfile = onCall({ secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 180, maxInstances: 2 }, async request => {
   requireAdmin(request);
   const text = String(request.data?.text || '').trim().slice(0, 500);
   if (!text) throw new HttpsError('invalid-argument', 'Describe the AI in one sentence.');
-  const sys = await getSystemConfig();
-  const model = sys.models.mentor;
+  const wantTask = request.data?.taskMode !== 'ai_suggest';
+  // Fixed and independent of the mentor model, which must stay unchanged during a study run
+  const model = DRAFT_MODEL;
   try {
     const response = await createMessage(await anthropicKey(), {
       model,
-      max_tokens: 1500,
-      output_config: { effort: 'low' },
+      max_tokens: 12000,
+      output_config: { effort: 'medium' },
       system: PROFILE_DRAFT_PROMPT,
-      messages: [{ role: 'user', content: text }]
+      messages: [{ role: 'user', content: `Character: ${text}\n\n${wantTask ? 'Write a task brief (taskDescription).' : 'No task brief (taskDescription stays empty).'}\n\nBlocks to rewrite (JSON, key -> current text):\n${JSON.stringify(Object.fromEntries(DRAFT_BLOCKS.map(k => [k, PROMPT_DEFAULTS[k]])), null, 1)}` }]
     });
     const out = parseJsonObject(responseText(response));
     const clamp = (n, lo, hi, d) => (Number.isFinite(Number(n)) ? Math.min(hi, Math.max(lo, Math.round(Number(n)))) : d);
@@ -344,7 +365,13 @@ export const draftAiProfile = onCall({ secrets: [ANTHROPIC_API_KEY], timeoutSeco
       persona: String(out.persona || '').slice(0, 1500),
       expertise: String(out.expertise || '').slice(0, 200),
       casualness: clamp(out.casualness, 1, 5, 3),
-      maxSentences: clamp(out.maxSentences, 1, 8, 2)
+      maxSentences: clamp(out.maxSentences, 1, 8, 2),
+      openingText: localizedPair(out.openingText),
+      taskDescription: wantTask ? localizedPair(out.taskDescription) : { 'zh-TW': '', en: '' },
+      // A rewritten block is kept only if it uses exactly the built-in placeholders
+      prompts: Object.fromEntries(DRAFT_BLOCKS
+        .filter(k => typeof out.prompts?.[k] === 'string' && out.prompts[k].trim() && samePlaceholders(out.prompts[k], PROMPT_DEFAULTS[k]))
+        .map(k => [k, out.prompts[k].trim().slice(0, 6000)]))
     };
     await logAiCall({ kind: 'profile_draft', uid: request.auth.uid, model, promptVersion: PROMPT_VERSION, input: { text }, output: { draft } });
     return draft;

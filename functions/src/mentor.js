@@ -37,7 +37,9 @@ export async function analyze({ apiKey, falKey, roomId, room, messages, particip
     profile,
     memory,
     session: room.session,
-    progress: room.progress
+    progress: room.progress,
+    // A room without a given name gets one from the AI once (proactive condition; engine.js)
+    roomNaming: profile.mode === 'proactive' && Boolean(room.nameIsDefault) && !room.autoNamedAt
   });
   // `note` replaces the generic trigger line for system-initiated responses (e.g. a settled poll)
   const userPrompt = `Conversation transcript:\n${buildTranscript(messages, participants)}\n\n${rosterNote ? `${rosterNote}\n` : ''}${

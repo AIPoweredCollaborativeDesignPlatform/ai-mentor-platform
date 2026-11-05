@@ -26,6 +26,8 @@ const STRINGS = {
   system: { 'zh-TW': '系統', en: 'System' },
   refinedMessage: { 'zh-TW': '已為「{title}」加上彩色 PBR 材質與細節。', en: 'Refined "{title}" with color PBR textures and details.' },
   profileUpdated: { 'zh-TW': '{old} 已將名稱改為 {name} {avatar}', en: '{old} updated profile to {name} {avatar}' },
+  aiRenamed: { 'zh-TW': 'AI 依討論方向把房間名稱改為「{name}」', en: 'The AI renamed the room to "{name}" after your design direction' },
+  renameReverted: { 'zh-TW': '房間名稱已改回「{name}」', en: 'Room name changed back to "{name}"' },
   detailsUpdated: { 'zh-TW': '房間資訊已更新為 {emoji} {name}', en: 'Room details updated to {emoji} {name}' },
   aiAsset: { 'zh-TW': 'AI 產生了新素材', en: 'AI Asset Generated' },
   aiErrorPrefix: { 'zh-TW': '⚠️ {name}：{message}', en: '⚠️ {name}: {message}' },

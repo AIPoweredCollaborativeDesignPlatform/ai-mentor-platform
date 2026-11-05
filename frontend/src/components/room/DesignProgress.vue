@@ -50,7 +50,7 @@ const wide = computed(() => margin.value >= RAIL_WIDTH);
 </script>
 
 <template>
-  <div v-if="visible" ref="root" class="absolute left-3 top-1/2 -translate-y-1/2 z-10 text-slate-400" :title="hint">
+  <div v-if="visible" ref="root" class="absolute left-3 top-1/2 -translate-y-1/2 z-10 text-slate-400 select-none" :title="hint">
     <div v-if="wide" class="w-24">
       <div class="relative h-[240px]">
         <svg viewBox="0 0 40 240" class="absolute left-0 top-0 w-10 h-[240px]" role="img" :aria-label="t('dd.title')">

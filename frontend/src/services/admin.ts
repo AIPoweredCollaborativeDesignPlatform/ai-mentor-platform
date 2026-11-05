@@ -72,11 +72,15 @@ export interface ProfileDraft {
   expertise: string;
   casualness: number;
   maxSentences: number;
+  openingText: { 'zh-TW': string; en: string };
+  taskDescription: { 'zh-TW': string; en: string };
+  /** Rewritten prompt blocks (same placeholders as the built-in text) */
+  prompts: Record<string, string>;
 }
 
 /** One sentence -> name, persona, expertise and tone (functions/index.js draftAiProfile); nothing is saved. */
-export async function draftAiProfile(text: string): Promise<ProfileDraft> {
-  return (await httpsCallable<{ text: string }, ProfileDraft>(functions, 'draftAiProfile')({ text })).data;
+export async function draftAiProfile(text: string, taskMode: string): Promise<ProfileDraft> {
+  return (await httpsCallable<{ text: string; taskMode: string }, ProfileDraft>(functions, 'draftAiProfile', { timeout: 180_000 })({ text, taskMode })).data;
 }
 
 /** Rooms created by the redesigned site (they carry appVersion), newest first. */

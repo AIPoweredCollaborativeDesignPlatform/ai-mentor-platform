@@ -9,7 +9,7 @@ import { getAuth } from 'firebase-admin/auth';
 import { getSystemConfig } from './src/config.js';
 import { classifyError, createMessage, extractSvg, imageBlockFromDataUrl, parseJsonObject, responseText } from './src/claude.js';
 import { PROFILE_DRAFT_PROMPT, PROMPT_DEFAULTS, PROMPT_PLACEHOLDERS, PROMPT_VERSION, sketchToSvgPrompt, textToSvgPrompt, visionPrompt } from './src/prompts.js';
-import { refineMeshy } from './src/mesh3d.js';
+import { refineMeshy, retextureMeshy } from './src/mesh3d.js';
 import { refineSketch, sketchVariations } from './src/images.js';
 import { sketchBrief } from './src/sketchBrief.js';
 import { imageTo3D } from './src/imageTo3d.js';
@@ -592,7 +592,7 @@ export const model3DFromImage = onCall(
           ...(res.thumbnailUrl ? { posterUrl: res.thumbnailUrl } : {}), ...(res.render ? { inputRender: res.render } : {}),
           // Shown next to the model: the message whose image it was built from
           sourceMessageId: String(request.data?.sourceMessageId || '').slice(0, 120) || null,
-          isRefined: res.isRefined, ...(res.refinable === false ? { refinable: false } : {}), isInteractive: true
+          isRefined: res.isRefined, ...(res.textureVia ? { textureVia: res.textureVia } : {}), isInteractive: true
         },
         meta: { model: res.provider, callerUid: request.auth.uid }
       });
@@ -689,12 +689,15 @@ export const refineModel3D = onCall(
   { secrets: [MESHY_API_KEY, TRIPO_API_KEY], timeoutSeconds: 540, memory: '512MiB', maxInstances: 10 },
   async request => {
     const room = await requireRoomMember(request);
-    const { taskId, texturePrompt, roomId, title = '' } = request.data || {};
+    const { taskId, texturePrompt, roomId, title = '', textureVia = '' } = request.data || {};
     if (!taskId) throw new HttpsError('invalid-argument', 'Missing Meshy task id');
     try {
       const { meshy } = await getSystemConfig();
-      const result = await refineMeshy({ previewTaskId: taskId, texturePrompt, keys: await meshKeys(), meshy });
-      await logAiCall({ ...baseLog(request, 'model_3d_refine', 'meshy'), input: { taskId, texturePrompt: texturePrompt || '', meshy }, output: result });
+      // Text-to-3D previews use the refine pass; image-to-3D models (textureVia: 'retexture') use Retexture
+      const result = textureVia === 'retexture'
+        ? await retextureMeshy({ inputTaskId: taskId, texturePrompt, keys: await meshKeys(), meshy })
+        : await refineMeshy({ previewTaskId: taskId, texturePrompt, keys: await meshKeys(), meshy });
+      await logAiCall({ ...baseLog(request, 'model_3d_refine', 'meshy'), input: { taskId, textureVia: textureVia || 'refine', texturePrompt: texturePrompt || '', meshy }, output: result });
       // The refined model is posted as an AI message by the server (browsers cannot post as the AI)
       const name = String(title).slice(0, 200);
       await postAiMessage(roomId, room, (await ensureRoomAi(roomId)).profile || {}, {

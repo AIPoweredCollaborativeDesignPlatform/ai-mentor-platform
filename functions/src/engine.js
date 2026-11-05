@@ -305,7 +305,7 @@ async function run3D(roomId, profile, secrets, { aiMessage, assetData, prompt, m
       assetPayload: {
         title: assetData?.title || prompt, prompt3D: prompt, provider: res.provider, taskId: res.taskId, modelUrl: res.modelUrl, originalModelUrl: res.originalModelUrl,
         ...(res.thumbnailUrl ? { posterUrl: res.thumbnailUrl } : {}), ...(res.render ? { inputRender: res.render } : {}),
-        ...(sourceMessageId ? { sourceMessageId } : {}), isRefined: res.isRefined, ...(res.refinable === false ? { refinable: false } : {}), isInteractive: true
+        ...(sourceMessageId ? { sourceMessageId } : {}), isRefined: res.isRefined, ...(res.textureVia ? { textureVia: res.textureVia } : {}), isInteractive: true
       },
       meta
     });

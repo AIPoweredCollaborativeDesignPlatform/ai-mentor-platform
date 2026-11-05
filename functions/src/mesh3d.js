@@ -30,6 +30,7 @@ async function postJson(url, token, body, label) {
 
 const MESHY_TASKS = 'https://api.meshy.ai/openapi/v2/text-to-3d';
 const MESHY_IMAGE_TASKS = 'https://api.meshy.ai/openapi/v1/image-to-3d';
+const MESHY_RETEXTURE_TASKS = 'https://api.meshy.ai/openapi/v1/retexture';
 
 async function meshyTask(token, body, base = MESHY_TASKS) {
   const created = await postJson(base, token, body, 'Meshy');
@@ -130,8 +131,17 @@ export async function meshyImageTo3D({ imageUrl, keys, meshy = {} }) {
     result = await meshyTask(keys.meshy, { image_url: imageUrl, ai_model: aiModel, should_texture: textured }, MESHY_IMAGE_TASKS);
   }
   const storedUrl = await rehostToStorage(result.modelUrl, `models/${result.taskId}.glb`, 'model/gltf-binary');
-  // An untextured image-to-3D model cannot use the text-to-3D Refine button (refinable: false)
-  return { ...result, originalModelUrl: result.modelUrl, modelUrl: storedUrl, provider: `Meshy ${aiModel} Image-to-3D`, isRefined: textured, refinable: false };
+  // An untextured image-to-3D model is coloured later with Retexture, not the text-to-3D refine pass
+  return { ...result, originalModelUrl: result.modelUrl, modelUrl: storedUrl, provider: `Meshy ${aiModel} Image-to-3D`, isRefined: textured, textureVia: 'retexture' };
+}
+
+/** Meshy Retexture (docs.meshy.ai/en/api/retexture): colours any finished Meshy model, e.g. an untextured image-to-3D one. */
+export async function retextureMeshy({ inputTaskId, texturePrompt, keys, meshy = {} }) {
+  const body = { input_task_id: inputTaskId, text_style_prompt: String(texturePrompt || 'realistic product materials and finishes').slice(0, 800), enable_original_uv: true, enable_pbr: meshy.enablePbr !== false };
+  if (meshy.textureResolution && meshy.textureResolution !== '2k') body.texture_resolution = meshy.textureResolution;
+  const result = await meshyTask(keys.meshy, body, MESHY_RETEXTURE_TASKS);
+  const storedUrl = await rehostToStorage(result.modelUrl, `models/${result.taskId}.glb`, 'model/gltf-binary');
+  return { ...result, originalModelUrl: result.modelUrl, modelUrl: storedUrl, provider: 'Meshy Retexture' };
 }
 
 /** Meshy texturing pass on an existing preview task. */

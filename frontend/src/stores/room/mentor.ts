@@ -43,7 +43,7 @@ export function useRoomMentor(ctx: RoomContext, typingUsers: Ref<TypingUser[]>) 
 
   // Texturing pass for an existing Meshy model (explicit user action from the 3D viewer)
   const refineMeshyModel = async (originalMsg: MessageItem, texturePrompt = '') => {
-    const { title, taskId } = originalMsg.assetPayload || {};
+    const { title, taskId, textureVia } = originalMsg.assetPayload || {};
     if (!currentRoom.value || !taskId) {
       pushToast(t('ai.cannotRefineTitle'), t('ai.cannotRefineText'), 'warning');
       return;
@@ -56,7 +56,7 @@ export function useRoomMentor(ctx: RoomContext, typingUsers: Ref<TypingUser[]>) 
     try {
       const { refineModel3D } = await import('../../services/model3d');
       // The server posts the refined model to the chat as an AI message
-      await refineModel3D(currentRoom.value.roomId, taskId, texturePrompt || title || 'high quality realistic pbr textures', title || '');
+      await refineModel3D(currentRoom.value.roomId, taskId, texturePrompt || title || 'high quality realistic pbr textures', title || '', textureVia || '');
       pushToast(t('ai.refinedToastTitle'), t('ai.refinedToastText'), 'success');
     } catch (err: any) {
       console.error('Meshy refine error:', err);

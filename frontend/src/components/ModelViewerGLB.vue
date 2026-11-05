@@ -649,7 +649,7 @@ onUnmounted(() => {
 
         <!-- AI Refine Color Button -->
         <button
-          v-if="assetData?.taskId && !assetData?.isRefined && assetData?.refinable !== false && message && !readOnly"
+          v-if="assetData?.taskId && !assetData?.isRefined && message && !readOnly"
           @click="openRefineModal"
           class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-medium text-xs shadow transition cursor-pointer"
         >

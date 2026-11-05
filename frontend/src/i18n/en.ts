@@ -205,6 +205,8 @@ export default {
   "model.render": "Render",
   "model.renderHint": "The clean render the model was built from",
   "model.prompt": "Model description",
+  "adm.meshyImageTexture": "Texture models built from a sketch or photo",
+  "adm.meshyImageTextureHint": "Image to 3D colours the model in the same task: meshy-7.1 30 credits with textures, 20 without (untextured models cannot be textured later).",
   "adm.created": "Created {at}",
   "adm.current": "Current: {value}",
   "adm.default": "Default",

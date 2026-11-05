@@ -116,9 +116,10 @@ export async function generate3D({ engine, prompt, keys, meshy = {} }) {
  */
 export async function meshyImageTo3D({ imageUrl, keys, meshy = {} }) {
   const aiModel = meshy.aiModel || 'meshy-7.1';
-  const body = { image_url: imageUrl, ai_model: aiModel, should_texture: true, should_remesh: true, enable_pbr: meshy.enablePbr !== false };
+  const textured = meshy.imageTexture !== false;
+  const body = { image_url: imageUrl, ai_model: aiModel, should_texture: textured, should_remesh: true, ...(textured ? { enable_pbr: meshy.enablePbr !== false } : {}) };
   if (meshy.geometryResolution && meshy.geometryResolution !== 'standard' && ['meshy-7.1', 'latest'].includes(aiModel)) body.geometry_resolution = meshy.geometryResolution;
-  if (meshy.textureResolution && meshy.textureResolution !== '2k' && aiModel !== 'meshy-6-lite') body.texture_resolution = meshy.textureResolution;
+  if (textured && meshy.textureResolution && meshy.textureResolution !== '2k' && aiModel !== 'meshy-6-lite') body.texture_resolution = meshy.textureResolution;
   let result;
   try {
     result = await meshyTask(keys.meshy, body, MESHY_IMAGE_TASKS);
@@ -126,10 +127,11 @@ export async function meshyImageTo3D({ imageUrl, keys, meshy = {} }) {
     // Some model / texture combinations reject optional settings (400): retry with the required fields only
     if (err.status !== 400) throw err;
     console.warn('[meshyImageTo3D] retrying with defaults:', err.message);
-    result = await meshyTask(keys.meshy, { image_url: imageUrl, ai_model: aiModel, should_texture: true }, MESHY_IMAGE_TASKS);
+    result = await meshyTask(keys.meshy, { image_url: imageUrl, ai_model: aiModel, should_texture: textured }, MESHY_IMAGE_TASKS);
   }
   const storedUrl = await rehostToStorage(result.modelUrl, `models/${result.taskId}.glb`, 'model/gltf-binary');
-  return { ...result, originalModelUrl: result.modelUrl, modelUrl: storedUrl, provider: `Meshy ${aiModel} Image-to-3D`, isRefined: true };
+  // An untextured image-to-3D model cannot use the text-to-3D Refine button (refinable: false)
+  return { ...result, originalModelUrl: result.modelUrl, modelUrl: storedUrl, provider: `Meshy ${aiModel} Image-to-3D`, isRefined: textured, refinable: false };
 }
 
 /** Meshy texturing pass on an existing preview task. */

@@ -27,7 +27,7 @@ const SYSTEM_DEFAULTS = {
   mentorEffort: 'low',
   engine3D: 'meshy',
   notificationVolume: DEFAULT_NOTIFICATION_VOLUME,
-  meshy: { aiModel: 'meshy-7.1', geometryResolution: 'standard', autoRefine: false, textureResolution: '2k', enablePbr: true },
+  meshy: { aiModel: 'meshy-7.1', geometryResolution: 'standard', autoRefine: false, imageTexture: true, textureResolution: '2k', enablePbr: true },
   sketchModel: 'fal-ai/flux/dev',
   sketchRefineModel: 'fal-ai/flux/dev/image-to-image',
   defaultProfileId: null as string | null,
@@ -853,6 +853,10 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
           <label class="flex items-start gap-2 pt-1">
             <input type="checkbox" v-model="system.meshy.autoRefine" class="mt-0.5" />
             <span><span class="text-slate-200">{{ t('adm.meshyAutoRefine') }}</span> <span class="block text-[11px] text-slate-500">{{ t('adm.meshyAutoRefineHint') }}</span></span>
+          </label>
+          <label class="flex items-start gap-2 pt-1">
+            <input type="checkbox" v-model="system.meshy.imageTexture" class="mt-0.5" />
+            <span><span class="text-slate-200">{{ t('adm.meshyImageTexture') }}</span> <span class="block text-[11px] text-slate-500">{{ t('adm.meshyImageTextureHint') }}</span></span>
           </label>
           <div class="grid sm:grid-cols-2 gap-3">
             <label class="space-y-1"><span class="text-slate-400">{{ t('adm.meshyTexture') }}</span>

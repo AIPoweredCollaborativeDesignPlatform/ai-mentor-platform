@@ -592,7 +592,7 @@ export const model3DFromImage = onCall(
           ...(res.thumbnailUrl ? { posterUrl: res.thumbnailUrl } : {}), ...(res.render ? { inputRender: res.render } : {}),
           // Shown next to the model: the message whose image it was built from
           sourceMessageId: String(request.data?.sourceMessageId || '').slice(0, 120) || null,
-          isRefined: res.isRefined, isInteractive: true
+          isRefined: res.isRefined, ...(res.refinable === false ? { refinable: false } : {}), isInteractive: true
         },
         meta: { model: res.provider, callerUid: request.auth.uid }
       });

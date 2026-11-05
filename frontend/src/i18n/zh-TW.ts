@@ -207,6 +207,8 @@ const zhTW: Record<keyof typeof en, string> = {
   "model.render": "渲染圖",
   "model.renderHint": "建模時實際使用的渲染圖",
   "model.prompt": "模型描述",
+  "adm.meshyImageTexture": "依草圖／照片建立的模型一併上色",
+  "adm.meshyImageTextureHint": "圖片轉 3D 在同一步上色：meshy-7.1 上色 30 點、不上色 20 點（不上色的模型之後無法再上色）。",
   "adm.created": "建立 {at}",
   "adm.current": "目前：{value}",
   "adm.default": "預設",

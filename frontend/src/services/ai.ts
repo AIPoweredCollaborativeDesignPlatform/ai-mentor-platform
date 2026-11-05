@@ -83,8 +83,8 @@ export async function sketchFromBoard(imageDataUrl: string, notes = ''): Promise
 }
 
 /** A sketch or photo → a 3D model built from the image itself (render + Meshy image-to-3D); posted to the chat. */
-export async function model3DFromImage(imageUrl: string, notes = ''): Promise<void> {
-  await call<{ imageUrl: string; notes: string }, { ok: boolean }>('model3DFromImage', { imageUrl, notes });
+export async function model3DFromImage(imageUrl: string, notes = '', sourceMessageId = ''): Promise<void> {
+  await call<{ imageUrl: string; notes: string; sourceMessageId: string }, { ok: boolean }>('model3DFromImage', { imageUrl, notes, sourceMessageId });
 }
 
 /** Uploaded sketch / photo or an AI sketch → more idea sketches; the server posts them to the chat. */

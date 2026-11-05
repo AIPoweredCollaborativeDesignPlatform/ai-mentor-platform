@@ -11,6 +11,9 @@ import type { DesignStage } from '../../types';
  * come from the AI's assessments (rooms/{id}.progress, functions/src/engine.js updateProgress).
  * The parent must be position: relative; this component takes no space in the layout.
  */
+// Time of the chat part being read (scrolled up); null = live
+const props = defineProps<{ viewAt?: number | null }>();
+
 const roomStore = useRoomStore();
 const { aiEnabled } = useRoomAi();
 const progress = computed(() => roomStore.currentRoom?.progress);
@@ -23,13 +26,28 @@ const STAGES: { key: DesignStage; label: MessageKey; points: string; y: number }
   { key: 'develop', label: 'dd.develop', points: '20,122 38,180 2,180', y: 156 },
   { key: 'deliver', label: 'dd.deliver', points: '2,180 38,180 20,238', y: 204 }
 ];
+// A milestone counts at the viewed time only if it was reached by then (rooms from before reachedAt: always)
+const reached = (key: string) => {
+  const p = progress.value;
+  if (!p?.milestones?.[key as keyof typeof p.milestones]) return false;
+  if (props.viewAt == null) return true;
+  const at = p.reachedAt?.[key];
+  return at == null || at <= props.viewAt;
+};
 const NODES: { y: number; label: MessageKey; reached: () => boolean }[] = [
-  { y: 60, label: 'dd.nodePain', reached: () => !!progress.value?.milestones?.pain_points },
-  { y: 120, label: 'dd.nodeProblem', reached: () => !!progress.value?.milestones?.problem_statement },
-  { y: 180, label: 'dd.nodeIdeas', reached: () => !!progress.value?.milestones?.ideas },
-  { y: 236, label: 'dd.nodeConcept', reached: () => !!(progress.value?.milestones?.concept_selected && progress.value?.milestones?.model3d) }
+  { y: 60, label: 'dd.nodePain', reached: () => reached('pain_points') },
+  { y: 120, label: 'dd.nodeProblem', reached: () => reached('problem_statement') },
+  { y: 180, label: 'dd.nodeIdeas', reached: () => reached('ideas') },
+  { y: 236, label: 'dd.nodeConcept', reached: () => reached('concept_selected') && reached('model3d') }
 ];
-const stage = computed(() => STAGES.find(s => s.key === progress.value?.stage) || null);
+// Live: the current stage; scrolled up: the stage in force at that point of the chat
+const stageKey = computed(() => {
+  const p = progress.value;
+  if (props.viewAt == null || !p?.history?.length) return p?.stage || null;
+  return [...p.history].reverse().find(h => h.at <= props.viewAt!)?.stage || null;
+});
+const stage = computed(() => STAGES.find(s => s.key === stageKey.value) || null);
+const viewTime = computed(() => (props.viewAt == null ? '' : new Date(props.viewAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })));
 const nextNode = computed(() => NODES.find(n => !n.reached()) || null);
 // Details stay in the tooltip so the diagram itself carries almost no text
 const hint = computed(() => [t('dd.title'), nextNode.value ? t('dd.next') + t(nextNode.value.label) : t('dd.allReached'), t('dd.hint')].join('\n'));
@@ -81,6 +99,8 @@ const wide = computed(() => margin.value >= RAIL_WIDTH);
           :style="{ top: `${s.y}px` }"
         >{{ t(s.label) }}</span>
       </div>
+      <!-- Scrolled up: the time of the chat part this stage belongs to -->
+      <p v-if="viewTime" class="mt-1 text-[10px] font-mono text-slate-500">{{ viewTime }}</p>
     </div>
   </div>
 </template>

@@ -116,6 +116,10 @@ export type DesignStage = 'discover' | 'define' | 'develop' | 'deliver';
 export interface RoomProgress {
   stage: DesignStage | null;
   milestones: { pain_points?: boolean; problem_statement?: boolean; ideas?: boolean; concept_selected?: boolean; model3d?: boolean };
+  /** Every stage change, oldest first */
+  history?: { at: number; stage: DesignStage }[];
+  /** When each milestone was first reached */
+  reachedAt?: Record<string, number>;
   updatedAt: number;
 }
 

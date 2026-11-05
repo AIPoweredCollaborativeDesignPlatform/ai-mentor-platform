@@ -190,9 +190,30 @@ const scrollToBottom = () => {
   [50, 150, 300, 600, 1000, 2000].forEach(delay => setTimeout(scroll, delay));
 };
 
+// Double Diamond follows the chat: scrolled up, it shows the stage of the message in the middle of the view
+const progressViewAt = ref<number | null>(null);
+let progressFrame = 0;
+const updateProgressViewAt = () => {
+  progressFrame = 0;
+  const el = chatContainerRef.value;
+  if (!el || !showScrollFab.value) {
+    progressViewAt.value = null;
+    return;
+  }
+  const middle = el.getBoundingClientRect().top + el.clientHeight / 2;
+  const rows = el.querySelectorAll<HTMLElement>('[data-ts]');
+  let at: number | null = null;
+  for (const row of rows) {
+    if (row.getBoundingClientRect().top > middle) break;
+    at = Number(row.dataset.ts) || at;
+  }
+  progressViewAt.value = at;
+};
+
 const handleScroll = () => {
   const el = chatContainerRef.value;
   if (el) showScrollFab.value = el.scrollHeight - (el.scrollTop + el.clientHeight) > 100;
+  if (!progressFrame) progressFrame = requestAnimationFrame(updateProgressViewAt);
   isScrolling.value = true;
   clearTimeout(scrollbarTimer);
   scrollbarTimer = setTimeout(() => (isScrolling.value = false), 3000);
@@ -445,10 +466,10 @@ onUnmounted(() => {
       >
         <!-- Double Diamond stage and milestones, judged by the AI, in the margin beside the chat (hidden in no-AI rooms) -->
         <div class="relative flex-1 min-h-0 flex flex-col">
-          <DesignProgress />
+          <DesignProgress :viewAt="progressViewAt" />
         <main ref="chatContainerRef" @scroll="handleScroll" class="flex-1 overflow-y-auto w-full relative custom-scrollbar" :class="{ 'is-scrolling': isScrolling }">
           <div class="max-w-5xl mx-auto w-full p-3 sm:p-5 space-y-3">
-            <div v-for="(msg, idx) in visibleChatMessages" :key="msg.id" :id="'msg_' + msg.id" :data-ai-msg="isAiMessage(msg) ? msg.id : undefined" class="transition-colors duration-500 rounded-xl">
+            <div v-for="(msg, idx) in visibleChatMessages" :key="msg.id" :id="'msg_' + msg.id" :data-ts="msg.timestamp" :data-ai-msg="isAiMessage(msg) ? msg.id : undefined" class="transition-colors duration-500 rounded-xl">
               <div v-if="showDateDivider(msg, idx)" class="flex items-center justify-center my-3.5 gap-3 select-none">
                 <div class="h-px bg-slate-700/40 flex-1 max-w-[120px] sm:max-w-[160px]"></div>
                 <span class="text-[11px] font-mono font-medium text-slate-500 tracking-wider">{{ formatDate(msg.timestamp) }}</span>

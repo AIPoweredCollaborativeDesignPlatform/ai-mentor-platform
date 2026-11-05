@@ -122,12 +122,25 @@ const make3d = async (url: string) => {
   making3d.value = true;
   roomStore.pushToast(t('sketch.making3d'), t('sketch.making3dText', { name: aiName.value }), 'info');
   try {
-    await model3DFromImage(url, msg.value.type === 'file' ? msg.value.content : '');
+    await model3DFromImage(url, msg.value.type === 'file' ? msg.value.content : '', msg.value.id);
   } catch (e: any) {
     roomStore.pushToast(t('sketch.make3dFailed'), e?.message || String(e), 'error');
   } finally {
     making3d.value = false;
   }
+};
+
+// Where a 3D model came from: the sketch / photo it was built from, or the description it was made from
+const modelSourceImage = computed(() => {
+  const id = msg.value.assetPayload?.sourceMessageId;
+  const src = id ? roomStore.currentRoom?.messages.find(m => m.id === id) : null;
+  if (!src) return '';
+  return src.type === 'file' && src.fileData?.type === 'image' ? src.fileData.url : src.assetPayload?.images?.find((i: any) => i?.url)?.url || '';
+});
+const modelPrompt = computed(() => msg.value.assetPayload?.prompt3D || msg.value.assetPayload?.prompt || '');
+const jumpToSource = () => {
+  const id = msg.value.assetPayload?.sourceMessageId;
+  document.getElementById('msg_' + id)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
 };
 
 // Polls
@@ -443,6 +456,22 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
         </div>
         <ParametricViewer3D v-else-if="isAsset('parametric_3d')" :assetData="msg.assetPayload" />
         <ModelViewerGLB v-else-if="isAsset('mesh_3d')" :assetData="msg.assetPayload" :message="msg" :isResizing="isResizing" :readOnly="isMeetingClosed" @refine="refineModel" />
+
+        <!-- The model's source: the original sketch / photo (and the render it was built from), or its description -->
+        <div v-if="isAsset('mesh_3d', 'parametric_3d') && (modelSourceImage || msg.assetPayload?.inputRender || modelPrompt)" class="mt-2 flex items-start gap-2 text-[11px] text-slate-400">
+          <button v-if="modelSourceImage" type="button" @click="jumpToSource" class="shrink-0 text-center" :title="t('model.jumpToSource')">
+            <img :src="modelSourceImage" class="w-14 h-14 object-cover rounded-lg border border-slate-700" />
+            <span class="block mt-0.5">{{ t('model.source') }}</span>
+          </button>
+          <a v-if="msg.assetPayload?.inputRender" :href="msg.assetPayload.inputRender" target="_blank" rel="noopener" class="shrink-0 text-center" :title="t('model.renderHint')">
+            <img :src="msg.assetPayload.inputRender" class="w-14 h-14 object-cover rounded-lg border border-slate-700" />
+            <span class="block mt-0.5">{{ t('model.render') }}</span>
+          </a>
+          <details v-if="modelPrompt" class="min-w-0 flex-1">
+            <summary class="cursor-pointer select-none pointer-coarse:py-1">{{ t('model.prompt') }}</summary>
+            <p class="mt-1 text-slate-300 break-words">{{ modelPrompt }}</p>
+          </details>
+        </div>
 
         <MoodBoardViewer
           v-if="isAsset('moodboard', 'sketch')"

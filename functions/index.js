@@ -587,7 +587,13 @@ export const model3DFromImage = onCall(
       await postAiMessage(roomId, room, roomAi.profile, {
         content: str('model3dFromImage', room.language),
         assetType: 'mesh_3d',
-        assetPayload: { title: res.title || res.description, provider: res.provider, taskId: res.taskId, modelUrl: res.modelUrl, originalModelUrl: res.originalModelUrl, ...(res.thumbnailUrl ? { posterUrl: res.thumbnailUrl } : {}), ...(res.render ? { inputRender: res.render } : {}), isRefined: res.isRefined, isInteractive: true },
+        assetPayload: {
+          title: res.title || res.description, prompt3D: res.description, provider: res.provider, taskId: res.taskId, modelUrl: res.modelUrl, originalModelUrl: res.originalModelUrl,
+          ...(res.thumbnailUrl ? { posterUrl: res.thumbnailUrl } : {}), ...(res.render ? { inputRender: res.render } : {}),
+          // Shown next to the model: the message whose image it was built from
+          sourceMessageId: String(request.data?.sourceMessageId || '').slice(0, 120) || null,
+          isRefined: res.isRefined, isInteractive: true
+        },
         meta: { model: res.provider, callerUid: request.auth.uid }
       });
       return { ok: true };

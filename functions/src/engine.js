@@ -234,7 +234,7 @@ export async function runCheck(roomId, secrets, { reason, forced = false, caller
         // The mesh is generated after the lock is released; the instant parametric preview is the fallback
         // "fromImage": the id of an image message in the transcript; the model is then built from that image
         const fromImage = assetData?.fromImage ? messages.find(m => m.id === assetData.fromImage)?.imageUrl : null;
-        pending3D = { aiMessage, assetData, prompt: assetData?.prompt3D || assetData?.title || 'product prototype', meta: out.meta, room, fromImage };
+        pending3D = { aiMessage, assetData, prompt: assetData?.prompt3D || assetData?.title || 'product prototype', meta: out.meta, room, fromImage, sourceMessageId: fromImage ? assetData.fromImage : null };
       } else {
         // Automatic interventions also show the AI typing for a moment before the message lands
         const stopTyping = stopPresence ? null : startPresence(roomId, 'text');
@@ -277,12 +277,18 @@ async function updateProgress(roomId, previous, assessment, messages) {
   const stage = STAGES.has(assessment.stage) ? assessment.stage : previous?.stage || null;
   const milestones = Object.fromEntries(MILESTONES.map(k => [k, Boolean(previous?.milestones?.[k] || assessment.milestones?.[k])]));
   milestones.model3d = Boolean(previous?.milestones?.model3d || messages.some(m => MODEL_ASSETS.has(m.assetType)));
-  const changed = stage !== (previous?.stage || null) || Object.keys(milestones).some(k => milestones[k] !== Boolean(previous?.milestones?.[k]));
+  const stageChanged = stage !== (previous?.stage || null);
+  const changed = stageChanged || Object.keys(milestones).some(k => milestones[k] !== Boolean(previous?.milestones?.[k]));
   if (!changed) return;
-  await roomRef(roomId).update({ progress: { stage, milestones, updatedAt: Date.now() } }).catch(() => {});
+  const now = Date.now();
+  // History lets the room show the stage of the part of the chat being scrolled through
+  const history = stageChanged ? [...(previous?.history || []), { at: now, stage }].slice(-100) : previous?.history || [];
+  const reachedAt = { ...(previous?.reachedAt || {}) };
+  for (const k of Object.keys(milestones)) if (milestones[k] && !reachedAt[k]) reachedAt[k] = now;
+  await roomRef(roomId).update({ progress: { stage, milestones, history, reachedAt, updatedAt: now } }).catch(() => {});
 }
 
-async function run3D(roomId, profile, secrets, { aiMessage, assetData, prompt, meta, room, fromImage = null }) {
+async function run3D(roomId, profile, secrets, { aiMessage, assetData, prompt, meta, room, fromImage = null, sourceMessageId = null }) {
   const sys = await getSystemConfig();
   const stop = startPresence(roomId, 'mesh', { type: '3D Model Generation', prompt: String(prompt).slice(0, 100) });
   try {
@@ -296,7 +302,11 @@ async function run3D(roomId, profile, secrets, { aiMessage, assetData, prompt, m
     await postAiMessage(roomId, room, profile, {
       content: aiMessage,
       assetType: 'mesh_3d',
-      assetPayload: { title: prompt, provider: res.provider, taskId: res.taskId, modelUrl: res.modelUrl, originalModelUrl: res.originalModelUrl, ...(res.thumbnailUrl ? { posterUrl: res.thumbnailUrl } : {}), ...(res.render ? { inputRender: res.render } : {}), isRefined: res.isRefined, isInteractive: true },
+      assetPayload: {
+        title: assetData?.title || prompt, prompt3D: prompt, provider: res.provider, taskId: res.taskId, modelUrl: res.modelUrl, originalModelUrl: res.originalModelUrl,
+        ...(res.thumbnailUrl ? { posterUrl: res.thumbnailUrl } : {}), ...(res.render ? { inputRender: res.render } : {}),
+        ...(sourceMessageId ? { sourceMessageId } : {}), isRefined: res.isRefined, isInteractive: true
+      },
       meta
     });
   } catch (err) {

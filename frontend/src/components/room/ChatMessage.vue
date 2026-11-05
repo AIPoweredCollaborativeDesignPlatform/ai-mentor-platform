@@ -98,7 +98,8 @@ const revertName = async () => {
 // Sketches from an image: a chat photo / sketch, or one of the AI's sketches
 const canSketch = computed(() => aiModules.value.enableSketch !== false && aiEnabled.value);
 const canMakeSketches = computed(() => canSketch.value && canAct() && !roomStore.isHost && roomStore.myStatus !== 'observer');
-const isSketchSource = computed(() => msg.value.type === 'file' && msg.value.fileData?.type === 'image' && /^https:/.test(msg.value.fileData?.url || ''));
+// Chat uploads are stored inline as compressed data URLs; generated images are Storage links
+const isSketchSource = computed(() => msg.value.type === 'file' && msg.value.fileData?.type === 'image' && /^(https:|data:image\/)/.test(msg.value.fileData?.url || ''));
 const sketching = ref(false);
 const moreSketches = async (url: string) => {
   if (sketching.value) return;

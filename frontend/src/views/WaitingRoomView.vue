@@ -43,12 +43,14 @@ const avatar = ref(pick(AVATARS));
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
 const FULL_RETRY_MS = 5000;
 
-const enterRoom = () => router.replace(`/room/${roomId}`);
+// Read-only entry from Admin keeps ?view=readonly so a reload stays read-only and Back returns to Admin
+const readOnly = route.query.as === 'observer';
+const enterRoom = () => router.replace(readOnly ? `/room/${roomId}?view=readonly` : `/room/${roomId}`);
 
 const attempt = async (consent: boolean, retry = false) => {
   clearTimeout(retryTimer);
   try {
-    const result = await roomStore.joinRoom(pin, nickname.value.trim() || 'Participant', avatar.value, consent, retry, asParticipant.value);
+    const result = await roomStore.joinRoom(pin, nickname.value.trim() || 'Participant', avatar.value, consent, retry, asParticipant.value, readOnly && !asParticipant.value);
     if (result.status === 'approved') {
       if (result.role === 'participant' && !result.returning) authStore.updateProfile(nickname.value.trim(), avatar.value);
       enterRoom();

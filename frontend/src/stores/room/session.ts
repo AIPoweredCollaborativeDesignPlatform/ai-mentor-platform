@@ -24,12 +24,16 @@ const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
 
 /** Room lifecycle: listeners, presence, joining, host actions and typing indicators. */
 export function useRoomSession(ctx: RoomContext) {
-  const { currentRoom, myStatus, isHost, authStore, mentorStore, pushToast } = ctx;
+  const { currentRoom, myStatus, isHost, authStore, pushToast } = ctx;
 
   const typingUsers = ref<TypingUser[]>([]);
   let unsubs: Unsubscribe[] = [];
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let presenceSweepTimer: ReturnType<typeof setInterval> | null = null;
+  // Staff watching read-only (/room/:id?view=readonly): shown as an observer and never marked online,
+  // even if they took part in this room before
+  const viewOnly = ref(false);
+  const setViewOnly = (v: boolean) => (viewOnly.value = v);
 
   const participantRef = (uid: string) => roomDocRef(currentRoom.value!.roomId, 'participants', uid);
 
@@ -41,7 +45,7 @@ export function useRoomSession(ctx: RoomContext) {
 
   // ---------- Presence ----------
   const sendHeartbeat = async () => {
-    if (!authStore.uid || !currentRoom.value) return;
+    if (!authStore.uid || !currentRoom.value || viewOnly.value) return;
     try {
       await updateDoc(participantRef(authStore.uid), { isOnline: true, lastSeen: Date.now() });
     } catch {}
@@ -100,7 +104,6 @@ export function useRoomSession(ctx: RoomContext) {
           pin: data.pin,
           roomName: data.roomName,
           roomEmoji: data.roomEmoji,
-          mentorConfig: data.mentorConfig,
           roomStatus: data.roomStatus,
           whiteboardActive: data.whiteboardActive ?? false,
           whiteboardHostUid: data.whiteboardHostUid || undefined,
@@ -113,7 +116,6 @@ export function useRoomSession(ctx: RoomContext) {
           language: data.language
         });
       }
-      if (data.mentorConfig) mentorStore.config = data.mentorConfig;
       upsertMyRoomIndex(roomId, {
         roomId,
         pin: data.pin || roomId.replace('room_', ''),
@@ -128,7 +130,6 @@ export function useRoomSession(ctx: RoomContext) {
     // 2. Participants
     let isInitialLoad = true;
     let myApprovedAt = 0;
-    const notifiedPending = new Set<string>();
 
     unsubs.push(onSnapshot(roomCollection(roomId, 'participants'), snapshot => {
       const parts: Record<string, Participant> = {};
@@ -143,7 +144,7 @@ export function useRoomSession(ctx: RoomContext) {
         }
         if (p.uid === authStore.uid) {
           if (p.status === 'approved' && myStatus.value !== 'approved' && !myApprovedAt) myApprovedAt = Date.now();
-          myStatus.value = p.status;
+          myStatus.value = viewOnly.value ? 'observer' : p.status;
         }
       });
 
@@ -175,7 +176,6 @@ export function useRoomSession(ctx: RoomContext) {
           hostUid: '',
           createdAt: Date.now(),
           roomStatus: 'active',
-          mentorConfig: { ...mentorStore.config },
           participants: parts,
           messages: []
         };
@@ -183,24 +183,6 @@ export function useRoomSession(ctx: RoomContext) {
         currentRoom.value.participants = parts;
       }
 
-      // Host: actionable toast for new (or recent, on first load) join requests
-      snapshot.docChanges().forEach(change => {
-        if (change.type === 'removed') return;
-        const p = change.doc.data() as Participant;
-        if (p.status !== 'pending') {
-          notifiedPending.delete(p.uid);
-          return;
-        }
-        if (!isHost.value || p.uid === authStore.uid || notifiedPending.has(p.uid)) return;
-        notifiedPending.add(p.uid);
-        const isRecent = p.joinedAt ? Date.now() - p.joinedAt < 10 * 60 * 1000 : false;
-        if (!isInitialLoad || isRecent) {
-          pushToast(t('toast.requestTitle'), t('toast.requestText', { name: p.displayName }), 'info', [
-            { label: t('toast.approve'), type: 'primary', onClick: () => approveParticipant(p.uid) },
-            { label: t('toast.decline'), type: 'danger', onClick: () => rejectParticipant(p.uid) }
-          ]);
-        }
-      });
       isInitialLoad = false;
     }));
 
@@ -274,7 +256,6 @@ export function useRoomSession(ctx: RoomContext) {
       roomName: roomName?.trim() || '',
       roomEmoji: roomEmoji?.trim() || '💡',
       language: currentLocale.value,
-      mentorConfig: { ...mentorStore.config },
       // Distinguishes rooms created by this redesign from the legacy site sharing the same database
       appVersion: __APP_VERSION__,
       displayName: authStore.displayName,
@@ -305,10 +286,11 @@ export function useRoomSession(ctx: RoomContext) {
    * Join through the server (functions/src/session.js): it checks consent and the online limit and
    * approves directly. Returning members always get back in. The researcher (host) joins the same way.
    */
-  const joinRoom = async (pin: string, displayName: string, avatar: string, consent: boolean, retry = false, asParticipant = false) => {
+  const joinRoom = async (pin: string, displayName: string, avatar: string, consent: boolean, retry = false, asParticipant = false, readOnly = false) => {
     await authStore.waitForAuthReady().catch(() => {});
     const roomId = `room_${pin}`;
-    const result = await joinStudyRoom(roomId, displayName, avatar, consent, retry, asParticipant);
+    const result = await joinStudyRoom(roomId, displayName, avatar, consent, retry, asParticipant, readOnly);
+    viewOnly.value = readOnly && result.status === 'approved';
     if (result.status === 'approved') {
       myStatus.value = result.role === 'observer' ? 'observer' : 'approved';
       upsertMyRoomIndex(roomId, {
@@ -333,18 +315,6 @@ export function useRoomSession(ctx: RoomContext) {
 
   const hostGuard = () => Boolean(currentRoom.value && isHost.value);
 
-  const approveParticipant = async (uid: string) => {
-    if (!hostGuard()) return;
-    await updateParticipant(uid, { status: 'approved', isOnline: true }, 'approve');
-    pushToast(t('toast.approvedTitle'), t('toast.approvedText'), 'success');
-  };
-
-  const rejectParticipant = async (uid: string) => {
-    if (!hostGuard()) return;
-    await updateParticipant(uid, { status: 'rejected' }, 'reject');
-    pushToast(t('toast.declinedTitle'), t('toast.declinedText'), 'warning');
-  };
-
   const muteParticipant = async (uid: string, muted: boolean) => {
     if (hostGuard()) await updateParticipant(uid, { isMuted: muted }, 'mute');
   };
@@ -353,21 +323,15 @@ export function useRoomSession(ctx: RoomContext) {
     if (hostGuard()) await updateParticipant(uid, { status: 'kicked' }, 'kick');
   };
 
-  const syncMentorConfig = async () => {
-    if (!hostGuard()) return;
-    await updateDoc(roomRef(currentRoom.value!.roomId), { mentorConfig: mentorStore.config }).catch(console.warn);
-  };
-
-  // ---------- Self ----------
-  // Goes offline but stays a member of the room
   const leaveRoom = async () => {
     if (!currentRoom.value) return;
+    if (viewOnly.value) return stopListening();
     if (authStore.uid) await updateParticipant(authStore.uid, { isOnline: false, activeWhiteboardId: null }, 'leave');
     stopListening();
   };
 
   const updateParticipantWhiteboard = async (activeWhiteboardId: string | null) => {
-    if (!currentRoom.value) return;
+    if (!currentRoom.value || viewOnly.value) return;
     if (authStore.uid) {
       await updateDoc(participantRef(authStore.uid), { activeWhiteboardId: activeWhiteboardId || null, lastSeen: Date.now() })
         .catch(err => console.warn('Failed to update participant whiteboard presence:', err));
@@ -378,6 +342,8 @@ export function useRoomSession(ctx: RoomContext) {
 
   return {
     typingUsers,
+    viewOnly,
+    setViewOnly,
     sendHeartbeat,
     stopListening,
     checkRoomExists,
@@ -385,11 +351,8 @@ export function useRoomSession(ctx: RoomContext) {
     setMyTyping,
     createRoom,
     joinRoom,
-    approveParticipant,
-    rejectParticipant,
     muteParticipant,
     kickParticipant,
-    syncMentorConfig,
     leaveRoom,
     updateParticipantWhiteboard,
     upsertMyRoomIndex

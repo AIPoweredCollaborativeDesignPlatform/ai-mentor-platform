@@ -41,7 +41,7 @@ const consentHash = text => createHash('sha256').update(text || '').digest('hex'
  * Join without host approval. New participants must accept the consent text and fit under the
  * room's simultaneous-online limit; people who were already in the room always get back in.
  */
-export async function joinRoom({ roomId, uid, displayName, avatar, consent, retry = false, observer = false, asParticipant = false }) {
+export async function joinRoom({ roomId, uid, displayName, avatar, consent, retry = false, observer = false, asParticipant = false, viewOnly = false }) {
   const sys = await getSystemConfig();
   const now = Date.now();
   let consentText = '';
@@ -64,6 +64,15 @@ export async function joinRoom({ roomId, uid, displayName, avatar, consent, retr
 
     const mine = await tx.get(partRef);
     const returning = mine.exists && mine.data().status === 'approved' && Boolean(mine.data().consent);
+    // Study staff opening a room read-only (Admin > Room assignment): always allowed, also after the
+    // session ended. Someone who took part keeps their participant record; the browser shows read-only.
+    if (observer && viewOnly) {
+      if (!returning) {
+        tx.set(partRef, { uid, displayName: 'Observer', avatar: '👁️', status: 'observer', isHost: false, isOnline: true, lastSeen: now }, { merge: true });
+        tx.update(roomRef(roomId), { observerUids: FieldValue.arrayUnion(uid) });
+      }
+      return { status: 'approved', role: 'observer' };
+    }
     // Observers (and the administrator in rooms they did not create) watch invisibly unless they chose
     // to join as a participant; once someone took part in a room they stay a participant there
     if (observer && !asParticipant && !returning) {

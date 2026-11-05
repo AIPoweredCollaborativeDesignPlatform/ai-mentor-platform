@@ -1,6 +1,7 @@
 <script setup lang="ts">
+import { useRoute } from 'vue-router';
 import { t } from '../../i18n';
-import { onBeforeUnmount, ref } from 'vue';
+import { computed, onBeforeUnmount, ref } from 'vue';
 import { AlertCircle, ArrowLeft, Bell, BellOff, Box, Check, Copy, Edit3, Lock, MoreHorizontal, Moon, Share2, Sliders, Sun, Sparkles, WifiOff } from 'lucide-vue-next';
 import { useAuthStore } from '../../stores/auth';
 import { useRoomStore } from '../../stores/room';
@@ -63,6 +64,9 @@ const AI_STATUS_CLASS: Record<string, string> = {
 };
 
 const pillButton = 'inline-flex items-center gap-1 text-[11px] px-2 py-1.5 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 transition cursor-pointer min-h-[36px]';
+// Read-only visits from Admin > Room assignment return there
+const route = useRoute();
+const backTo = computed(() => (route.query.view === 'readonly' ? '/admin?tab=rooms' : authStore.isGoogleLinked ? '/dashboard' : '/'));
 </script>
 
 <template>
@@ -81,7 +85,7 @@ const pillButton = 'inline-flex items-center gap-1 text-[11px] px-2 py-1.5 round
   <header class="h-14 border-b border-slate-800 bg-slate-900/90 px-2.5 sm:px-5 flex items-center justify-between z-40 shrink-0 gap-2 relative">
     <div class="flex items-center gap-1.5 sm:gap-2 min-w-0">
       <router-link
-        :to="authStore.isGoogleLinked ? '/dashboard' : '/'"
+        :to="backTo"
         class="p-2 sm:p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition shrink-0"
         :title="authStore.isGoogleLinked ? t('header.backDashboard') : t('header.backHome')"
       >
@@ -200,12 +204,6 @@ const pillButton = 'inline-flex items-center gap-1 text-[11px] px-2 py-1.5 round
       >
         <Sliders class="w-3.5 h-3.5" />
         <span class="hidden sm:inline">{{ t('header.settingsBtn') }}</span>
-        <span
-          v-if="roomStore.isHost && roomStore.pendingParticipants.length > 0"
-          class="absolute -top-1 -right-1 w-4 h-4 bg-amber-500 text-slate-950 font-bold text-[9px] rounded-full flex items-center justify-center shadow-sm"
-        >
-          {{ roomStore.pendingParticipants.length }}
-        </span>
       </button>
     </div>
   </header>

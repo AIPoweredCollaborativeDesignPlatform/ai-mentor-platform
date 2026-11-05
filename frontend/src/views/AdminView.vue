@@ -656,17 +656,25 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
         <div
           v-for="r in visibleRooms"
           :key="r.roomId"
-          :class="[card, manageRooms ? (isRunning(r) ? 'opacity-50' : 'cursor-pointer') : '', selectedRooms.has(r.roomId) ? '!border-sky-500/80 ring-1 ring-sky-500/40' : '']"
+          :class="[card, selectedRooms.has(r.roomId) ? '!border-sky-500/80 ring-1 ring-sky-500/40' : '']"
           class="flex flex-wrap items-center gap-x-3 gap-y-2"
-          @click="toggleRoomSelect(r)"
         >
+          <!-- Manage mode only adds a checkbox; the card and its actions stay as they are -->
+          <button
+            v-if="manageRooms"
+            type="button"
+            @click="toggleRoomSelect(r)"
+            :disabled="isRunning(r)"
+            :title="isRunning(r) ? t('adm.manageHint') : ''"
+            class="shrink-0 -m-2 p-2 pointer-coarse:p-3 disabled:opacity-30"
+          >
+            <span
+              class="w-4 h-4 rounded border flex items-center justify-center"
+              :class="selectedRooms.has(r.roomId) ? 'bg-sky-500 border-sky-400 text-white' : 'border-slate-600 bg-slate-950'"
+            ><Check v-if="selectedRooms.has(r.roomId)" class="w-3 h-3 stroke-[3]" /></span>
+          </button>
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-2 min-w-0">
-              <span
-                v-if="manageRooms"
-                class="w-4 h-4 rounded border flex items-center justify-center shrink-0"
-                :class="selectedRooms.has(r.roomId) ? 'bg-sky-500 border-sky-400 text-white' : 'border-slate-600 bg-slate-950'"
-              ><Check v-if="selectedRooms.has(r.roomId)" class="w-3 h-3 stroke-[3]" /></span>
               <span class="font-semibold text-sm truncate">{{ r.roomName || 'Meeting' }}</span>
               <span class="font-mono text-xs text-sky-400 shrink-0">{{ r.pin }}</span>
               <span
@@ -690,7 +698,7 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
               </template>
             </div>
           </div>
-          <div v-if="!manageRooms" class="flex flex-wrap items-center gap-1.5 w-full sm:w-auto">
+          <div class="flex flex-wrap items-center gap-1.5 w-full sm:w-auto">
             <template v-if="isAdmin">
             <select v-model="pendingChoice[r.roomId]" :class="[select, 'flex-1 min-w-0 sm:flex-none sm:w-36']">
               <option value="" disabled>{{ t('adm.chooseProfile') }}</option>

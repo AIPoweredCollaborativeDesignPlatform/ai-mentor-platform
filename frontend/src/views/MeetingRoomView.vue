@@ -31,6 +31,8 @@ const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
 const roomStore = useRoomStore();
+// Read-only entry from Admin > Room assignment (WaitingRoomView ?as=observer); survives a reload
+roomStore.setViewOnly(route.query.view === 'readonly');
 const { playNotificationSound } = useNotificationSound();
 
 const roomId = route.params.roomId as string;
@@ -256,6 +258,12 @@ watch(() => roomStore.myStatus, status => {
 // ---------- Access verification & lifecycle ----------
 const isVerifyingAccess = ref(true);
 let accessCheckTimer: ReturnType<typeof setTimeout> | undefined;
+const switchToParticipant = () => {
+  roomStore.setViewOnly(false);
+  roomStore.stopListening();
+  router.replace(`/waiting/room_${pin}?as=participant`);
+};
+
 const backToWaitingRoom = () => {
   roomStore.stopListening();
   router.replace(`/waiting/room_${pin}`);
@@ -362,6 +370,15 @@ onUnmounted(() => {
           <Clock class="w-3.5 h-3.5" /> {{ timeLeft ? (timeLeft === '0:00' ? t('room.timeIsUp') : t('room.timeLeft', { time: timeLeft })) : t('room.noTimeLimit') }}
         </span>
         <span v-else>{{ t('room.sessionEndedShort') }}</span>
+        <!-- Study staff watching read-only can take part instead (nickname and consent like everyone) -->
+        <button
+          v-if="!isResearcher && session!.phase !== 'ended'"
+          @click="switchToParticipant"
+          class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-600 hover:bg-slate-800 text-[11px] font-semibold transition"
+          :class="canControlSession ? '' : 'ml-auto'"
+        >
+          {{ t('room.switchToParticipant') }}
+        </button>
         <button
           v-if="canControlSession && session!.phase === 'ended'"
           @click="reopen"

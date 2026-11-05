@@ -2,7 +2,6 @@ import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import type { ParticipantStatus, RoomData, ToastMessage } from '../types';
 import { useAuthStore } from './auth';
-import { useMentorStore } from './mentor';
 import { type PushToast, type RoomContext } from './room/context';
 import { endStudySession, updateRoomProfile, updateStudyRoomDetails } from '../services/session';
 import { t } from '../i18n';
@@ -19,7 +18,6 @@ export type { ToastMessage };
  */
 export const useRoomStore = defineStore('room', () => {
   const authStore = useAuthStore();
-  const mentorStore = useMentorStore();
 
   const currentRoom = ref<RoomData | null>(null);
   const myStatus = ref<ParticipantStatus>('pending');
@@ -35,7 +33,6 @@ export const useRoomStore = defineStore('room', () => {
   const participantsList = computed(() => (currentRoom.value ? Object.values(currentRoom.value.participants) : []));
   // The researcher (host) is an invisible observer: never listed or counted
   const approvedParticipants = computed(() => participantsList.value.filter(p => p.status === 'approved' && p.uid !== currentRoom.value?.hostUid));
-  const pendingParticipants = computed(() => participantsList.value.filter(p => p.status === 'pending'));
   const onlineParticipants = computed(() => approvedParticipants.value.filter(p => p.isOnline !== false));
 
   // Toasts with actions stay until the user responds; others auto-dismiss after 6s
@@ -48,7 +45,7 @@ export const useRoomStore = defineStore('room', () => {
     toasts.value = toasts.value.filter(t => t.id !== id);
   };
 
-  const ctx: RoomContext = { currentRoom, myStatus, isHost, authStore, mentorStore, pushToast };
+  const ctx: RoomContext = { currentRoom, myStatus, isHost, authStore, pushToast };
   const session = useRoomSession(ctx);
   const messages = useRoomMessages(ctx, session.setMyTyping);
   const whiteboard = useRoomWhiteboard(ctx);
@@ -101,12 +98,13 @@ export const useRoomStore = defineStore('room', () => {
   return {
     currentRoom,
     myStatus,
+    viewOnly: session.viewOnly,
+    setViewOnly: session.setViewOnly,
     isHost,
     canEditRoomDetails,
     isOnline,
     toasts,
     approvedParticipants,
-    pendingParticipants,
     onlineParticipants,
     pushToast,
     removeToast,
@@ -119,12 +117,9 @@ export const useRoomStore = defineStore('room', () => {
     createRoom: session.createRoom,
     joinRoom: session.joinRoom,
     setMyTyping: session.setMyTyping,
-    approveParticipant: session.approveParticipant,
-    rejectParticipant: session.rejectParticipant,
     muteParticipant: session.muteParticipant,
     kickParticipant: session.kickParticipant,
     leaveRoom: session.leaveRoom,
-    syncMentorConfig: session.syncMentorConfig,
     updateParticipantWhiteboard: session.updateParticipantWhiteboard,
     endMeetingForAll,
     updateParticipantProfile,

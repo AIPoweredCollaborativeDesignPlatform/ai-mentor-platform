@@ -78,14 +78,14 @@ service cloud.firestore {
 
 
     match /rooms/{roomId} {
-      // Fields every approved participant may change (activity, AI abort, whiteboard bookkeeping)
+      // Fields every approved participant may change: chat activity, stopping the AI, whiteboard snapshots for the AI
       function participantFields() {
-        return ['lastActive', 'lastMessage', 'assetsCount', 'whiteboardMemories', 'aiAbortAt', 'aiActiveTask',
-          'whiteboardActive', 'whiteboardHostUid', 'whiteboardHostName', 'whiteboardState', 'whiteboardThumbnail', 'updatedAt'];
+        return ['lastActive', 'lastMessage', 'whiteboardMemories', 'aiAbortAt', 'aiActiveTask'];
       }
-      // ...and the room's host additionally (session, ai, hostUid and observerUids are written only by Cloud Functions)
+      // ...and the host of a room from before the experiment flow (no session) may close / reopen it.
+      // Names, session, ai, progress, hostUid and observerUids are written only by Cloud Functions.
       function hostFields() {
-        return participantFields().concat(['roomName', 'roomEmoji', 'mentorConfig', 'roomStatus', 'deletedAt', 'language']);
+        return participantFields().concat(['roomStatus']);
       }
       function changedKeys() {
         return request.resource.data.diff(resource.data).affectedKeys();
@@ -103,7 +103,8 @@ service cloud.firestore {
         (changedKeys().hasOnly(['participantUids']) &&
           request.resource.data.participantUids.toSet() == resource.data.get('participantUids', []).toSet().difference([request.auth.uid].toSet()))
       );
-      allow delete: if isRoomHost(roomId) || isAdmin();
+      // Rooms are never deleted from browsers (Admin marks them deleted through adminDeleteRoom)
+      allow delete: if false;
 
       function myStatus() {
         return get(/databases/$(database)/documents/rooms/$(roomId)/participants/$(request.auth.uid)).data.status;
@@ -113,19 +114,16 @@ service cloud.firestore {
       }
 
       match /participants/{participantId} {
-        // Participants and observers are added by the joinStudyRoom function; a browser may only create
-        // the host's own record or a pending request (legacy site flow)
-        allow create: if isAuthenticated() && request.auth.uid == participantId &&
-          (isRoomHost(roomId) || request.resource.data.status == 'pending');
+        // Every member record is written by Cloud Functions (createStudyRoom, joinStudyRoom)
+        allow create: if false;
 
         allow read: if isAuthenticated() &&
           (isRoomHost(roomId) || request.auth.uid == participantId || isApprovedParticipant(roomId) || isObserver());
 
-        // Own record: presence and the open board; never self-approval or the consent record. Name and
-        // avatar go through the updateRoomProfile function, which announces the change in the chat.
+        // Own record: presence and the open board only. Status, consent, name and avatar change through
+        // Cloud Functions (joinStudyRoom, updateRoomProfile); the host may mute or remove members.
         allow update: if isRoomHost(roomId) || (isAuthenticated() && request.auth.uid == participantId &&
-          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['consent', 'displayName', 'avatar']) &&
-          (request.resource.data.status == resource.data.status || request.resource.data.status in ['pending', 'cancelled', 'left']));
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['consent', 'displayName', 'avatar', 'status']));
         allow delete: if isRoomHost(roomId) || (isAuthenticated() && request.auth.uid == participantId);
       }
 
@@ -133,11 +131,6 @@ service cloud.firestore {
       match /typing/{typingId} {
         allow read: if isMember() || isObserver();
         allow create, update, delete: if isMember() && (typingId == request.auth.uid || typingId == 'ai_mentor');
-      }
-
-      // Legacy whiteboard cursors (old site)
-      match /cursors/{cursorId} {
-        allow read, write: if isMember();
       }
 
       // Whiteboard v2: objects and presence of the board whose chat card is messages/{boardId}.

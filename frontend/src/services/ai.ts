@@ -2,7 +2,6 @@ import { httpsCallable } from 'firebase/functions';
 import { functions } from '../firebase/config';
 import { currentLocale, t, type MessageKey } from '../i18n';
 import { useRoomStore } from '../stores/room';
-import type { MentorConfig } from '../types';
 
 // All model calls run in Cloud Functions (functions/index.js); models are chosen in config/system.
 
@@ -68,7 +67,7 @@ function toSvgError(err: any, model: string): SvgGenerationError {
   return { isAiError: true, category, title, suggestion, attempts: [{ model, error: message }], rawMessage: message };
 }
 
-export async function generateSvgForWhiteboard(prompt: string, _config?: MentorConfig, abortSignal?: AbortSignal): Promise<string> {
+export async function generateSvgForWhiteboard(prompt: string, _config?: unknown, abortSignal?: AbortSignal): Promise<string> {
   try {
     const res = await call<{ prompt: string }, { svg: string }>('generateSvg', { prompt }, abortSignal);
     return res.svg;

@@ -7,9 +7,6 @@ import { db } from '../firebase/config';
 import { doc, updateDoc } from 'firebase/firestore';
 import {
   Sliders,
-  Users,
-  CheckCircle,
-  XCircle,
   ShieldCheck,
   Search,
   X,
@@ -443,58 +440,6 @@ onUnmounted(() => {
           <p v-if="roomInfoSavedMsg" class="text-[11px] text-emerald-400 flex items-center gap-1.5 animate-in fade-in">
             <Check class="w-3.5 h-3.5" /> {{ roomInfoSavedMsg }}
           </p>
-        </section>
-
-        <!-- 1. Waiting Room Approval List (only the host approves) -->
-        <section v-if="roomStore.isHost">
-          <div class="flex items-center justify-between mb-3">
-            <div class="flex items-center gap-2">
-              <Users class="w-4 h-4 text-amber-400" />
-              <h4 class="font-semibold text-sm text-slate-200">
-                {{ t('drawer.pendingRequests') }}
-              </h4>
-            </div>
-            <span
-              class="text-xs px-2 py-0.5 rounded-full font-bold"
-              :class="roomStore.pendingParticipants.length > 0 ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40 animate-pulse' : 'bg-slate-800 text-slate-500'"
-            >
-              {{ t('drawer.pendingCount', { count: roomStore.pendingParticipants.length }) }}
-            </span>
-          </div>
-
-          <div v-if="roomStore.pendingParticipants.length === 0" class="text-xs text-slate-500 italic p-3 bg-slate-950/50 rounded-xl border border-slate-800/80 text-center">
-            {{ t('drawer.noPending') }}
-          </div>
-
-          <div v-else class="space-y-2">
-            <div
-              v-for="p in roomStore.pendingParticipants"
-              :key="p.uid"
-              class="flex items-center justify-between p-3 rounded-xl bg-amber-950/20 border border-amber-500/30"
-            >
-              <div class="flex items-center gap-2.5">
-                <span class="text-2xl">{{ p.avatar }}</span>
-                <div>
-                  <h5 class="text-sm font-medium text-slate-100">{{ p.displayName }}</h5>
-                  <p class="text-[11px] text-amber-400/80">{{ t('drawer.waitingApproval') }}</p>
-                </div>
-              </div>
-              <div class="flex items-center gap-1.5">
-                <button
-                  @click="roomStore.approveParticipant(p.uid)"
-                  class="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow transition"
-                >
-                  <CheckCircle class="w-3.5 h-3.5" /> {{ t('toast.approve') }}
-                </button>
-                <button
-                  @click="roomStore.rejectParticipant(p.uid)"
-                  class="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-600/80 hover:bg-rose-500 text-white text-xs transition"
-                >
-                  <XCircle class="w-3.5 h-3.5" /> {{ t('toast.decline') }}
-                </button>
-              </div>
-            </div>
-          </div>
         </section>
 
         <!-- 2. Approved Members -->

@@ -14,16 +14,6 @@ export interface Participant {
   consent?: { agreedAt: number; textHash: string };
 }
 
-export type SensitivityLevel = 'Strict' | 'Conservative' | 'Exploratory';
-
-export interface MentorConfig {
-  sensitivity: SensitivityLevel;
-  enable3D: boolean;
-  enableMoodboard: boolean;
-  enableFactRetrieval: boolean;
-  enableProcessIntervention: boolean;
-}
-
 export interface TypingUser {
   uid: string;
   displayName: string;
@@ -86,7 +76,6 @@ export interface RoomData {
   createdBy?: string;
   createdAt: number;
   roomStatus?: 'active' | 'ended';
-  mentorConfig: MentorConfig;
   participants: Record<string, Participant>;
   messages: MessageItem[];
   assetsCount?: number;

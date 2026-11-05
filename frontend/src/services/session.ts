@@ -15,9 +15,9 @@ export interface JoinResult {
  * `retry` marks the automatic re-tries while a room is full (logged only once). Observers join
  * invisibly unless `asParticipant` (then they go through the normal nickname + consent flow).
  */
-export async function joinStudyRoom(roomId: string, displayName: string, avatar: string, consent: boolean, retry = false, asParticipant = false): Promise<JoinResult> {
-  const fn = httpsCallable<{ roomId: string; displayName: string; avatar: string; consent: boolean; retry: boolean; asParticipant: boolean }, JoinResult>(functions, 'joinStudyRoom');
-  return (await fn({ roomId, displayName, avatar, consent, retry, asParticipant })).data;
+export async function joinStudyRoom(roomId: string, displayName: string, avatar: string, consent: boolean, retry = false, asParticipant = false, viewOnly = false): Promise<JoinResult> {
+  const fn = httpsCallable<{ roomId: string; displayName: string; avatar: string; consent: boolean; retry: boolean; asParticipant: boolean; viewOnly: boolean }, JoinResult>(functions, 'joinStudyRoom');
+  return (await fn({ roomId, displayName, avatar, consent, retry, asParticipant, viewOnly })).data;
 }
 
 /** Room documents are readable by members only; join pages ask the server whether a PIN exists. */
@@ -59,7 +59,6 @@ export interface CreateRoomInput {
   roomName: string;
   roomEmoji: string;
   language: string;
-  mentorConfig: unknown;
   appVersion: string;
   displayName: string;
   avatar: string;

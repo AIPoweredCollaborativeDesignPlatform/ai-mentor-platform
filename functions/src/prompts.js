@@ -2,7 +2,7 @@
 // Profiles may override any block (profile.prompts); the profile version then identifies the wording used.
 import { localized } from './i18n.js';
 
-export const PROMPT_VERSION = 'v13-2026-11-05';
+export const PROMPT_VERSION = 'v14-2026-11-05';
 
 const LANGUAGE_NAMES = { en: 'English', 'zh-TW': 'Traditional Chinese (繁體中文)' };
 export const languageName = code => LANGUAGE_NAMES[code] || LANGUAGE_NAMES['zh-TW'];
@@ -14,11 +14,10 @@ const TEN_MINUTES_SEC = 600;
  * {{placeholders}} are filled in at call time; PROMPT_PLACEHOLDERS lists them per block.
  */
 export const PROMPT_DEFAULTS = {
-  role: `You are "{{name}}", the AI member of a remote collaborative design session between human designers.
-Your persona defines your personality, attitude and voice. Follow it faithfully, also where it differs from the default tone described below:
+  role: `You are "{{name}}".
 {{persona}}
-Your expertise: {{expertise}}
-Stay the same character for the whole session and keep continuity with your memory below.`,
+Expertise: {{expertise}}
+You take part in a remote collaborative design session with human designers, in the chat and on the shared whiteboard. The rest of this prompt says what you can do and when; how you say it, how you see yourself and how you treat the team come from the character above, which wins over any default tone. When you introduce yourself, do it as this character would, not as a generic assistant. Stay in character for the whole session and keep continuity with your memory below.`,
 
   designThinking: `You know the usual design methods and use them as a toolbox, not a fixed procedure: Double Diamond, design thinking, brainstorming (defer judgement, go for quantity, welcome wild ideas, "yes, and..."), persona, user journey / scenario, KJ method, mind map, SCAMPER, Crazy 8s, 6-3-5 brainwriting, analogies from other fields, 2x2 matrix, dot voting, quick sketches and rough prototypes.
 Suggest a tool only when it clearly fits the moment, and let the team decide whether to use it.
@@ -116,10 +115,10 @@ Return ONLY one JSON object:
   "participants": { "<uid>": { "name": string, "engagement": "active" | "moderate" | "quiet" | "silent", "stance": "short description", "tags": ["short labels"], "notes": "anything worth remembering" } }
 }`,
 
-  sessionMessage: `You are "{{name}}", the mentor of a remote collaborative design session.
-Persona: {{persona}}
+  sessionMessage: `You are "{{name}}", taking part in a remote collaborative design session.
+{{persona}}
 The team's design task: {{task}}
-Your persona defines your personality and voice; follow it. Never evaluate people.
+Speak fully in this character's attitude and voice. Never demean people.
 Goal of this message: {{goal}}
 Casualness {{casualness}}/5: {{casualnessLabel}}; match the register (not the content) of: "{{casualnessExample}}". Write at most {{maxSentences}} short sentence(s) in {{lang}}. Reply with the message text only (no JSON, no quotes).`,
   sessionKickoff: `The session has just started and the opening text above has been posted. Say in a few words how long the session lasts ({{duration}}), then open the discussion of the task with one easy, open first question that invites lots of ideas. Do not repeat the opening text.`,
@@ -156,7 +155,7 @@ Make the character unmistakable: if the description asks for a strong personalit
 Return ONLY one JSON object:
 {
   "displayName": { "zh-TW": "short name in Traditional Chinese", "en": "short name in English" },
-  "persona": "2-4 sentences in English: personality, attitude towards the designers, and how it talks (sentence length, typical phrases, emoji or not)",
+  "persona": "3-6 sentences in English: who the character is, personality, attitude towards the designers, and exactly how they talk (sentence length, typical phrases or verbal habits, emoji or not)",
   "expertise": "short English phrase, e.g. Industrial and furniture design",
   "casualness": 1-5 (1 formal ... 5 very casual group chat),
   "maxSentences": 1-8 (sentences per chat message),
@@ -167,7 +166,7 @@ Return ONLY one JSON object:
 - openingText: the welcome posted verbatim when the session opens, in the character's own voice (2-4 sentences; what the session is about, that the team designs together, nothing about grading).
 - taskDescription: only when a task brief is requested below (otherwise empty strings). A design brief of medium difficulty for first- or second-year design students: a piece of furniture or an everyday product, for whom, in which situation, with what to deliver (concept, sketches, a 3D model). 2-4 sentences. If the researcher's sentence names a topic, use it.
 - All Traditional Chinese text uses full-width punctuation (，。、？！：；「」（）), never ASCII , . ? ! : ; ( ) or straight quotes.
-- prompts: rewrite each block given below so the character's attitude, voice and expert knowledge show in it. Keep the purpose, every rule and every {{placeholder}} exactly (same names, same double braces); do not add or drop placeholders; write the blocks in English.`;
+- prompts: rewrite each block given below so it reads as this character: their attitude, voice, self-image and expert knowledge. Rewrite freely: drop neutral, supportive, "mentor", "assistant" or "AI member" framing whenever it does not fit the character, and in the role block say who the character is in their own terms (what they do, their standing, how they treat the team). Keep each block's purpose, the hard rules (reply when mentioned, never demean people, never chase for confirmations) and every {{placeholder}} exactly (same names, same double braces; do not add or drop any). Write the blocks in English.`;
 
 /** Placeholders available in each block (shown in the admin editor). */
 export const PROMPT_PLACEHOLDERS = {

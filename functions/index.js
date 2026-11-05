@@ -350,7 +350,7 @@ const fullWidth = text => toFull(toFull(text));
 const localizedPair = v => ({ 'zh-TW': fullWidth(String(v?.['zh-TW'] || '').slice(0, 2000)), en: String(v?.en || '').slice(0, 2000) });
 const DRAFT_MODEL = 'claude-sonnet-5-5';
 // Blocks the one-sentence fill may rewrite in the character's voice; the rest (format, rules for assets) stays built-in
-const DRAFT_BLOCKS = ['role', 'designThinking', 'style', 'sessionKickoff', 'sessionKickoffTopics', 'sessionReminder', 'sessionTimeUp'];
+const DRAFT_BLOCKS = ['role', 'designThinking', 'style', 'sessionMessage', 'sessionKickoff', 'sessionKickoffTopics', 'sessionReminder', 'sessionTimeUp'];
 
 export const draftAiProfile = onCall({ secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 180, maxInstances: 2 }, async request => {
   requireAdmin(request);
@@ -393,11 +393,11 @@ export const draftAiProfile = onCall({ secrets: [ANTHROPIC_API_KEY], timeoutSeco
 // ---------- Experiment flow (src/session.js) ----------
 export const joinStudyRoom = onCall({ maxInstances: 20 }, async request => {
   requireAuth(request);
-  const { roomId, displayName, avatar, consent, retry, asParticipant } = request.data || {};
+  const { roomId, displayName, avatar, consent, retry, asParticipant, viewOnly } = request.data || {};
   if (!roomId) throw new HttpsError('invalid-argument', 'Missing roomId');
   return joinRoom({
     roomId: String(roomId), uid: request.auth.uid, displayName, avatar, consent: consent === true, retry: retry === true,
-    observer: isObserverToken(request.auth.token), asParticipant: asParticipant === true
+    observer: isObserverToken(request.auth.token), asParticipant: asParticipant === true, viewOnly: viewOnly === true
   });
 });
 

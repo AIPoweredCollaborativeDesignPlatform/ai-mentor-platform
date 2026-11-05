@@ -33,11 +33,11 @@ const quickTags = computed(() => {
   if (!aiEnabled.value) return [];
   const m = aiModules.value;
   return [
-    { tag: '@Mentor', label: `@${aiName.value}`, icon: Sparkles, iconClass: '', accent: true, show: true },
-    { tag: `@Mentor ${t('quick.3dText')}`, label: t('quick.3d'), icon: Box, iconClass: 'text-sky-400', show: m.enable3D },
-    { tag: `@Mentor ${t('quick.moodText')}`, label: t('quick.mood'), icon: Palette, iconClass: 'text-amber-400', show: m.enableMoodboard },
-    { tag: `@Mentor ${t('quick.factText')}`, label: t('quick.fact'), icon: Check, iconClass: 'text-emerald-400', show: m.enableFactRetrieval },
-    { tag: `@Mentor ${t('quick.summaryText')}`, label: t('quick.summary'), icon: FileText, iconClass: 'text-purple-400', show: m.enableSummary }
+    { tag: `@${aiName.value}`, label: `@${aiName.value}`, icon: Sparkles, iconClass: '', accent: true, show: true },
+    { tag: `@${aiName.value} ${t('quick.3dText')}`, label: t('quick.3d'), icon: Box, iconClass: 'text-sky-400', show: m.enable3D },
+    { tag: `@${aiName.value} ${t('quick.moodText')}`, label: t('quick.mood'), icon: Palette, iconClass: 'text-amber-400', show: m.enableMoodboard },
+    { tag: `@${aiName.value} ${t('quick.factText')}`, label: t('quick.fact'), icon: Check, iconClass: 'text-emerald-400', show: m.enableFactRetrieval },
+    { tag: `@${aiName.value} ${t('quick.summaryText')}`, label: t('quick.summary'), icon: FileText, iconClass: 'text-purple-400', show: m.enableSummary }
   ].filter(q => q.show);
 });
 
@@ -59,7 +59,11 @@ const isUploadingFile = ref(false);
 
 const isMuted = computed(() => Boolean(roomStore.currentRoom?.participants[authStore.uid]?.isMuted));
 const isBlocked = computed(() => props.isMeetingClosed || isMuted.value);
-const mentionsMentor = computed(() => inputMessage.value.toLowerCase().includes('@mentor'));
+// Same rule as the server (functions/src/engine.js isMentioned): @mentor or @ + the AI's name for this room
+const mentionsMentor = computed(() => {
+  const text = inputMessage.value.toLowerCase();
+  return text.includes('@mentor') || text.includes(`@${aiName.value.toLowerCase()}`);
+});
 
 const adjustTextarea = () => {
   nextTick(() => {
@@ -92,7 +96,7 @@ const checkMentionTrigger = () => {
 
 const mentionCandidates = computed(() => {
   const list = [
-    ...(aiEnabled.value ? [{ id: 'mentor', name: aiName.value, avatar: '✨', handle: '@mentor', isAi: true, subtitle: 'AI' }] : []),
+    ...(aiEnabled.value ? [{ id: 'mentor', name: aiName.value, avatar: '✨', handle: `@${aiName.value}`, isAi: true, subtitle: 'AI' }] : []),
     ...Object.entries(roomStore.currentRoom?.participants || {})
       .filter(([, p]) => p.status === 'approved')
       .map(([uid, p]) => ({
@@ -393,7 +397,7 @@ defineExpose({ setReply, sendFile });
             enterkeyhint="send"
             :placeholder="isMeetingClosed
               ? lockedText || t('room.closedReadOnly')
-              : isMuted ? t('room.mutedText') : aiEnabled ? t('composer.placeholderAi') : t('composer.placeholder')"
+              : isMuted ? t('room.mutedText') : aiEnabled ? t('composer.placeholderAi', { ai: aiName }) : t('composer.placeholder')"
             class="block w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-[11px] leading-5 text-base sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500 transition resize-none min-h-[44px] max-h-32 overflow-y-auto disabled:opacity-50"
             rows="1"
           ></textarea>

@@ -3,7 +3,6 @@ import { collection, doc } from 'firebase/firestore';
 import { db } from '../../firebase/config';
 import type { ParticipantStatus, RoomData, ToastMessage } from '../../types';
 import type { useAuthStore } from '../auth';
-import type { useMentorStore } from '../mentor';
 
 export type PushToast = (
   title: string,
@@ -18,7 +17,6 @@ export interface RoomContext {
   myStatus: Ref<ParticipantStatus>;
   isHost: ComputedRef<boolean>;
   authStore: ReturnType<typeof useAuthStore>;
-  mentorStore: ReturnType<typeof useMentorStore>;
   pushToast: PushToast;
 }
 

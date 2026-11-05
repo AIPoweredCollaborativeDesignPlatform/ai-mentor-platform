@@ -44,7 +44,7 @@ async function reservePin(uid) {
  * room has no host: the creator joins like everyone else (nickname + consent), may still rename it
  * (createdBy), and End / Reopen are left to the administrator. Otherwise the creator is the invisible host.
  */
-export async function createRoom(uid, { roomName, roomEmoji, language, mentorConfig, appVersion, displayName, avatar, asParticipant = false, profileId = null }, by) {
+export async function createRoom(uid, { roomName, roomEmoji, language, appVersion, displayName, avatar, asParticipant = false, profileId = null }, by) {
   const pin = await reservePin(uid);
   const roomId = `room_${pin}`;
   const now = Date.now();
@@ -68,7 +68,7 @@ export async function createRoom(uid, { roomName, roomEmoji, language, mentorCon
     createdBy: uid,
     participantUids: asParticipant ? [] : [uid],
     createdAt: now, lastActive: now, roomStatus: 'active',
-    mentorConfig: mentorConfig || null, assetsCount: 0,
+    assetsCount: 0,
     appVersion: String(appVersion || ''), language: lang
   });
   if (!asParticipant) {

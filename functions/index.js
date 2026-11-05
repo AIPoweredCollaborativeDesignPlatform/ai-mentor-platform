@@ -11,6 +11,7 @@ import { classifyError, createMessage, extractSvg, imageBlockFromDataUrl, parseJ
 import { PROFILE_DRAFT_PROMPT, PROMPT_DEFAULTS, PROMPT_PLACEHOLDERS, PROMPT_VERSION, sketchToSvgPrompt, textToSvgPrompt, visionPrompt } from './src/prompts.js';
 import { refineMeshy } from './src/mesh3d.js';
 import { refineSketch, sketchVariations } from './src/images.js';
+import { sketchBrief } from './src/sketchBrief.js';
 import { logAiCall } from './src/log.js';
 import { FRIENDLY_ERRORS } from './src/mentor.js';
 import { assignProfileToRoom, ensureRoomAi, handleNewMessage, handlePollVote, handleSuggestionAnswer, loadProfile, postAiMessage, runCheck } from './src/engine.js';
@@ -549,11 +550,14 @@ export const sketchFromImage = onCall(
     const sys = await getSystemConfig();
     const notes = String(request.data?.notes || '').slice(0, 300);
     const secrets = await engineSecrets();
-    const urls = await sketchVariations(imageUrl, notes, { falKey: secrets.fal, model: sys.sketchRefineModel, folder: `sketch/${roomId}` });
-    await logAiCall({ ...baseLog(request, 'sketch_variations', sys.sketchRefineModel), input: { image: isUpload ? `data URL (${imageUrl.length} bytes)` : imageUrl, notes }, output: { urls } });
+    // Claude reads the image with the conversation first, so the sketches stay on the team's topic
+    const brief = await sketchBrief({ apiKey: secrets.anthropic, roomId, roomAi, image: imageUrl, notes, kind: 'variations' });
+    const urls = await sketchVariations(imageUrl, notes, { falKey: secrets.fal, model: sys.sketchRefineModel, folder: `sketch/${roomId}` }, brief?.items);
+    await logAiCall({ ...baseLog(request, 'sketch_variations', sys.sketchRefineModel), input: { image: isUpload ? `data URL (${imageUrl.length} bytes)` : imageUrl, notes, brief }, output: { urls } });
     if (!urls.some(Boolean)) throw new HttpsError('internal', 'Sketch generation failed');
     const room = (await getFirestore().doc(`rooms/${roomId}`).get()).data() || {};
-    const titles = room.language === 'en' ? ['Resolved', 'Bolder form', 'Other mechanism'] : ['更完整', '大膽造型', '不同機構'];
+    const fallback = room.language === 'en' ? ['Resolved', 'Bolder form', 'Other mechanism'] : ['更完整', '大膽造型', '不同機構'];
+    const titles = fallback.map((f, i) => brief?.items?.[i]?.title || f);
     await postAiMessage(roomId, room, roomAi.profile, {
       content: str('sketchVariations', room.language),
       assetType: 'sketch',
@@ -576,8 +580,9 @@ export const sketchFromBoard = onCall(
     const sys = await getSystemConfig();
     const notes = String(request.data?.notes || '').slice(0, 300);
     const secrets = await engineSecrets();
-    const urls = await refineSketch(imageDataUrl, notes, { falKey: secrets.fal, model: sys.sketchRefineModel, folder: `sketch/${roomId}` });
-    await logAiCall({ ...baseLog(request, 'sketch_refine', sys.sketchRefineModel), input: { imageBytes: imageDataUrl.length, notes }, output: { urls } });
+    const brief = await sketchBrief({ apiKey: secrets.anthropic, roomId, roomAi, image: imageDataUrl, notes, kind: 'refine' });
+    const urls = await refineSketch(imageDataUrl, notes, { falKey: secrets.fal, model: sys.sketchRefineModel, folder: `sketch/${roomId}` }, brief?.items);
+    await logAiCall({ ...baseLog(request, 'sketch_refine', sys.sketchRefineModel), input: { imageBytes: imageDataUrl.length, notes, brief }, output: { urls } });
     if (!urls.some(Boolean)) throw new HttpsError('internal', 'Sketch generation failed');
     const room = (await getFirestore().doc(`rooms/${roomId}`).get()).data() || {};
     const titles = room.language === 'en' ? ['Clean sketch', 'Render'] : ['乾淨草圖', '渲染圖'];

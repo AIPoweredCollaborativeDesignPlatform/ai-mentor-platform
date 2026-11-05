@@ -45,11 +45,14 @@ const REFINE_STYLES = [
 /** Idea sketches from text prompts (AI asset "sketch"); failed ones keep an empty url. */
 export const generateSketches = (prompts, opts) => generateImages(prompts.map(p => `${p}. ${SKETCH_STYLE}`), opts);
 
-/** A whiteboard drawing -> a clean sketch and a render of the same object (image-to-image). */
-export async function refineSketch(imageDataUrl, notes, opts) {
+/**
+ * A whiteboard drawing -> a clean sketch and a render of the same object (image-to-image). `items` are the
+ * on-topic descriptions from sketchBrief; without them a generic prompt is used.
+ */
+export async function refineSketch(imageDataUrl, notes, opts, items = null) {
   const hint = notes ? ` The designers describe it as: ${notes}.` : '';
   const results = await Promise.allSettled(REFINE_STYLES.map((style, i) =>
-    generateImage(`${style}.${hint}`, { ...opts, imageUrl: imageDataUrl, strength: i === 0 ? 0.75 : 0.85 })));
+    generateImage(items?.[i] ? `${style}. The object: ${items[i].prompt}` : `${style}.${hint}`, { ...opts, imageUrl: imageDataUrl, strength: i === 0 ? 0.7 : 0.8 })));
   return results.map(r => (r.status === 'fulfilled' ? r.value : ''));
 }
 
@@ -60,10 +63,13 @@ const VARIATION_STYLES = [
   'product design idea sketch of a variation of the object in the input image: a different mechanism, joint or way of use'
 ];
 
-/** Uploaded sketch or photo (https URL) -> 3 idea sketches that take it further. */
-export async function sketchVariations(imageUrl, notes, opts) {
+/**
+ * Uploaded sketch or photo -> 3 idea sketches that take it further. `items` (from sketchBrief) keep them on
+ * the team's topic; the lower strength keeps the composition of the original.
+ */
+export async function sketchVariations(imageUrl, notes, opts, items = null) {
   const hint = notes ? ` The designers say: ${notes}.` : '';
   const results = await Promise.allSettled(VARIATION_STYLES.map((style, i) =>
-    generateImage(`${style}. ${SKETCH_STYLE}.${hint}`, { ...opts, imageUrl, strength: i === 0 ? 0.8 : 0.92 })));
+    generateImage(items?.[i] ? `${items[i].prompt}. ${SKETCH_STYLE}` : `${style}. ${SKETCH_STYLE}.${hint}`, { ...opts, imageUrl, strength: i === 0 ? 0.7 : 0.82 })));
   return results.map(r => (r.status === 'fulfilled' ? r.value : ''));
 }

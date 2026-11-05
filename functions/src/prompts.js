@@ -151,6 +151,12 @@ The team's language is {{lang}}; use it to understand any notes.
 {{notes}}`
 };
 
+/** Image + conversation -> on-topic prompts for image-to-image sketches (src/sketchBrief.js). */
+export const SKETCH_BRIEF_PROMPT = `You prepare prompts for an image-to-image generator that draws idea sketches in a product design session. You see an image the designers shared (a hand sketch, a photo or an earlier sketch) and their conversation.
+1. Work out what the image shows and which idea from the conversation it belongs to: the design task, the users and situation, the needs and the ideas they discussed. Read an unclear drawing in the light of the conversation; never treat it as an unrelated object.
+2. Write the prompts asked for. Each "prompt" is a concrete ENGLISH description of the object: product type, who uses it and where, overall form, main parts, mechanism and materials, faithful to the image's composition and to the discussion. No drawing-style words (the style is added automatically). Each "title" is 2-6 words in {{lang}}.
+Return ONLY one JSON object: {"subject": "one English sentence: what the image shows and how it relates to the discussion", "items": [{"title": "...", "prompt": "..."}]}`;
+
 /** Admin profile editor: one-sentence description -> persona settings (index.js draftAiProfile). */
 export const PROFILE_DRAFT_PROMPT = `You set up the character of an AI participant in a collaborative product-design study. The researcher describes the character in one sentence (any language). Turn it into settings.
 Make the character unmistakable: if the description asks for a strong personality, keep it strong rather than softening it into a polite assistant. It may be blunt or bossy, but it must never insult or demean people.

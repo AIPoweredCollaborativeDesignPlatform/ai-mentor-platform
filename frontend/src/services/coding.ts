@@ -1,4 +1,4 @@
-import { collection, doc, getDoc, getDocs, orderBy, query, runTransaction } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, getDocsFromServer, orderBy, query, runTransaction } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import type { MessageItem } from '../types';
 
@@ -36,11 +36,11 @@ export const emptyCoding = (): CodingAnswer => ({
   important: false, reason: '', status: 'draft', revision: 0, schemaVersion: 2, updatedAt: 0,
 });
 export async function codingRooms() {
-  const snapshot = await getDocs(collection(db, 'rooms'));
+  const snapshot = await getDocsFromServer(collection(db, 'rooms'));
   return snapshot.docs.filter(d => !d.data().deletedAt).map(d => ({ id: d.id, name: String(d.data().roomName || d.id) }));
 }
 export async function codingMessages(roomId: string): Promise<MessageItem[]> {
-  const snapshot = await getDocs(query(collection(db, 'rooms', roomId, 'messages'), orderBy('timestamp')));
+  const snapshot = await getDocsFromServer(query(collection(db, 'rooms', roomId, 'messages'), orderBy('timestamp')));
   return snapshot.docs.map(d => ({ ...d.data(), id: d.id } as MessageItem));
 }
 export interface CodingQuestion { roomId: string; messages: MessageItem[]; index: number }

@@ -22,6 +22,9 @@ const history = ref<{ question: CodingQuestion; phase: number }[]>([]);
 const historyPosition = ref(-1);
 const detailedForm = ref<InstanceType<typeof DetailedCoding> | null>(null);
 let queue: CodingQuestion[] = [];
+const cloudQuestionCount = ref(0);
+const cloudRoomCount = ref(0);
+const cloudSyncedAt = ref(0);
 const exhausted = ref(false);
 const error = ref('');
 const notice = ref('');
@@ -50,14 +53,21 @@ onMounted(async () => {
   try {
     await auth.waitForRole();
     if (auth.isObserver) {
-      rooms.value = await codingRooms();
-      queue = await buildCodingQueue(rooms.value);
+      await syncCloudQueue();
       await nextQuestion();
     }
   } catch { error.value = t('coding.loadFailed'); }
   finally { busy.value = false; }
 });
 onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload));
+async function syncCloudQueue() {
+  const cloudRooms = await codingRooms();
+  const cloudQueue = await buildCodingQueue(cloudRooms);
+  rooms.value = cloudRooms; queue = cloudQueue;
+  cloudQuestionCount.value = cloudQueue.length;
+  cloudRoomCount.value = new Set(cloudQueue.map(question => question.roomId)).size;
+  cloudSyncedAt.value = Date.now();
+}
 function sourceForQuestion(method: CodingSource['samplingMethod']): CodingSource {
   return { roomId: roomId.value, messageId: target.value!.id, messageTimestamp: target.value!.timestamp,
     contextMessageIds: messages.value.slice(0, index.value + 1).map(message => message.id),
@@ -140,7 +150,7 @@ async function reloadQueue() {
   if (!canLeave()) return;
   busy.value = true; error.value = '';
   try {
-    rooms.value = await codingRooms(); queue = await buildCodingQueue(rooms.value);
+    await syncCloudQueue();
     await nextQuestion();
   } catch { error.value = t('coding.loadFailed'); }
   finally { busy.value = false; }
@@ -255,10 +265,15 @@ async function save(status: 'draft' | 'submitted') {
         <p v-if="busy" role="status">{{ t('coding.loading') }}</p>
         <p v-if="!busy && !auth.isObserver">{{ t('coding.noAccess') }}</p>
         <template v-if="auth.isObserver">
+          <section v-if="!management" class="rounded-lg border border-slate-800 p-3 text-sm space-y-2">
+            <p v-if="cloudSyncedAt">{{ t('coding.cloudBank', { rooms: cloudRoomCount, questions: cloudQuestionCount }) }}</p>
+            <p v-if="cloudSyncedAt" class="text-xs text-slate-400">{{ t('coding.cloudSynced', { time: new Date(cloudSyncedAt).toLocaleTimeString(intlLocale()) }) }}</p>
+            <p class="text-xs text-slate-400">{{ t('coding.cloudSampling') }}</p>
+            <button type="button" :disabled="busy" class="rounded-lg border border-slate-700 px-3 py-2 disabled:opacity-40" @click="reloadQueue">{{ t('coding.syncCloud') }}</button>
+          </section>
                   <button v-if="auth.isAdmin" :disabled="busy" class="border border-slate-700 rounded-lg px-3 py-2" @click="toggleManagement">{{ t(management ? 'coding.returnRandom' : 'coding.manageCases') }}</button>
 
         <p v-if="!management && exhausted" role="status">{{ t('coding.exhausted') }}</p>
-        <button v-if="!management && (exhausted || error)" :disabled="busy" class="border border-slate-700 rounded-lg px-3 py-2" @click="reloadQueue">{{ t('coding.reloadQueue') }}</button>
         <div v-if="management" class="grid sm:grid-cols-2 gap-4">
           <label class="space-y-2"><span>{{ t('coding.room') }}</span><select :value="roomId" :disabled="busy" class="w-full bg-slate-900 border border-slate-700 p-3 rounded-lg" @change="chooseRoom"><option value="">{{ t('coding.chooseRoom') }}</option><option v-for="room in rooms" :key="room.id" :value="room.id">{{ room.name }}</option></select></label>
           <label class="space-y-2"><span>{{ t('coding.cutoff') }}</span><select :value="index" :disabled="busy || !messages.length" class="w-full bg-slate-900 border border-slate-700 p-3 rounded-lg" @change="chooseTarget"><option :value="-1" disabled>{{ t('coding.chooseCutoff') }}</option><option v-for="{ message, i } in cutoffs" :key="message.id" :value="i">{{ i + 1 }}{{ reviewIndex[message.id]?.flagged || reviewIndex[message.id]?.disagreement ? ' · ' + t('coding.needsReview') : '' }}</option></select></label>

@@ -7,7 +7,7 @@ import DetailedCoding from '../components/admin/DetailedCoding.vue';
 import { intlLocale, t, type MessageKey } from '../i18n';
 import { useAuthStore } from '../stores/auth';
 import type { MessageItem } from '../types';
-import { codingMessages, codingOptions, codingRooms, emptyCoding, loadCoding, saveCoding, loadCodingCase, openCodingCase, reviewCoding, buildCodingQueue, loadDetailed, type CodingCase, type CodingQuestion, type CodingSource } from '../services/coding';
+import { codingMessages, codingOptions, codingRooms, emptyCoding, loadCoding, saveCoding, loadCodingCase, openCodingCase, reviewCoding, buildCodingQueue, loadDetailed, loadCodingProgress, codingQuestionKey, type CodingCase, type CodingQuestion, type CodingSource } from '../services/coding';
 
 const auth = useAuthStore();
 const rooms = ref<{ id: string; name: string }[]>([]);
@@ -18,13 +18,17 @@ const answer = ref(emptyCoding());
 const baseline = ref(JSON.stringify(answer.value));
 const busy = ref(true);
 const management = ref(false);
-const history = ref<{ question: CodingQuestion; phase: number }[]>([]);
+const history = ref<{ question: CodingQuestion; phase: number; ordinal: number }[]>([]);
 const historyPosition = ref(-1);
 const detailedForm = ref<InstanceType<typeof DetailedCoding> | null>(null);
 let queue: CodingQuestion[] = [];
 const cloudQuestionCount = ref(0);
 const cloudRoomCount = ref(0);
 const cloudSyncedAt = ref(0);
+const completedQuestions = ref(new Set<string>());
+const completedDetailed = ref(new Set<string>());
+const selectedDetailed = ref(new Set<string>());
+const detailedValid = ref(false);
 const exhausted = ref(false);
 const error = ref('');
 const notice = ref('');
@@ -44,6 +48,17 @@ const firstSpeaker = computed(() => context.value.find(message => !['ai_mentor',
 const isHumanMessage = (message: MessageItem) => !['ai_mentor', 'ai_mentor_3d', 'system'].includes(message.senderUid);
 const needsReason = computed(() => answer.value.ambiguous || answer.value.important);
 const complete = computed(() => !!answer.value.thinking && !!answer.value.necessity && answer.value.discussion.length > 0 && answer.value.action.length > 0 && (!needsReason.value || !!answer.value.reason.trim()));
+const progressTotal = computed(() => phase.value === 1 ? cloudQuestionCount.value : selectedDetailed.value.size);
+const progressCompleted = computed(() => phase.value === 1 ? completedQuestions.value.size : completedDetailed.value.size);
+const progressOrdinal = computed(() => exhausted.value ? progressTotal.value : history.value[historyPosition.value]?.ordinal || 1);
+const canAdvance = computed(() => phase.value === 1 ? complete.value : detailedValid.value);
+function markProgress(stage: number, status: 'draft' | 'submitted') {
+  if (!target.value) return;
+  const key = codingQuestionKey(roomId.value, target.value.id);
+  const completed = stage === 1 ? completedQuestions.value : completedDetailed.value;
+  if (status === 'submitted') completed.add(key);
+  else completed.delete(key);
+}
 const key = (value: string) => `coding.${value}` as MessageKey;
 const canLeave = () => !(dirty.value || detailedDirty.value) || window.confirm(t('coding.discard'));
 const beforeUnload = (event: BeforeUnloadEvent) => { if (dirty.value || detailedDirty.value) { event.preventDefault(); event.returnValue = ''; } };
@@ -63,7 +78,11 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload));
 async function syncCloudQueue() {
   const cloudRooms = await codingRooms();
   const cloudQueue = await buildCodingQueue(cloudRooms);
+  const progress = await loadCodingProgress(cloudQueue, auth.uid!);
   rooms.value = cloudRooms; queue = cloudQueue;
+  completedQuestions.value = new Set(progress.completed);
+  completedDetailed.value = new Set(progress.detailedCompleted);
+  selectedDetailed.value = new Set(progress.selected);
   cloudQuestionCount.value = cloudQueue.length;
   cloudRoomCount.value = new Set(cloudQueue.map(question => question.roomId)).size;
   cloudSyncedAt.value = Date.now();
@@ -99,7 +118,8 @@ async function nextQuestion() {
       answer.value = { ...nextAnswer, source: nextAnswer.source || sourceForQuestion('random-human-message-v1') };
       baseline.value = JSON.stringify(answer.value); codingCase.value = nextCase;
       phase.value = nextPhase; detailedDirty.value = false; review.value = null;
-      history.value.push({ question, phase: nextPhase });
+      detailedValid.value = false;
+      history.value.push({ question, phase: nextPhase, ordinal: Math.min(progressTotal.value, progressCompleted.value + 1) });
       historyPosition.value = history.value.length - 1;
       await resetQuestionScroll();
       return;
@@ -127,11 +147,22 @@ async function loadHistory(position: number) {
   answer.value = { ...stored, source: stored.source || sourceForQuestion('random-human-message-v1') };
   baseline.value = JSON.stringify(answer.value); codingCase.value = selectedCase;
   phase.value = entry.phase; detailedDirty.value = false; exhausted.value = false;
+  detailedValid.value = false;
   historyPosition.value = position; notice.value = '';
   await resetQuestionScroll();
 }
 async function navigateQuestion(direction: -1 | 1) {
   if (busy.value) return;
+  if (direction === 1) {
+    if (exhausted.value || !canAdvance.value) return;
+    if (phase.value === 1) { await save('submitted'); return; }
+    busy.value = true; error.value = '';
+    try {
+      if (await detailedForm.value?.submit()) await nextQuestion();
+    } catch { error.value = t('coding.saveFailed'); }
+    finally { busy.value = false; }
+    return;
+  }
   busy.value = true; error.value = '';
   try {
     if (phase.value === 2 && detailedDirty.value && detailedForm.value) {
@@ -140,18 +171,17 @@ async function navigateQuestion(direction: -1 | 1) {
       const status = answer.value.status === 'submitted' && complete.value ? 'submitted' : 'draft';
       answer.value = await saveCoding(roomId.value, target.value.id, auth.uid!, { ...answer.value, status });
       baseline.value = JSON.stringify(answer.value);
+      markProgress(1, status);
     }
     if (direction === -1 && historyPosition.value > 0) await loadHistory(historyPosition.value - 1);
-    else if (direction === 1) await nextQuestion();
   } catch (e) { error.value = t(e instanceof Error && e.message === 'coding-conflict' ? 'coding.conflict' : 'coding.saveFailed'); }
   finally { busy.value = false; }
 }
 async function reloadQueue() {
-  if (!canLeave()) return;
   busy.value = true; error.value = '';
   try {
     await syncCloudQueue();
-    await nextQuestion();
+    if (!target.value) await nextQuestion();
   } catch { error.value = t('coding.loadFailed'); }
   finally { busy.value = false; }
 }
@@ -159,7 +189,15 @@ async function toggleManagement() {
   if (!canLeave()) return;
   baseline.value = JSON.stringify(answer.value); detailedDirty.value = false;
   management.value = !management.value;
-  if (!management.value) await reloadQueue();
+  if (!management.value) {
+    busy.value = true;
+    try {
+      await syncCloudQueue();
+      if (historyPosition.value >= 0 && historyPosition.value < history.value.length) await loadHistory(historyPosition.value);
+      else await nextQuestion();
+    } catch { error.value = t('coding.loadFailed'); }
+    finally { busy.value = false; }
+  }
   else if (target.value) {
     busy.value = true;
     try {
@@ -221,6 +259,7 @@ async function openPhase2() {
   try {
     await openCodingCase(roomId.value, target.value.id, replyId.value, auth.uid);
     codingCase.value = await loadCodingCase(roomId.value, target.value.id);
+    selectedDetailed.value.add(codingQuestionKey(roomId.value, target.value.id));
   } catch { error.value = t('coding.saveFailed'); }
   finally { busy.value = false; }
 }
@@ -234,6 +273,7 @@ async function save(status: 'draft' | 'submitted') {
   busy.value = true; error.value = ''; notice.value = '';
   try {
     answer.value = await saveCoding(roomId.value, target.value.id, auth.uid, { ...answer.value, status });
+    markProgress(1, status);
     baseline.value = JSON.stringify(answer.value); notice.value = t(status === 'draft' ? 'coding.draftSaved' : 'coding.submitted');
     if (!management.value && status === 'submitted') {
       if (codingCase.value) queue.unshift({ roomId: roomId.value, messages: messages.value, index: index.value });
@@ -302,7 +342,7 @@ async function save(status: 'draft' | 'submitted') {
           <button v-if="codingCase && answer.status === 'submitted'" class="border rounded-lg px-3 py-2" :class="phase === 2 ? 'border-sky-500' : 'border-slate-700'" @click="switchPhase(2)">{{ t('coding.phase2') }}</button>
         </div>
 
-                    <DetailedCoding ref="detailedForm" v-if="phase === 2 && codingCase" id="coding-answer" :key="roomId + target.id + management" :room-id="roomId" :message-id="target.id" :reply-id="codingCase.replyId" :advance="!management" :external-busy="busy" class="min-w-0 rounded-xl border border-slate-800 bg-slate-900 p-3 sm:p-5" @dirty="detailedDirty = $event" @submitted="!management && nextQuestion()" />
+                    <DetailedCoding ref="detailedForm" v-if="phase === 2 && codingCase" id="coding-answer" :key="roomId + target.id + management" :room-id="roomId" :message-id="target.id" :reply-id="codingCase.replyId" :advance="!management" :external-busy="busy" class="min-w-0 rounded-xl border border-slate-800 bg-slate-900 p-3 sm:p-5" @dirty="detailedDirty = $event" @valid="detailedValid = $event" @saved="markProgress(2, $event)" @submitted="!management && nextQuestion()" />
           <form v-else-if="target" id="coding-answer" class="min-w-0 rounded-xl border border-slate-800 bg-slate-900 p-3 sm:p-5 space-y-5" @submit.prevent="save('submitted')">
             <fieldset :disabled="busy" class="space-y-5">
               <legend class="font-semibold mb-4">{{ t('coding.phase1') }}</legend>
@@ -318,6 +358,7 @@ async function save(status: 'draft' | 'submitted') {
               </div>
               <div class="flex gap-3"><button type="button" class="px-4 py-2 rounded-lg border border-slate-600" @click="save('draft')">{{ t('coding.saveDraft') }}</button><button type="submit" :disabled="!complete" class="px-4 py-2 rounded-lg bg-sky-600 text-white disabled:opacity-40">{{ t(management ? 'coding.submit' : 'coding.submitNext') }}</button></div>
               <p v-if="dirty" class="text-xs text-amber-300">{{ t('coding.unsaved') }}</p>
+              <p v-if="!complete" class="text-sm text-slate-400">{{ t('coding.requiredBeforeNext') }}</p>
             </fieldset>
           </form>
 
@@ -325,8 +366,12 @@ async function save(status: 'draft' | 'submitted') {
       </div>
       <nav v-if="auth.isObserver && !management && history.length" class="shrink-0 flex items-center justify-between gap-2 border-t border-slate-800 bg-slate-950 py-2" :aria-label="t('coding.questionNavigation')">
         <button type="button" :disabled="busy || historyPosition <= 0" class="min-h-11 px-3 rounded-lg border border-slate-700 disabled:opacity-40" @click="navigateQuestion(-1)">{{ t('coding.previousQuestion') }}</button>
-        <span class="text-sm text-slate-400">{{ t('coding.questionPosition', { current: Math.min(historyPosition + 1, history.length), total: history.length }) }}</span>
-        <button type="button" :disabled="busy || exhausted" class="min-h-11 px-3 rounded-lg border border-slate-700 disabled:opacity-40" @click="navigateQuestion(1)">{{ t('coding.nextQuestion') }}</button>
+        <div class="min-w-0 flex-1 text-center space-y-1">
+          <p class="text-sm">{{ t('coding.questionPosition', { current: progressOrdinal, total: progressTotal }) }}</p>
+          <p class="text-xs text-slate-400">{{ t('coding.completedProgress', { stage: phase, completed: progressCompleted, total: progressTotal }) }}</p>
+          <progress class="block w-full h-1.5 accent-sky-500" :value="progressCompleted" :max="Math.max(progressTotal, 1)" :aria-label="t('coding.progressLabel')" />
+        </div>
+        <button type="button" :disabled="busy || exhausted || !canAdvance" class="min-h-11 px-3 rounded-lg border border-slate-700 disabled:opacity-40" @click="navigateQuestion(1)">{{ t('coding.nextQuestion') }}</button>
       </nav>
 
     </main>

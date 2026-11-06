@@ -5,7 +5,7 @@ import { useAuthStore } from '../../stores/auth';
 import { detailedOptions, scoreFields, emptyDetailed, isMultiple, loadDetailed, saveDetailed, type DetailField } from '../../services/coding';
 
 const props = defineProps<{ roomId: string; messageId: string; replyId: string; advance?: boolean; externalBusy?: boolean }>();
-const emit = defineEmits<{ dirty: [value: boolean]; submitted: [] }>();
+const emit = defineEmits<{ dirty: [value: boolean]; submitted: []; saved: [status: 'draft' | 'submitted']; valid: [value: boolean] }>();
 const auth = useAuthStore();
 const answer = ref(emptyDetailed(props.replyId));
 const baseline = ref(JSON.stringify(answer.value));
@@ -18,6 +18,7 @@ const complete = computed(() => Object.values(answer.value.labels).every(values 
   && scoreFields.every(field => answer.value.scores[field] >= 1 && answer.value.scores[field] <= 5)
   && (!needsReason.value || !!answer.value.reason.trim()));
 watch(() => JSON.stringify(answer.value) !== baseline.value, value => emit('dirty', value));
+watch(() => loaded.value && complete.value, value => emit('valid', value), { immediate: true });
 const key = (value: string) => `coding.${value}` as MessageKey;
 onMounted(async () => {
   try {
@@ -41,13 +42,17 @@ async function save(status: 'draft' | 'submitted', advance = true) {
   try {
     answer.value = await saveDetailed(props.roomId, props.messageId, auth.uid, { ...answer.value, status });
     baseline.value = JSON.stringify(answer.value);
+    emit('saved', status);
     notice.value = t(status === 'draft' ? 'coding.draftSaved' : 'coding.submitted');
     if (status === 'submitted' && advance) emit('submitted');
     return true;
   } catch (e) { error.value = t(e instanceof Error && e.message === 'coding-conflict' ? 'coding.conflict' : 'coding.saveFailed'); return false; }
   finally { busy.value = false; }
 }
-defineExpose({ persist: () => save(answer.value.status === 'submitted' && complete.value ? 'submitted' : 'draft', false) });
+defineExpose({
+  persist: () => save(answer.value.status === 'submitted' && complete.value ? 'submitted' : 'draft', false),
+  submit: () => save('submitted', false),
+});
 </script>
 
 <template>

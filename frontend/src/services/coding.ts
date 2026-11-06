@@ -44,6 +44,27 @@ export async function codingMessages(roomId: string): Promise<MessageItem[]> {
   return snapshot.docs.map(d => ({ ...d.data(), id: d.id } as MessageItem));
 }
 export interface CodingQuestion { roomId: string; messages: MessageItem[]; index: number }
+export const codingQuestionKey = (roomId: string, messageId: string) => `${roomId}/${messageId}`;
+export async function loadCodingProgress(questions: CodingQuestion[], uid: string) {
+  const completed: string[] = [];
+  const detailedCompleted: string[] = [];
+  const selected: string[] = [];
+  for (let start = 0; start < questions.length; start += 10) {
+    await Promise.all(questions.slice(start, start + 10).map(async question => {
+      const id = question.messages[question.index].id;
+      const key = codingQuestionKey(question.roomId, id);
+      const [answer, selectedCase] = await Promise.all([
+        loadCoding(question.roomId, id, uid), loadCodingCase(question.roomId, id),
+      ]);
+      if (answer.status === 'submitted') completed.push(key);
+      if (selectedCase) {
+        selected.push(key);
+        if ((await loadDetailed(question.roomId, id, uid, selectedCase.replyId)).status === 'submitted') detailedCompleted.push(key);
+      }
+    }));
+  }
+  return { completed, detailedCompleted, selected };
+}
 export async function buildCodingQueue(rooms: { id: string }[]): Promise<CodingQuestion[]> {
   const candidates: CodingQuestion[] = [];
   for (let start = 0; start < rooms.length; start += 5) {

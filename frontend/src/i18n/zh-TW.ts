@@ -161,6 +161,7 @@ const zhTW: Record<keyof typeof en, string> = {
   "coding.completedProgress": "第 {stage} 階段 · 已完成 {completed}／{total} 題",
   "coding.progressLabel": "已提交答題進度",
   "coding.requiredBeforeNext": "Q1–Q4 都選好後才能進入下一題；勾選歧義或重要問題時，還需填寫判斷依據。",
+  "coding.cannotJudge": "無法判斷",
   "coding.title": "專家標註",
   "coding.intro": "請判斷選定訊息結束當下的討論狀態。",
   "coding.loading": "載入中…",

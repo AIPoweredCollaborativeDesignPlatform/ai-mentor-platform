@@ -48,10 +48,12 @@ service cloud.firestore {
         && (resource == null || resource.data.get('source', null) == null || request.resource.data.source == resource.data.source)
         && request.resource.data.schemaVersion == 2
         && request.resource.data.status in ['draft', 'submitted']
-        && request.resource.data.thinking in ['', 'diverge', 'converge', 'iterate', 'reflect']
-        && validCodingChoices(request.resource.data.discussion, ['effective', 'creativeDetour', 'misunderstanding', 'stalled', 'offTopic'], false)
-        && request.resource.data.necessity in ['', 'unnecessary', 'optional', 'worthwhile', 'urgent']
-        && validCodingChoices(request.resource.data.action, ['silent', 'clarify', 'connect', 'refocus', 'compare'], false)
+        && request.resource.data.thinking in ['', 'diverge', 'converge', 'iterate', 'reflect', 'cannotJudge']
+        && validCodingChoices(request.resource.data.discussion, ['effective', 'creativeDetour', 'misunderstanding', 'stalled', 'offTopic', 'cannotJudge'], false)
+        && request.resource.data.necessity in ['', 'unnecessary', 'optional', 'worthwhile', 'urgent', 'cannotJudge']
+        && validCodingChoices(request.resource.data.action, ['silent', 'clarify', 'connect', 'refocus', 'compare', 'cannotJudge'], false)
+        && (!request.resource.data.discussion.hasAny(['cannotJudge']) || request.resource.data.discussion.size() == 1)
+        && (!request.resource.data.action.hasAny(['cannotJudge']) || request.resource.data.action.size() == 1)
         && request.resource.data.ambiguous is bool
         && request.resource.data.important is bool
         && request.resource.data.reason is string && request.resource.data.reason.size() <= 1000

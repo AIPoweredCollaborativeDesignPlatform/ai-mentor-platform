@@ -59,6 +59,17 @@ function markProgress(stage: number, status: 'draft' | 'submitted') {
   if (status === 'submitted') completed.add(key);
   else completed.delete(key);
 }
+function chooseOption(field: keyof typeof codingOptions, option: string, event: Event) {
+  if (field === 'thinking' || field === 'necessity') {
+    answer.value[field] = option;
+    return;
+  }
+  const checked = (event.target as HTMLInputElement).checked;
+  const previous = answer.value[field];
+  answer.value[field] = !checked ? previous.filter(value => value !== option)
+    : option === 'cannotJudge' ? [option]
+    : [...previous.filter(value => value !== 'cannotJudge' && value !== option), option];
+}
 const key = (value: string) => `coding.${value}` as MessageKey;
 const canLeave = () => !(dirty.value || detailedDirty.value) || window.confirm(t('coding.discard'));
 const beforeUnload = (event: BeforeUnloadEvent) => { if (dirty.value || detailedDirty.value) { event.preventDefault(); event.returnValue = ''; } };
@@ -348,7 +359,7 @@ async function save(status: 'draft' | 'submitted') {
               <legend class="font-semibold mb-4">{{ t('coding.phase1') }}</legend>
               <fieldset v-for="(options, field) in codingOptions" :key="field">
                 <legend class="font-medium mb-2">{{ t(key(field)) }}</legend>
-                <div class="flex flex-wrap gap-2"><label v-for="option in options" :key="option" class="flex items-center gap-2 border rounded-lg px-3 py-2 cursor-pointer" :class="(Array.isArray(answer[field]) ? answer[field].includes(option) : answer[field] === option) ? 'border-sky-500 bg-sky-600 text-white' : 'border-slate-700'"><input v-model="answer[field]" :type="field === 'discussion' || field === 'action' ? 'checkbox' : 'radio'" :name="field" :value="option">{{ t(key(option)) }}</label></div>
+                <div class="flex flex-wrap gap-2"><label v-for="option in options" :key="option" class="flex items-center gap-2 border rounded-lg px-3 py-2 cursor-pointer" :class="(Array.isArray(answer[field]) ? answer[field].includes(option) : answer[field] === option) ? 'border-sky-500 bg-sky-600 text-white' : 'border-slate-700'"><input :checked="Array.isArray(answer[field]) ? answer[field].includes(option) : answer[field] === option" @change="chooseOption(field, option, $event)" :type="field === 'discussion' || field === 'action' ? 'checkbox' : 'radio'" :name="field" :value="option">{{ t(key(option)) }}</label></div>
               </fieldset>
               <div class="border-t border-slate-700 pt-4 space-y-3">
                 <label class="flex items-center gap-2"><input v-model="answer.ambiguous" type="checkbox">{{ t('coding.ambiguous') }}</label>

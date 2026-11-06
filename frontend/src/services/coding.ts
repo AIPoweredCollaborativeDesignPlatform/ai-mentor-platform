@@ -3,10 +3,10 @@ import { db } from '../firebase/config';
 import type { MessageItem } from '../types';
 
 export const codingOptions = {
-  thinking: ['diverge', 'converge', 'iterate', 'reflect'],
-  discussion: ['effective', 'creativeDetour', 'misunderstanding', 'stalled', 'offTopic'],
-  necessity: ['unnecessary', 'optional', 'worthwhile', 'urgent'],
-  action: ['silent', 'clarify', 'connect', 'refocus', 'compare'],
+  thinking: ['diverge', 'converge', 'iterate', 'reflect', 'cannotJudge'],
+  discussion: ['effective', 'creativeDetour', 'misunderstanding', 'stalled', 'offTopic', 'cannotJudge'],
+  necessity: ['unnecessary', 'optional', 'worthwhile', 'urgent', 'cannotJudge'],
+  action: ['silent', 'clarify', 'connect', 'refocus', 'compare', 'cannotJudge'],
 } as const;
 export type CodingField = keyof typeof codingOptions;
 export interface CodingSource {

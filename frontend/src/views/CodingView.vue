@@ -10,6 +10,11 @@ import type { MessageItem } from '../types';
 import { codingMessages, codingOptions, codingRooms, emptyCoding, loadCoding, saveCoding, loadCodingCase, openCodingCase, reviewCoding, buildCodingQueue, loadDetailed, loadCodingProgress, codingQuestionKey, type CodingCase, type CodingQuestion, type CodingSource } from '../services/coding';
 
 const auth = useAuthStore();
+const conversationHeight = ref(32);
+function updateConversationHeight(event: Event) {
+  conversationHeight.value = Math.max(15, Math.min(60, Number((event.target as HTMLInputElement).value)));
+  try { localStorage.setItem('coding-conversation-height', String(conversationHeight.value)); } catch { /* Storage may be unavailable. */ }
+}
 const rooms = ref<{ id: string; name: string }[]>([]);
 const roomId = ref('');
 const messages = ref<MessageItem[]>([]);
@@ -76,6 +81,10 @@ const beforeUnload = (event: BeforeUnloadEvent) => { if (dirty.value || detailed
 onBeforeRouteLeave(canLeave);
 onMounted(async () => {
   window.addEventListener('beforeunload', beforeUnload);
+  try {
+    const savedHeight = Number(localStorage.getItem('coding-conversation-height'));
+    if (savedHeight >= 15 && savedHeight <= 60) conversationHeight.value = savedHeight;
+  } catch { /* Use the default height when storage is unavailable. */ }
   try {
     await auth.waitForRole();
     if (auth.isObserver) {
@@ -301,7 +310,7 @@ async function save(status: 'draft' | 'submitted') {
     <PageNav />
     <main class="max-w-4xl mx-auto h-full min-h-0 flex flex-col gap-2">
       <header class="shrink-0 flex items-center justify-between gap-3"><h1 class="text-lg font-semibold">{{ t('coding.title') }}</h1><div class="flex items-center gap-2 text-sm text-slate-400"><span>{{ t('coding.appearance') }}</span><ThemeSwitch class="!w-11 !h-11" /></div></header>
-                <section id="coding-context" tabindex="0" role="region" :aria-label="t('coding.context')" class="coding-conversation shrink-0 min-w-0 rounded-xl border border-slate-800 bg-slate-900 p-3 overflow-auto" v-if="target">
+                <section id="coding-context" :style="{ height: conversationHeight + 'dvh' }" tabindex="0" role="region" :aria-label="t('coding.context')" class="coding-conversation shrink-0 min-w-0 rounded-xl border border-slate-800 bg-slate-900 p-3 overflow-auto" v-if="target">
             <h2 class="font-semibold mb-4">{{ t('coding.context') }}</h2>
             <article v-for="message in context" :key="message.id" class="w-fit max-w-[90%] p-3 mb-4 rounded-2xl border" :class="[message.id === target.id ? 'border-sky-500 bg-slate-800' : 'border-slate-700 bg-slate-950', !isHumanMessage(message) ? 'mx-auto' : message.senderUid === firstSpeaker ? 'mr-auto rounded-tl-sm' : 'ml-auto rounded-tr-sm']">
               <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mb-2"><span class="text-sm font-medium text-sky-300">{{ message.senderName }}</span><time class="text-xs text-slate-400" :datetime="new Date(message.timestamp).toISOString()">{{ new Date(message.timestamp).toLocaleTimeString(intlLocale(), { hour: '2-digit', minute: '2-digit' }) }}</time></div><p class="whitespace-pre-wrap break-words leading-relaxed">{{ message.content }}</p>
@@ -310,6 +319,10 @@ async function save(status: 'draft' | 'submitted') {
               <p v-if="message.type !== 'text'" class="text-xs text-amber-300 mt-2">{{ t('coding.mediaContext') }}</p>
             </article>
           </section>
+      <label v-if="target" class="shrink-0 flex items-center gap-3 text-xs text-slate-400">
+        <span>{{ t('coding.conversationHeight') }}</span>
+        <input type="range" min="15" max="60" step="1" :value="conversationHeight" @input="updateConversationHeight" aria-controls="coding-context" :aria-label="t('coding.conversationHeight')" class="min-w-0 flex-1 h-8 accent-sky-500 cursor-ns-resize">
+      </label>
       <div id="coding-answer-scroll" class="flex-1 min-h-0 overflow-y-auto overscroll-contain space-y-3 pb-6" tabindex="0" :aria-label="t('coding.answerArea')">
         <p v-if="error" role="alert" class="text-rose-400">{{ error }}</p>
         <p v-if="notice" role="status" class="text-emerald-400">{{ notice }}</p>
@@ -390,8 +403,8 @@ async function save(status: 'draft' | 'submitted') {
 </template>
 
 <style scoped>
-.coding-conversation { height: clamp(120px, 32dvh, 340px); overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
-@media (max-height: 500px) { .coding-conversation { height: 25dvh; min-height: 70px; } }
+.coding-conversation { min-height: 70px; max-height: calc(100dvh - 260px); overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+
 .coding-page :deep(input[type='checkbox']),
 .coding-page :deep(input[type='radio']) {
   width: 1.125rem;

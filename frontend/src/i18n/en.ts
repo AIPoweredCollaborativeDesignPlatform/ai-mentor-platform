@@ -160,6 +160,7 @@ export default {
   "coding.progressLabel": "Submitted answer progress",
   "coding.requiredBeforeNext": "Complete Q1–Q4 before continuing. A reason is required when an issue is flagged.",
   "coding.cannotJudge": "Unable to judge",
+  "coding.conversationHeight": "Conversation height",
   "coding.title": "Expert coding",
   "coding.intro": "Judge the discussion at the selected message.",
   "coding.loading": "Loading…",

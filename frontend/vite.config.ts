@@ -2,8 +2,10 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import path from 'path'
 import { readFileSync } from 'fs'
+import { fileURLToPath } from 'url'
 
-const pkg = JSON.parse(readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8'))
+const configDirectory = path.dirname(fileURLToPath(import.meta.url))
+const pkg = JSON.parse(readFileSync(path.resolve(configDirectory, 'package.json'), 'utf-8'))
 
 // "YYYY-MM-DD HH:mm:ss" in Taiwan time, regardless of the build machine's timezone
 const buildTime = new Date()
@@ -19,7 +21,7 @@ export default defineConfig({
   ],
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, './src')
+      '@': path.resolve(configDirectory, './src')
     }
   },
   server: {

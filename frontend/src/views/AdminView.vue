@@ -544,7 +544,7 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
   <div class="min-h-[100dvh] bg-slate-950 text-slate-100 pt-safe px-safe">
     <header class="h-14 border-b border-slate-800 bg-slate-900/90 px-4 flex items-center gap-3">
       <h1 class="font-bold">{{ t('adm.title') }}</h1>
-      <PageNav>
+      <PageNav><router-link v-if="canView" to="/admin/coding" class="page-nav-btn">{{ t('coding.title') }}</router-link>
         <button v-if="isAdmin" @click="loadAll" class="page-nav-btn" :title="t('adm.refresh')">
           <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': loading }" />
         </button>

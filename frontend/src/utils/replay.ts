@@ -207,7 +207,7 @@ export function lastActivityAt(events: ResearchEvent[]): number {
   for (let i = events.length - 1; i >= 0; i--) {
     if (['chat', 'board', 'whiteboard_ui'].includes(groupOf(events[i].kind))) return events[i].at;
   }
-  return events.at(-1)?.at || 0;
+  return events[events.length - 1]?.at || 0;
 }
 
 export interface ReplaySegment {

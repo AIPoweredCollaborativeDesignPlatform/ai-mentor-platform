@@ -148,7 +148,10 @@ const segThoughts = computed(() => thoughts.value.filter(th =>
   th.at >= segment.value.start && th.at < segment.value.until &&
   (th.kind === 'mentor' ? showSilent.value || th.spoke : th.kind === 'tool' ? true : showMemory.value)));
 const thoughtsSoFar = computed(() => segThoughts.value.filter(th => th.at <= t.value).length);
-const currentThoughtId = computed(() => segThoughts.value.filter(th => th.at <= t.value).at(-1)?.id || null);
+const currentThoughtId = computed(() => {
+  const visible = segThoughts.value.filter(th => th.at <= t.value);
+  return visible[visible.length - 1]?.id || null;
+});
 const jumpToThought = (th: AiThought) => (t.value = Math.min(Math.max(th.at, t0.value), tEnd.value));
 const thoughtBadge = (th: AiThought): { label: MessageKey; cls: string } =>
   th.kind === 'tool' ? { label: th.error ? 'rp.aiToolFailed' : 'rp.aiTool', cls: th.error ? 'border-rose-500/50 text-rose-300' : 'border-slate-600 text-slate-300' }

@@ -6,6 +6,7 @@
 //   npm run deploy -- --major    major bump (6.1.0 → 7.0.0)
 //   npm run deploy -- --dry      bump + build only; nothing is deployed or committed, version is restored
 //   npm run deploy -- --functions  force-deploy Cloud Functions even if unchanged
+//   npm run deploy -- --web-only   deploy hosting and Firestore rules only
 import { execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
@@ -21,6 +22,7 @@ const PROJECT = 'ai-mentor-web';
 const args = new Set(process.argv.slice(2));
 const bump = args.has('--major') ? 'major' : args.has('--minor') ? 'minor' : 'patch';
 const dry = args.has('--dry');
+const webOnly = args.has('--web-only');
 
 // Loading functions/ (Anthropic SDK + Admin SDK) can exceed the CLI's 10s discovery timeout on this machine
 const run = (cmd, cwd = ROOT) => execSync(cmd, { cwd, stdio: 'inherit', env: { ...process.env, FUNCTIONS_DISCOVERY_TIMEOUT: '120' } });
@@ -58,7 +60,7 @@ try {
   console.log(`  → v${version}`);
 
   step('Building frontend (type check + bundle)');
-  run('npm run build', FRONTEND);
+  run('npm run build -- --configLoader runner', FRONTEND);
 
   if (dry) {
     restoreVersion();
@@ -68,15 +70,15 @@ try {
 
   const state = existsSync(STATE_FILE) ? JSON.parse(readFileSync(STATE_FILE, 'utf-8')) : {};
   const fnHash = hashFunctions();
-  const targets = ['hosting', 'firestore:rules', 'storage'];
-  if (args.has('--functions') || state.functionsHash !== fnHash) targets.push('functions');
+  const targets = webOnly ? ['hosting', 'firestore:rules'] : ['hosting', 'firestore:rules', 'storage'];
+  if (!webOnly && (args.has('--functions') || state.functionsHash !== fnHash)) targets.push('functions');
 
   step(`Deploying to Firebase (${targets.join(', ')})`);
   run(`firebase deploy --only ${targets.join(',')} --project ${PROJECT}`);
   deployed = true;
 
   writeFileSync(STATE_FILE, JSON.stringify({
-    functionsHash: fnHash,
+    functionsHash: webOnly ? state.functionsHash : fnHash,
     lastVersion: version,
     lastDeployedAt: new Date().toISOString()
   }, null, 2) + '\n');

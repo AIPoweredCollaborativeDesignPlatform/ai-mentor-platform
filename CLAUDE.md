@@ -19,6 +19,7 @@ cd functions; npm install
 # 部署（在專案根目錄）— 一律用這個，不要手動 firebase deploy
 npm run deploy             # 版本 patch+1 → build → deploy hosting/rules/storage（functions 有變才部署）→ git commit + tag
 npm run deploy -- --minor  # 或 --major；--functions 強制部署 functions
+npm run deploy -- --web-only  # 只部署 hosting 與 Firestore 規則（不動 storage、functions）
 npm run deploy:dry         # 只 build 驗證，不部署、不改版本
 ```
 
@@ -51,6 +52,12 @@ npm run deploy:dry         # 只 build 驗證，不部署、不改版本
 - AI 訊息以 `senderUid: 'ai_mentor'`／`ai_mentor_3d`／`system` 寫回 messages（engine 會忽略這些以免自我觸發）。`stores/room/mentor.ts` 只負責前端顯示與重試，不做觸發判斷。
 - **房內暱稱 vs 帳號名稱**：`authStore.displayName` 是房內暱稱（進房時被參與者紀錄覆寫）；房外頁面顯示 Google 帳號名稱一律用 `authStore.accountName`。重播以每次重新開始切成多段（`segmentsOf`），每段停在該段最後一筆聊天／白板活動（`lastActivityAt`），之後的離開／結束事件只留在事件清單。重播頁的「AI 背景思考」讀 `aiLogs`（`where roomId ==`，前端排序、免複合索引；`utils/replay.ts` 的 `loadAiThoughts`），列出每次判斷（發言／沉默／影子判斷）與 AI 的判斷筆記，跟著播放時間走。後台分頁存在網址 `?tab=`，清單先顯示瀏覽器快取（`ai_mentor_admin_cache`）再背景更新。
 - **路由為 Hash 模式**（`/#/room/room_123456`）；Room ID＝`room_${6位數PIN}`。
+- **人工編碼工具**（`/#/admin/coding`，`views/CodingView.vue`、`components/admin/DetailedCoding.vue`、`services/coding.ts`；後台頁首有入口，需 observer 或 admin）：與 AI 判斷完全分開，AI 不讀這些標籤。
+  - 抽樣：`buildCodingQueue` 把所有房間的「人類訊息」當切點隨機洗牌（`samplingMethod: 'random-human-message-v1'`），評分者看到切點以前的對話（`source.contextMessageIds`，最後一筆必須是該訊息）。
+  - 第一層（`codingRooms/{roomId}/items/{messageId}/ratings/{uid}`，schemaVersion 2）：thinking、discussion（多選）、necessity、action（多選）、ambiguous／important（勾選時理由必填）。
+  - 第二層細部編碼（`.../items/{messageId}/detailedRatings/{uid}`，schemaVersion 1）：第一層送出後才能填；管理員以 `openCodingCase` 固定該切點之後的一則 AI 回覆（`items/{messageId}.replyId`，之後不可改），評 7 組標籤（design_stage、thinking_mode、design_behavior、collaboration_behavior、collaboration_situation、intervention_level、mentor_strategy）與 7 個 1–5 分面向。
+  - 每位評分者只能讀寫自己的答案（admin 可讀全部）；用 `revision` 做樂觀鎖（衝突丟 `coding-conflict`），`reviewCoding` 回報份數、是否被標記、是否有分歧。
+  - 改選項時，`services/coding.ts`、`firestore.rules` 的白名單、兩份字典 `coding.*` 三處要一起改。
 - **協作白板 v2**（P3 重寫，設計見 `../_claude工作區/P3白板設計.md`；Fabric.js **v7** API）：UI 在 `components/whiteboard/WhiteboardBoard.vue`（觀察員／重播用唯讀的 `LiveBoardViewer.vue`、`admin/BoardReplayCanvas.vue`），邏輯拆在 `src/whiteboard/*.ts`。
   - 身分與私人旗標＝聊天卡片 `rooms/{id}/messages/{boardId}`（`type: whiteboard_state`，`stores/room/whiteboard.ts`）；沒有全房共用的「live session」，公開白板都可多人編輯，私人白板只有建立者能開。
   - 物件逐一存在 `rooms/{id}/boards/{boardId}/objects/{objId}`（`{ z, fabric, updatedBy, updatedAt }`，`whiteboard/sync.ts`），每個物件有穩定 `id`（`whiteboard/objects.ts`）；游標與進行中的筆畫／拖曳在同層 `presence/{uid}`（15 秒過期）。

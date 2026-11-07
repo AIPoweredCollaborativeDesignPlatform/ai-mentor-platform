@@ -1,3 +1,5 @@
+# 交接摘要與執行指南（2026-11-14，v7.8.47）
+
 ## Version trash and configurable sample sizes (2026-11-12)
 - Admin delete/restore uses recoverable deletedAt metadata; active bank is protected. Snapshot/answers/shared revision scopes are never physically removed. Deleted banks cannot be reopened/exported/activated; descendants remain independent. Deleting latest updates latestVersion to the active bank to avoid a deleted inheritance parent.
 - Estimate action scans eligible enabled human text/media targets without LLM calls. Pilot recommendation min(60, available) is a workload starting point, not statistical power advice. UI accepts a positive integer and exposes available/recommended counts; full rebuild/reset are disabled while room checkboxes are selected to avoid scope confusion.
@@ -68,7 +70,6 @@ Deployment status: v7.8.35 deployed successfully on 2026-11-09 (hosting, Firesto
 - Test: node scripts/test-coding-sampling.mjs (Node 24; requires TypeScript stripping). Build: vue-tsc + vite runner.
 - Deploy only new callable plus hosting/rules: node scripts/deploy.mjs --coding-only. Preserves full-functions hash so unrelated backend changes are not falsely marked deployed.
 
-# 交接摘要與執行指南（2026-11-05，v7.8.25）
 
 給接手的人或 AI 代理（Codex、Claude Code）：照本文件就能接續實作。
 
@@ -176,6 +177,12 @@ Deployment status: v7.8.35 deployed successfully on 2026-11-09 (hosting, Firesto
     - `@` 改用後台指定的 AI 名稱。
     - 根網址改為不快取：`firebase.json` 的 `{/,**/index.html}`。
 
+### v7.8.28 → v7.8.32（Codex）
+
+- 人工編碼工具 `/#/admin/coding`：隨機抽人類訊息切點做第一層編碼，再對指定 AI 回覆做細部編碼與 7 面向評分；Firestore 規則逐欄驗證（`codingRooms`）。
+- `deploy.mjs` 新增 `--web-only`；`vite.config.ts` 改用 `import.meta.url`；build 改為 `--configLoader runner`。
+- 未驗證：兩位評分者同時編碼、細部編碼的規則在正式環境的寫入。
+
 ## 4. 已驗證與未驗證
 
 已驗證：
@@ -211,7 +218,7 @@ Deployment status: v7.8.35 deployed successfully on 2026-11-09 (hosting, Firesto
 ## 6. 待辦與建議的下一步
 
 1. 完成第 4 節的實測清單；特別是 Firestore 規則，有問題時先檢查 `participantFields()` 與訊息的 `hasOnly` 白名單。
-2. 評分工具：在重播頁讓兩位評分者對每則 AI 發言打 1–5 分，共 7 個面向，資料存進 Firestore，方便計算評分者一致性。這是擱置中的需求。
+2. 評分工具：已由 Codex 在 v7.8.28–v7.8.32 完成（`/#/admin/coding`，見 `CLAUDE.md`「人工編碼工具」）。尚未做：匯出編碼資料與計算評分者一致性（如 Cohen's kappa）。
 3. 重播頁顯示建議卡片上誰接受、誰拒絕（資料已在 `messages.suggestion.responses`）。
 4. 若導師模型 Haiku 撐不住角色，可評估把 `config.models.mentor` 換成 Sonnet。換之前要確認研究設計允許，而且研究期間模型要固定。
 5. 後台費用估算還沒納入草圖（fal）與圖片轉 3D（30 點）。

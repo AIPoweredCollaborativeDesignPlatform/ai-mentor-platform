@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
 import { onBeforeRouteLeave } from 'vue-router';
+import { Database, FolderSearch, Info, X } from 'lucide-vue-next';
 import PageNav from '../components/PageNav.vue';
 import ThemeSwitch from '../components/ThemeSwitch.vue';
 import DetailedCoding from '../components/admin/DetailedCoding.vue';
@@ -10,6 +11,12 @@ import type { MessageItem } from '../types';
 import { codingMessages, codingOptions, codingRooms, emptyCoding, loadCoding, saveCoding, loadCodingCase, openCodingCase, reviewCoding, buildCodingQueue, loadDetailed, loadCodingProgress, codingQuestionKey, type CodingCase, type CodingQuestion, type CodingSource } from '../services/coding';
 
 const auth = useAuthStore();
+const toolsDialog = ref<HTMLDialogElement | null>(null);
+const activeTool = ref<'cloud' | 'source'>('cloud');
+function openTool(tool: 'cloud' | 'source') {
+  activeTool.value = tool;
+  toolsDialog.value?.showModal();
+}
 const conversationHeight = ref(32);
 function updateConversationHeight(event: Event) {
   conversationHeight.value = Math.max(15, Math.min(60, Number((event.target as HTMLInputElement).value)));
@@ -306,8 +313,31 @@ async function save(status: 'draft' | 'submitted') {
 </script>
 
 <template>
-  <div class="coding-page h-[100dvh] overflow-hidden bg-slate-950 text-slate-100 px-3 sm:px-4 pt-14 pb-safe">
+  <div class="coding-page h-[100dvh] overflow-hidden bg-slate-950 text-slate-100 pl-3 pr-16 sm:pl-4 sm:pr-20 pt-14 pb-safe">
     <PageNav />
+    <aside v-if="auth.isObserver" class="coding-tools fixed right-1 sm:right-3 top-1/2 -translate-y-1/2 z-30 flex flex-col gap-2 rounded-xl border border-slate-800 bg-slate-950 p-1 text-slate-400" :aria-label="t('coding.tools')">
+      <button type="button" class="w-10 h-11 flex items-center justify-center rounded-lg hover:bg-slate-800 hover:text-slate-100" :title="t('coding.cloudTools')" :aria-label="t('coding.cloudTools')" @click="openTool('cloud')"><Database class="w-4 h-4" /></button>
+      <button v-if="auth.isAdmin" type="button" :disabled="busy" class="w-10 h-11 flex items-center justify-center rounded-lg hover:bg-slate-800 hover:text-slate-100 disabled:opacity-40" :class="management ? 'text-sky-400 bg-slate-800' : ''" :title="t(management ? 'coding.returnRandom' : 'coding.manageCases')" :aria-label="t(management ? 'coding.returnRandom' : 'coding.manageCases')" @click="toggleManagement"><FolderSearch class="w-4 h-4" /></button>
+      <button v-if="target" type="button" class="w-10 h-11 flex items-center justify-center rounded-lg hover:bg-slate-800 hover:text-slate-100" :title="t('coding.source')" :aria-label="t('coding.source')" @click="openTool('source')"><Info class="w-4 h-4" /></button>
+    </aside>
+    <dialog ref="toolsDialog" class="coding-tools-dialog fixed ml-auto mr-2 sm:mr-4 my-auto w-[min(24rem,calc(100vw-1rem))] max-h-[80dvh] overflow-y-auto rounded-xl border border-slate-700 bg-slate-950 text-slate-100 p-4" aria-labelledby="coding-tools-title" @click="($event.target === toolsDialog) && toolsDialog?.close()">
+      <header class="flex items-center justify-between gap-3 mb-4"><h2 id="coding-tools-title" class="font-semibold">{{ t(activeTool === 'cloud' ? 'coding.cloudTools' : 'coding.source') }}</h2><button type="button" class="w-11 h-11 flex items-center justify-center rounded-lg hover:bg-slate-800" :aria-label="t('coding.closeTools')" @click="toolsDialog?.close()"><X class="w-4 h-4" /></button></header>
+          <section v-if="activeTool === 'cloud'" class="rounded-lg border border-slate-800 p-3 text-sm space-y-2">
+            <p v-if="cloudSyncedAt">{{ t('coding.cloudBank', { rooms: cloudRoomCount, questions: cloudQuestionCount }) }}</p>
+            <p v-if="cloudSyncedAt" class="text-xs text-slate-400">{{ t('coding.cloudSynced', { time: new Date(cloudSyncedAt).toLocaleTimeString(intlLocale()) }) }}</p>
+            <p class="text-xs text-slate-400">{{ t('coding.cloudSampling') }}</p>
+            <button type="button" :disabled="busy" class="rounded-lg border border-slate-700 px-3 py-2 disabled:opacity-40" @click="reloadQueue">{{ t('coding.syncCloud') }}</button>
+          </section>
+        <section v-if="activeTool === 'source' && target" class="text-sm border border-slate-800 rounded-lg p-3">
+
+          <dl class="mt-3 space-y-2 break-all">
+            <div><dt class="text-slate-400">{{ t('coding.sourceRoom') }}</dt><dd>{{ roomId }}</dd></div>
+            <div><dt class="text-slate-400">{{ t('coding.sourceMessage') }}</dt><dd>{{ target.id }}</dd></div>
+            <div><dt class="text-slate-400">{{ t('coding.sourceTime') }}</dt><dd>{{ new Date(target.timestamp).toLocaleString() }}</dd></div>
+            <div><dt class="text-slate-400">{{ t('coding.sourceContext') }}</dt><dd>{{ answer.source?.contextMessageIds.length }}</dd></div>
+          </dl>
+        </section>
+    </dialog>
     <main class="max-w-4xl mx-auto h-full min-h-0 flex flex-col gap-2">
       <header class="shrink-0 flex items-center justify-between gap-3"><h1 class="text-lg font-semibold">{{ t('coding.title') }}</h1><div class="flex items-center gap-2 text-sm text-slate-400"><span>{{ t('coding.appearance') }}</span><ThemeSwitch class="!w-11 !h-11" /></div></header>
                 <section id="coding-context" :style="{ height: conversationHeight + 'dvh' }" tabindex="0" role="region" :aria-label="t('coding.context')" class="coding-conversation shrink-0 min-w-0 rounded-xl border border-slate-800 bg-slate-900 p-3 overflow-auto" v-if="target">
@@ -329,14 +359,6 @@ async function save(status: 'draft' | 'submitted') {
         <p v-if="busy" role="status">{{ t('coding.loading') }}</p>
         <p v-if="!busy && !auth.isObserver">{{ t('coding.noAccess') }}</p>
         <template v-if="auth.isObserver">
-          <section v-if="!management" class="rounded-lg border border-slate-800 p-3 text-sm space-y-2">
-            <p v-if="cloudSyncedAt">{{ t('coding.cloudBank', { rooms: cloudRoomCount, questions: cloudQuestionCount }) }}</p>
-            <p v-if="cloudSyncedAt" class="text-xs text-slate-400">{{ t('coding.cloudSynced', { time: new Date(cloudSyncedAt).toLocaleTimeString(intlLocale()) }) }}</p>
-            <p class="text-xs text-slate-400">{{ t('coding.cloudSampling') }}</p>
-            <button type="button" :disabled="busy" class="rounded-lg border border-slate-700 px-3 py-2 disabled:opacity-40" @click="reloadQueue">{{ t('coding.syncCloud') }}</button>
-          </section>
-                  <button v-if="auth.isAdmin" :disabled="busy" class="border border-slate-700 rounded-lg px-3 py-2" @click="toggleManagement">{{ t(management ? 'coding.returnRandom' : 'coding.manageCases') }}</button>
-
         <p v-if="!management && exhausted" role="status">{{ t('coding.exhausted') }}</p>
         <div v-if="management" class="grid sm:grid-cols-2 gap-4">
           <label class="space-y-2"><span>{{ t('coding.room') }}</span><select :value="roomId" :disabled="busy" class="w-full bg-slate-900 border border-slate-700 p-3 rounded-lg" @change="chooseRoom"><option value="">{{ t('coding.chooseRoom') }}</option><option v-for="room in rooms" :key="room.id" :value="room.id">{{ room.name }}</option></select></label>
@@ -344,15 +366,6 @@ async function save(status: 'draft' | 'submitted') {
         </div>
         <button v-if="management && auth.isAdmin && messages.length" :disabled="busy" class="border border-slate-700 rounded-lg px-3 py-2 disabled:opacity-40" @click="scanRoom">{{ t('coding.scanRoom') }}</button>
         <p v-if="roomId && !busy && !messages.length" class="text-slate-400">{{ t('coding.empty') }}</p>
-        <details v-if="target" class="text-sm border border-slate-800 rounded-lg p-3">
-          <summary class="cursor-pointer">{{ t('coding.source') }}</summary>
-          <dl class="mt-3 space-y-2 break-all">
-            <div><dt class="text-slate-400">{{ t('coding.sourceRoom') }}</dt><dd>{{ roomId }}</dd></div>
-            <div><dt class="text-slate-400">{{ t('coding.sourceMessage') }}</dt><dd>{{ target.id }}</dd></div>
-            <div><dt class="text-slate-400">{{ t('coding.sourceTime') }}</dt><dd>{{ new Date(target.timestamp).toLocaleString() }}</dd></div>
-            <div><dt class="text-slate-400">{{ t('coding.sourceContext') }}</dt><dd>{{ answer.source?.contextMessageIds.length }}</dd></div>
-          </dl>
-        </details>
         <section v-if="management && target && auth.isAdmin" class="border border-slate-700 rounded-xl p-4 space-y-3">
           <p v-if="review">{{ t('coding.reviewCount', { count: review.count }) }} · {{ t(review.disagreement ? 'coding.disagreement' : 'coding.noDisagreement') }} · {{ t(review.flagged ? 'coding.flagged' : 'coding.noFlags') }}</p>
           <template v-if="!codingCase">
@@ -403,6 +416,7 @@ async function save(status: 'draft' | 'submitted') {
 </template>
 
 <style scoped>
+.coding-tools-dialog::backdrop { background: rgb(15 23 42 / 25%); }
 .coding-conversation { min-height: 70px; max-height: calc(100dvh - 260px); overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 
 .coding-page :deep(input[type='checkbox']),

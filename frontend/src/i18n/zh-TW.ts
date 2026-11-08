@@ -166,6 +166,7 @@ const zhTW: Record<keyof typeof en, string> = {
   "coding.tools": "輔助工具",
   "coding.cloudTools": "題庫與同步",
   "coding.closeTools": "關閉側欄",
+  "coding.dragHeight": "按住並上下拖曳，調整對話區高度",
   "coding.title": "專家標註",
   "coding.intro": "請判斷選定訊息結束當下的討論狀態。",
   "coding.loading": "載入中…",

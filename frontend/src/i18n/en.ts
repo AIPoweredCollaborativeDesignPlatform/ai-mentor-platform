@@ -164,6 +164,7 @@ export default {
   "coding.tools": "Tools",
   "coding.cloudTools": "Question bank and sync",
   "coding.closeTools": "Close panel",
+  "coding.dragHeight": "Drag up or down to resize the conversation",
   "coding.title": "Expert coding",
   "coding.intro": "Judge the discussion at the selected message.",
   "coding.loading": "Loading…",

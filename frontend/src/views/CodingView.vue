@@ -375,8 +375,9 @@ async function save(status: 'draft' | 'submitted') {
           </dl>
         </section>
     </dialog>
-    <main class="max-w-4xl mx-auto h-full min-h-0 flex flex-col gap-2">
+    <main class="coding-main max-w-4xl mx-auto h-full min-h-0 flex flex-col gap-2">
       <header class="shrink-0"><h1 class="text-lg font-semibold">{{ t('coding.title') }}</h1></header>
+      <div class="coding-workspace flex-1 min-h-0 min-w-0 flex flex-col gap-2" :class="{ 'has-conversation': target }">
                 <section id="coding-context" :style="{ height: conversationHeight + 'dvh' }" tabindex="0" role="region" :aria-label="t('coding.context')" class="coding-conversation shrink-0 min-w-0 rounded-xl border border-slate-800 bg-slate-900 p-3 overflow-auto" v-if="target">
             <h2 class="font-semibold mb-2">{{ t('coding.context') }}</h2><p class="text-xs text-slate-400 mb-4">{{ t('coding.windowHint') }}</p>
             <article :data-coding-target="message.id === target.id" v-for="message in context" :key="message.id" class="w-fit max-w-[90%] p-3 mb-4 rounded-2xl border" :class="[message.id === target.id ? 'border-sky-500 bg-slate-800' : 'border-slate-700 bg-slate-950', !isHumanMessage(message) ? 'mx-auto' : message.senderUid === firstSpeaker ? 'mr-auto rounded-tl-sm' : 'ml-auto rounded-tr-sm']">
@@ -391,7 +392,7 @@ async function save(status: 'draft' | 'submitted') {
       <div v-if="target" role="separator" tabindex="0" aria-orientation="horizontal" aria-controls="coding-context" :aria-label="t('coding.conversationHeight')" :title="t('coding.dragHeight')" :aria-valuenow="Math.round(conversationHeight)" :aria-valuemin="15" :aria-valuemax="60" class="coding-resize-handle shrink-0 self-center flex items-center justify-center gap-1.5 text-slate-400 hover:text-sky-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500" @pointerdown="startHeightDrag" @pointermove="moveHeightDrag" @pointerup="stopHeightDrag" @pointercancel="stopHeightDrag" @lostpointercapture="stopHeightDrag" @keydown="resizeWithKeyboard">
         <span v-for="dot in 3" :key="dot" aria-hidden="true" class="w-1 h-1 rounded-full bg-current" />
       </div>
-      <div id="coding-answer-scroll" class="flex-1 min-h-0 overflow-y-auto overscroll-contain space-y-3 pb-6" tabindex="0" :aria-label="t('coding.answerArea')">
+      <div id="coding-answer-scroll" class="flex-1 min-w-0 min-h-0 overflow-y-auto overscroll-contain space-y-3 pb-6" tabindex="0" :aria-label="t('coding.answerArea')">
         <p v-if="error" role="alert" class="text-rose-400">{{ error }}</p>
         <p v-if="notice" role="status" class="text-emerald-400">{{ notice }}</p>
         <p v-if="busy" role="status">{{ t('coding.loading') }}</p>
@@ -439,6 +440,7 @@ async function save(status: 'draft' | 'submitted') {
 
         </template>
       </div>
+      </div>
       <nav v-if="auth.isObserver && !management && history.length" class="shrink-0 flex items-center justify-between gap-2 border-t border-slate-800 bg-slate-950 py-2" :aria-label="t('coding.questionNavigation')">
         <button type="button" :disabled="busy || historyPosition <= 0" class="min-h-11 px-3 rounded-lg border border-slate-700 disabled:opacity-40" @click="navigateQuestion(-1)">{{ t('coding.previousQuestion') }}</button>
         <div class="min-w-0 flex-1 text-center space-y-1">
@@ -459,6 +461,12 @@ async function save(status: 'draft' | 'submitted') {
 .coding-tools-dialog::backdrop { background: rgb(15 23 42 / 25%); }
 .coding-conversation { min-height: 70px; max-height: calc(100dvh - 260px); overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 
+@media (min-width: 1024px) {
+  .coding-main { max-width: 1600px; }
+  .coding-workspace.has-conversation { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 16px; }
+  .coding-workspace .coding-conversation { height: 100% !important; min-height: 0; max-height: none; }
+  .coding-workspace .coding-resize-handle { display: none; }
+}
 .coding-page :deep(input[type='checkbox']),
 .coding-page :deep(input[type='radio']) {
   width: 1.125rem;

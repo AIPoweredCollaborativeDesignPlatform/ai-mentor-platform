@@ -9,6 +9,7 @@ const AdminView = () => import('../views/AdminView.vue');
 const ReplayView = () => import('../views/ReplayView.vue');
 
 const routes = [
+  { path: '/admin/coding-bank', name: 'coding-bank', component: () => import('../views/CodingBankView.vue') },
   { path: '/admin/coding', name: 'coding', component: () => import('../views/CodingView.vue') },
   { path: '/', name: 'home', component: HomeView },
   { path: '/waiting/:roomId', name: 'waiting', component: WaitingRoomView },

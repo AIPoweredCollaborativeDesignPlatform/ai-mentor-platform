@@ -12,6 +12,7 @@ const fixture = {
   'codingRooms/room_1234/items/m1/ratings/me': { status: 'submitted' },
   'codingRooms/room_1234/items/m1/ratings/other': { status: 'draft' },
   'codingRooms/room_1234/items/m1/detailedRatings/me': { status: 'submitted' },
+  'codingQuestionControls/room_1234/items/m1': { enabled: false, updatedBy: 'admin' },
 };
 const reads = [];
 function project(data, fields) {
@@ -45,7 +46,7 @@ const batches = [];
 const db = {
   collection: path => new Ref(path),
   async getAll(...args) {
-    const options = args.pop(); assert.deepEqual(options, { fieldMask: ['status'] });
+    const options = args.pop(); assert.ok(options.fieldMask.includes('status'));
     batches.push(args.map(r => r.path));
     return args.map(ref => ({ ref, data: () => fixture[ref.path] && project(fixture[ref.path], options.fieldMask) }));
   },
@@ -53,6 +54,7 @@ const db = {
 const bank = await loadCodingBank('me', db);
 assert.equal(bank.rooms.length, 1);
 assert.deepEqual(bank.rooms[0].completed, ['m1']);
+assert.deepEqual(bank.rooms[0].disabled, ['m1']);
 assert.deepEqual(bank.rooms[0].selected, ['m1']);
 assert.deepEqual(bank.rooms[0].detailedCompleted, ['m1']);
 assert.equal(batches.flat().every(path => path.endsWith('/me')), true);
@@ -61,6 +63,9 @@ assert.equal(reads.some(path => path.includes('room_9999/')), false);
 assert.equal(JSON.stringify(bank).includes('large'), false);
 assert.equal(JSON.stringify(bank).includes('private reasoning'), false);
 assert.equal(bank.rooms[0].logs[0].output.shouldIntervene, true);
+assert.deepEqual(bank.rooms[0].visits, [{ id: 'm1', at: 0 }]);
+fixture['codingQuestionControls/room_1234/items/m1'].enabled = true;
+assert.deepEqual((await loadCodingBank('me', db)).rooms[0].disabled, []);
 delete fixture['codingRooms/room_1234/items/m1/ratings/me'];
 delete fixture['codingRooms/room_1234/items/m1/detailedRatings/me'];
 assert.deepEqual((await loadCodingBank('me', db)).rooms[0].completed, []);

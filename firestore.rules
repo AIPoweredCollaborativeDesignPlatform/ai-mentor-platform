@@ -31,6 +31,16 @@ service cloud.firestore {
     }
 
     // Human coding is independent of AI logs. Each observer owns their answers.
+    match /codingQuestionControls/{roomId}/items/{messageId} {
+      allow read: if isObserver();
+      allow create, update: if isAdmin()
+        && request.resource.data.keys().hasOnly(['enabled', 'updatedBy', 'updatedAt'])
+        && request.resource.data.enabled is bool
+        && request.resource.data.updatedBy == request.auth.uid
+        && request.resource.data.updatedAt is number
+        && exists(/databases/$(database)/documents/rooms/$(roomId)/messages/$(messageId));
+      allow delete: if false;
+    }
     match /codingRooms/{roomId}/items/{messageId}/ratings/{uid} {
       allow read: if isObserver() && (request.auth.uid == uid || isAdmin());
       allow create, update: if isObserver() && request.auth.uid == uid

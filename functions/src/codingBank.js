@@ -5,11 +5,15 @@ const human = m => m.senderUid && !['ai_mentor', 'ai_mentor_3d', 'system'].inclu
   && m.type === 'text' && String(m.content || '').trim() && m.status !== 'failed';
 
 // Read only this caller's progress. No collection-group access or rules expansion needed.
-async function submitted(db, refs) {
+async function submitted(db, refs, visits) {
   const ids = new Set();
   for (let start = 0; start < refs.length; start += 200) {
-    const docs = await db.getAll(...refs.slice(start, start + 200), { fieldMask: ['status'] });
-    for (const d of docs) if (d.data()?.status === 'submitted') ids.add(d.ref.parent.parent.id);
+    const docs = await db.getAll(...refs.slice(start, start + 200), { fieldMask: visits ? ['status', 'source.sampledAt', 'updatedAt'] : ['status'] });
+    for (const d of docs) if (d.data()?.status === 'submitted') {
+      const id = d.ref.parent.parent.id;
+      ids.add(id);
+      if (visits) visits.push({ id, at: d.data().source?.sampledAt || d.data().updatedAt || 0 });
+    }
   }
   return [...ids];
 }
@@ -26,20 +30,23 @@ export async function loadCodingBank(uid, db = getFirestore()) {
       const targets = messages.filter(human);
       if (!targets.length) return { id: room.id, name: room.roomName || room.name || room.id, messages: [], logs: [], events: [], semantic: [], completed: [], detailedCompleted: [], selected: [] };
       const items = db.collection('codingRooms').doc(room.id).collection('items');
-      const [logs, events, semantic, cases, completed] = await Promise.all([
+      const visits = [];
+      const [logs, events, semantic, cases, completed, controls] = await Promise.all([
         db.collection('aiLogs').where('roomId', '==', room.id)
           .select('kind', 'error', 'visible', 'output.shouldIntervene', 'triggerMessageId').get(),
         base.collection('events').select('kind', 'at', 'data.message.type', 'data.message.assetType').get(),
         db.collection('codingSemantic').doc(room.id).collection('batches')
           .select('version', 'inputMessages', 'events').get(),
         items.select('replyId').get(),
-        submitted(db, targets.map(m => items.doc(m.id).collection('ratings').doc(uid))),
+        submitted(db, targets.map(m => items.doc(m.id).collection('ratings').doc(uid)), visits),
+        db.collection('codingQuestionControls').doc(room.id).collection('items').select('enabled').get(),
       ]);
       const targetIds = new Set(targets.map(m => m.id));
       const selected = cases.docs.filter(d => targetIds.has(d.id) && d.data().replyId).map(d => d.id);
       const detailedCompleted = await submitted(db, selected.map(id => items.doc(id).collection('detailedRatings').doc(uid)));
       return { id: room.id, name: room.roomName || room.name || room.id, messages,
-        logs: rows(logs), events: rows(events), semantic: rows(semantic), completed, detailedCompleted, selected };
+        logs: rows(logs), events: rows(events), semantic: rows(semantic), completed, detailedCompleted, selected,
+        disabled: controls.docs.filter(d => d.data().enabled === false).map(d => d.id), visits };
     }));
     result.push(...batch);
   }

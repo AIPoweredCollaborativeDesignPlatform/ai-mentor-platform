@@ -1,4 +1,4 @@
-import { collection, doc, getDoc, getDocs, getDocsFromServer, orderBy, query, runTransaction } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocFromServer, getDocs, getDocsFromServer, orderBy, query, runTransaction, setDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { humanText, atOrBefore, roundRobin, type SamplingEvent } from './codingSampling';
 import { db, functions } from '../firebase/config';
@@ -54,13 +54,35 @@ interface CodingRoomData {
   id: string; name: string; messages: MessageItem[];
   logs: Record<string, any>[]; events: Record<string, any>[]; semantic: Record<string, any>[];
   completed: string[]; detailedCompleted: string[]; selected: string[];
+  disabled?: string[];
+  visits?: { id: string; at: number }[];
 }
 export async function fetchCodingBank() {
   const fetch = httpsCallable<void, { rooms: CodingRoomData[] }>(functions, 'getCodingBank', { timeout: 120000 });
   const { data } = await fetch();
   const keys = (field: 'completed' | 'detailedCompleted' | 'selected') => data.rooms.flatMap(r => r[field].map(id => codingQuestionKey(r.id, id)));
-  return { rooms: data.rooms.map(r => ({ id: r.id, name: r.name })), queue: buildCodingQueue(data.rooms),
-    progress: { completed: keys('completed'), detailedCompleted: keys('detailedCompleted'), selected: keys('selected') } };
+  const disabled = new Set(data.rooms.flatMap(r => (r.disabled || []).map(id => codingQuestionKey(r.id, id))));
+  const allQuestions = buildCodingQueue(data.rooms);
+  const active = (key: string) => !disabled.has(key);
+  return { rooms: data.rooms.map(r => ({ id: r.id, name: r.name })), allQuestions, disabled,
+    previousVisits: data.rooms.flatMap(r => (r.visits || []).map(v => ({ key: codingQuestionKey(r.id, v.id), at: v.at }))).filter(v => active(v.key)).sort((a, b) => a.at - b.at),
+    queue: allQuestions.filter(q => active(codingQuestionKey(q.roomId, q.messages[q.index].id))),
+    progress: { completed: keys('completed').filter(active), detailedCompleted: keys('detailedCompleted').filter(active), selected: keys('selected').filter(active) } };
+}
+
+const controlRef = (roomId: string, messageId: string) => doc(db, 'codingQuestionControls', roomId, 'items', messageId);
+export async function isCodingQuestionEnabled(roomId: string, messageId: string) {
+  return (await getDocFromServer(controlRef(roomId, messageId))).data()?.enabled !== false;
+}
+export async function setCodingQuestionEnabled(roomId: string, messageId: string, enabled: boolean, uid: string) {
+  await setDoc(controlRef(roomId, messageId), { enabled, updatedBy: uid, updatedAt: Date.now() });
+}
+export interface CodingRatingRow { uid: string; phase: number; answer: CodingAnswer | DetailedAnswer }
+export async function listCodingRatings(roomId: string, messageId: string): Promise<CodingRatingRow[]> {
+  const base = doc(db, 'codingRooms', roomId, 'items', messageId);
+  const snapshots = await Promise.all(['ratings', 'detailedRatings'].map(name => getDocsFromServer(collection(base, name))));
+  return snapshots.flatMap((snapshot, i) => snapshot.docs.map(d => ({ uid: d.id, phase: i + 1,
+    answer: i === 0 ? normalizeCoding(d.data()) : d.data() as DetailedAnswer })));
 }
 function buildCodingQueue(rooms: CodingRoomData[]): CodingQuestion[] {
   const candidates: CodingQuestion[] = [];

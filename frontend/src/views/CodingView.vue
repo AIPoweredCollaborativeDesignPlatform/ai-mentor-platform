@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
 import { onBeforeRouteLeave } from 'vue-router';
-import { Database, FolderSearch, Info, X } from 'lucide-vue-next';
+import { Database, FolderSearch, Info, X, ListChecks } from 'lucide-vue-next';
+import { navigationStorageKey, restoreNavigation } from '../services/codingNavigation';
+import { isCodingQuestionEnabled } from '../services/coding';
 import { humanText, humanWindow, type SamplingEvent } from '../services/codingSampling';
 import PageNav from '../components/PageNav.vue';
 import DetailedCoding from '../components/admin/DetailedCoding.vue';
@@ -57,6 +59,35 @@ const history = ref<{ question: CodingQuestion; phase: number; ordinal: number }
 const historyPosition = ref(-1);
 const detailedForm = ref<InstanceType<typeof DetailedCoding> | null>(null);
 let queue: CodingQuestion[] = [];
+let previousVisits: { key: string; at: number }[] = [];
+const questionKey = (q: CodingQuestion) => codingQuestionKey(q.roomId, q.messages[q.index].id);
+function rememberNavigation() {
+  if (!auth.uid || management.value) return;
+  try { localStorage.setItem(navigationStorageKey(auth.uid), JSON.stringify({ version: 1,
+    history: history.value.map(e => ({ key: questionKey(e.question), phase: e.phase, ordinal: e.ordinal })),
+    position: historyPosition.value, queue: queue.map(questionKey) })); } catch { /* Private browsing may disable storage. */ }
+}
+async function resumeNavigation() {
+  let raw: string | null = null;
+  try { raw = localStorage.getItem(navigationStorageKey(auth.uid!)); } catch { /* Start a new session. */ }
+  const restored = restoreNavigation(raw, queue.map(questionKey));
+  if (!restored) {
+    // Upgrade from versions without local navigation, or recover on another browser.
+    const bank = new Map(queue.map(q => [questionKey(q), q]));
+    history.value = previousVisits.filter(v => bank.has(v.key)).map((v, i) => ({ question: bank.get(v.key)!, phase: 1, ordinal: i + 1 }));
+    historyPosition.value = history.value.length - 1;
+    await nextQuestion(); return;
+  }
+  const bank = new Map(queue.map(q => [questionKey(q), q]));
+  history.value = restored.history.map(e => ({ question: bank.get(e.key)!, phase: e.phase, ordinal: e.ordinal }));
+  queue = restored.queue.map(k => bank.get(k)!);
+  // A previously visited first-stage question may have been selected for stage two later.
+  for (const [key, q] of bank) if (selectedDetailed.value.has(key) && !completedDetailed.value.has(key)
+    && !restored.history.some(e => e.key === key && e.phase === 2) && !restored.queue.includes(key)) queue.unshift(q);
+  historyPosition.value = restored.position;
+  if (restored.position >= 0 && restored.position < history.value.length) await loadHistory(restored.position);
+  else await nextQuestion();
+}
 const cloudQuestionCount = ref(0);
 const cloudRoomCount = ref(0);
 const cloudSyncedAt = ref(0);
@@ -125,14 +156,15 @@ onMounted(async () => {
     await auth.waitForRole();
     if (auth.isObserver) {
       await syncCloudQueue();
-      await nextQuestion();
+      await resumeNavigation();
     }
   } catch { error.value = t('coding.loadFailed'); }
   finally { busy.value = false; }
 });
 onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload));
 async function syncCloudQueue() {
-  const { rooms: cloudRooms, queue: cloudQueue, progress } = await fetchCodingBank();
+  const { rooms: cloudRooms, queue: cloudQueue, progress, previousVisits: visits } = await fetchCodingBank();
+  previousVisits = visits;
   rooms.value = cloudRooms; queue = cloudQueue;
   completedQuestions.value = new Set(progress.completed);
   completedDetailed.value = new Set(progress.detailedCompleted);
@@ -167,9 +199,10 @@ async function nextQuestion() {
       if (completedQuestions.value.has(progressKey) && (!selectedDetailed.value.has(progressKey) || completedDetailed.value.has(progressKey))) {
         queue.pop(); continue;
       }
-      const [nextAnswer, nextCase] = await Promise.all([
-        loadCoding(question.roomId, id, auth.uid!), loadCodingCase(question.roomId, id),
+      const [nextAnswer, nextCase, enabled] = await Promise.all([
+        loadCoding(question.roomId, id, auth.uid!), loadCodingCase(question.roomId, id), isCodingQuestionEnabled(question.roomId, id),
       ]);
+      if (!enabled) { queue.pop(); continue; }
       let nextPhase = 1;
       if (nextAnswer.status === 'submitted') {
         if (!nextCase || (await loadDetailed(question.roomId, id, auth.uid!, nextCase.replyId)).status === 'submitted') {
@@ -186,12 +219,14 @@ async function nextQuestion() {
       detailedValid.value = false;
       history.value.push({ question, phase: nextPhase, ordinal: Math.min(progressTotal.value, progressCompleted.value + 1) });
       historyPosition.value = history.value.length - 1;
+      rememberNavigation();
       await resetQuestionScroll();
       return;
     }
     index.value = -1; messages.value = []; roomId.value = ''; answer.value = emptyCoding();
     baseline.value = JSON.stringify(answer.value); detailedDirty.value = false; exhausted.value = true;
     historyPosition.value = history.value.length;
+    rememberNavigation();
   } catch { error.value = t('coding.loadFailed'); }
   finally { busy.value = false; }
 }
@@ -211,9 +246,11 @@ async function loadHistory(position: number) {
   roomId.value = question.roomId; messages.value = question.messages; index.value = question.index; currentEvents.value = question.events || [];
   answer.value = { ...stored, source: stored.source || sourceForQuestion('event-round-robin-v2') };
   baseline.value = JSON.stringify(answer.value); codingCase.value = selectedCase;
-  phase.value = entry.phase; detailedDirty.value = false; exhausted.value = false;
+  phase.value = entry.phase === 2 && selectedCase && stored.status === 'submitted' ? 2 : 1;
+  entry.phase = phase.value; detailedDirty.value = false; exhausted.value = false;
   detailedValid.value = false;
   historyPosition.value = position; notice.value = '';
+  rememberNavigation();
   await resetQuestionScroll();
 }
 async function navigateQuestion(direction: -1 | 1) {
@@ -354,6 +391,7 @@ async function save(status: 'draft' | 'submitted') {
   <div class="coding-page h-[100dvh] overflow-hidden bg-slate-950 text-slate-100 pl-3 pr-16 sm:pl-4 sm:pr-20 pt-14 pb-safe">
     <PageNav />
     <aside v-if="auth.isObserver" class="coding-tools fixed right-1 sm:right-3 top-1/2 -translate-y-1/2 z-30 flex flex-col gap-2 rounded-xl border border-slate-800 bg-slate-950 p-1 text-slate-400" :aria-label="t('coding.tools')">
+      <router-link v-if="auth.isAdmin" to="/admin/coding-bank" class="w-10 h-11 flex items-center justify-center rounded-lg hover:bg-slate-800 hover:text-slate-100" :title="t('coding.bankTitle')" :aria-label="t('coding.bankTitle')"><ListChecks class="w-4 h-4" /></router-link>
       <button type="button" class="w-10 h-11 flex items-center justify-center rounded-lg hover:bg-slate-800 hover:text-slate-100" :title="t('coding.cloudTools')" :aria-label="t('coding.cloudTools')" @click="openTool('cloud')"><Database class="w-4 h-4" /></button>
       <button v-if="auth.isAdmin" type="button" :disabled="busy" class="w-10 h-11 flex items-center justify-center rounded-lg hover:bg-slate-800 hover:text-slate-100 disabled:opacity-40" :class="management ? 'text-sky-400 bg-slate-800' : ''" :title="t(management ? 'coding.returnRandom' : 'coding.manageCases')" :aria-label="t(management ? 'coding.returnRandom' : 'coding.manageCases')" @click="toggleManagement"><FolderSearch class="w-4 h-4" /></button>
       <button v-if="target" type="button" class="w-10 h-11 flex items-center justify-center rounded-lg hover:bg-slate-800 hover:text-slate-100" :title="t('coding.source')" :aria-label="t('coding.source')" @click="openTool('source')"><Info class="w-4 h-4" /></button>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Check, CheckCheck, ChevronDown, Loader2, MessageSquare, RefreshCw, SlidersHorizontal, Trash2 } from 'lucide-vue-next';
+import { Check, CheckCheck, ChevronDown, Loader2, MessageSquare, RefreshCw, SlidersHorizontal, Trash2, ListChecks } from 'lucide-vue-next';
 import { useAuthStore } from '../stores/auth';
 import { useRoomStore } from '../stores/room';
 import ProfileEditor from '../components/admin/ProfileEditor.vue';
@@ -545,6 +545,7 @@ const select = 'bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text
     <header class="h-14 border-b border-slate-800 bg-slate-900/90 px-4 flex items-center gap-3">
       <h1 class="font-bold">{{ t('adm.title') }}</h1>
       <PageNav><router-link v-if="canView" to="/admin/coding" class="page-nav-btn">{{ t('coding.title') }}</router-link>
+        <router-link v-if="isAdmin" to="/admin/coding-bank" class="page-nav-btn" :title="t('coding.bankTitle')" :aria-label="t('coding.bankTitle')"><ListChecks class="w-3.5 h-3.5" /><span class="hidden sm:inline">{{ t('coding.bankTitle') }}</span></router-link>
         <button v-if="isAdmin" @click="loadAll" class="page-nav-btn" :title="t('adm.refresh')">
           <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': loading }" />
         </button>

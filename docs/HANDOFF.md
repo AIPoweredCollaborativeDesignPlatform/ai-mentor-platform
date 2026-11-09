@@ -1,3 +1,11 @@
+## Coding navigation and bank management (2026-11-10)
+- Navigation IDs, stage, position, and remaining queue are stored per UID in localStorage. Fresh answers/revisions are fetched on restore. Browser storage contains no answers or conversation text. Unsaved edits still require Save draft; exact local order is browser-specific. Without local history, submitted phase-one answers seed a review history ordered by source.sampledAt (fallback updatedAt).
+- New admin-only /admin/coding-bank page, linked from admin and the annotation sidebar. Room/source/status/text filters, question/stage counts, per-UID reviewer totals, labelled answer details, human ±5 context, source references, and per-room JSON export. Reports load only in management with bounded concurrency; experts do not download other experts' ratings.
+- codingQuestionControls/{roomId}/items/{messageId}: enabled, updatedBy, updatedAt. Observer read; admin create/update; no delete. Disabling preserves all answers. getCodingBank returns controls; frontend excludes disabled questions from new draws and active progress. Each new draw also checks current control state, including queues opened before the control changed. Already open questions and local back/forward review may still be completed.
+- getCodingBank adds only caller-owned submitted visit metadata; no AI calls or account metadata exposure. Report identities currently use stable Firebase UIDs, not account names.
+- Tests: navigation restore, account key isolation, queue order, exhausted/stage state, missing candidates, malformed storage; backend controls/caller isolation; existing sampling tests. Full build and backend import passed. Deploy with --coding-bank-only.
+- Pending before release: live navigation refresh/reentry and admin report verification. Do not create test ratings in production.
+
 ## Coding load performance fix (2026-11-09)
 - Released v7.8.38. Live reload checks: 5.483 s and 4.680 s to visible question, no errors; 88 total / 10 completed preserved for the test account. Times are observations on this connection, not guarantees. No labels were submitted during testing.
 - Cold-page initialization must await waitForAuthReady BEFORE waitForRole: the initial rolePromise is already resolved, so waiting for it alone races Firebase auth restoration and sends an unauthenticated callable request.

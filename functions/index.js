@@ -1,4 +1,5 @@
-import { loadCodingBank } from './src/codingBank.js';
+import { loadVersionedBank, listBankVersions, createBankVersion, activateBankVersion } from './src/codingBankVersions.js';
+import { codingBankErrors } from './src/i18n.js';
 import { generateCodingSemanticBatch } from './src/codingSemantic.js';
 import { Readable } from 'node:stream';
 import { initializeApp } from 'firebase-admin/app';
@@ -768,5 +769,16 @@ export const prepareCodingSemantic = onCall({ secrets: [ANTHROPIC_API_KEY], time
 export const getCodingBank = onCall({ timeoutSeconds: 120, memory: '512MiB', maxInstances: 3 }, async request => {
   requireAuth(request);
   if (!isObserverToken(request.auth.token)) throw new HttpsError('permission-denied', 'Study staff only');
-  return loadCodingBank(request.auth.uid);
+  const versionId = request.data?.versionId;
+  if (versionId !== undefined && (typeof versionId !== 'string' || !/^(live|[a-zA-Z0-9-]{16,80})$/.test(versionId))) throw new HttpsError('invalid-argument', codingBankErrors.request);
+  return loadVersionedBank(request.auth.uid, versionId, isAdminToken(request.auth.token));
+});
+
+export const manageCodingBank = onCall({ timeoutSeconds: 540, memory: '512MiB', maxInstances: 2 }, async request => {
+  requireAdmin(request);
+  const data = request.data || {};
+  if (data.action === 'list') return listBankVersions();
+  if (data.action === 'create') return { version: await createBankVersion(request.auth.uid, data.requestId, data.note || '') };
+  if (data.action === 'activate' && /^[a-zA-Z0-9-]{16,80}$/.test(data.versionId || '')) return activateBankVersion(request.auth.uid, data.versionId);
+  throw new HttpsError('invalid-argument', codingBankErrors.request);
 });

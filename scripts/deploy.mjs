@@ -74,7 +74,7 @@ try {
   const fnHash = hashFunctions();
   const targets = (webOnly || codingOnly || codingBankOnly) ? ['hosting', 'firestore:rules'] : ['hosting', 'firestore:rules', 'storage'];
   if (codingOnly) targets.push('functions:prepareCodingSemantic');
-  if (codingBankOnly) targets.push('functions:getCodingBank');
+  if (codingBankOnly) targets.push('functions:getCodingBank', 'functions:manageCodingBank');
   if (!webOnly && !codingOnly && !codingBankOnly && (args.has('--functions') || state.functionsHash !== fnHash)) targets.push('functions');
 
   step(`Deploying to Firebase (${targets.join(', ')})`);

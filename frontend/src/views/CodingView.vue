@@ -10,9 +10,13 @@ import DetailedCoding from '../components/admin/DetailedCoding.vue';
 import { intlLocale, t, type MessageKey } from '../i18n';
 import { useAuthStore } from '../stores/auth';
 import type { MessageItem } from '../types';
-import { prepareSemanticQueue, codingMessages, codingOptions, emptyCoding, loadCoding, saveCoding, loadCodingCase, openCodingCase, reviewCoding, fetchCodingBank, loadDetailed, codingQuestionKey, type CodingCase, type CodingQuestion, type CodingSource } from '../services/coding';
+import { prepareSemanticQueue, codingOptions, emptyCoding, loadCoding, saveCoding, loadCodingCase, openCodingCase, reviewCoding, fetchCodingBank, loadDetailed, codingQuestionKey, type CodingCase, type CodingQuestion, type CodingSource, type CodingBankVersion } from '../services/coding';
 
 const auth = useAuthStore();
+const bankVersion = ref<CodingBankVersion | null>(null);
+let bankQuestions: CodingQuestion[] = [];
+const revisionFor = (room: string, id: string) => bankQuestions.find(q => q.roomId === room && q.messages[q.index].id === id)?.revision || '';
+const currentRevision = computed(() => target.value ? revisionFor(roomId.value, target.value.id) : '');
 const toolsDialog = ref<HTMLDialogElement | null>(null);
 const activeTool = ref<'cloud' | 'source'>('cloud');
 function openTool(tool: 'cloud' | 'source') {
@@ -63,13 +67,13 @@ let previousVisits: { key: string; at: number }[] = [];
 const questionKey = (q: CodingQuestion) => codingQuestionKey(q.roomId, q.messages[q.index].id);
 function rememberNavigation() {
   if (!auth.uid || management.value) return;
-  try { localStorage.setItem(navigationStorageKey(auth.uid), JSON.stringify({ version: 1,
+  try { localStorage.setItem(navigationStorageKey(auth.uid, bankVersion.value?.id), JSON.stringify({ version: 1,
     history: history.value.map(e => ({ key: questionKey(e.question), phase: e.phase, ordinal: e.ordinal })),
     position: historyPosition.value, queue: queue.map(questionKey) })); } catch { /* Private browsing may disable storage. */ }
 }
 async function resumeNavigation() {
   let raw: string | null = null;
-  try { raw = localStorage.getItem(navigationStorageKey(auth.uid!)); } catch { /* Start a new session. */ }
+  try { raw = localStorage.getItem(navigationStorageKey(auth.uid!, bankVersion.value?.id)); } catch { /* Start a new session. */ }
   const restored = restoreNavigation(raw, queue.map(questionKey));
   if (!restored) {
     // Upgrade from versions without local navigation, or recover on another browser.
@@ -121,7 +125,7 @@ const needsReason = computed(() => answer.value.ambiguous || answer.value.import
 const complete = computed(() => !!answer.value.thinking && !!answer.value.necessity && answer.value.discussion.length > 0 && answer.value.action.length > 0 && (!needsReason.value || !!answer.value.reason.trim()));
 const progressTotal = computed(() => phase.value === 1 ? cloudQuestionCount.value : selectedDetailed.value.size);
 const progressCompleted = computed(() => phase.value === 1 ? completedQuestions.value.size : completedDetailed.value.size);
-const progressOrdinal = computed(() => exhausted.value ? progressTotal.value : history.value[historyPosition.value]?.ordinal || 1);
+const progressOrdinal = computed(() => exhausted.value ? progressTotal.value : Math.min(progressTotal.value, history.value[historyPosition.value]?.ordinal || 1));
 const canAdvance = computed(() => phase.value === 1 ? complete.value : detailedValid.value);
 function markProgress(stage: number, status: 'draft' | 'submitted') {
   if (!target.value) return;
@@ -163,7 +167,8 @@ onMounted(async () => {
 });
 onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload));
 async function syncCloudQueue() {
-  const { rooms: cloudRooms, queue: cloudQueue, progress, previousVisits: visits } = await fetchCodingBank();
+  const { rooms: cloudRooms, queue: cloudQueue, progress, previousVisits: visits, allQuestions, version } = await fetchCodingBank(bankVersion.value?.id);
+  bankVersion.value = version; bankQuestions = allQuestions;
   previousVisits = visits;
   rooms.value = cloudRooms; queue = cloudQueue;
   completedQuestions.value = new Set(progress.completed);
@@ -180,7 +185,7 @@ async function prepareSemanticEvents() {
   finally { busy.value = false; }
 }
 function sourceForQuestion(method: CodingSource['samplingMethod']): CodingSource {
-  return { roomId: roomId.value, messageId: target.value!.id, messageTimestamp: target.value!.timestamp,
+  return { bankVersion: bankVersion.value?.id || '', roomId: roomId.value, messageId: target.value!.id, messageTimestamp: target.value!.timestamp,
     contextMessageIds: humanWindow(messages.value, target.value!.id).map(message => message.id),
     contextPolicy: 'human-before-after-5-v1', events: currentEvents.value,
     sampledAt: Date.now(), samplingMethod: method };
@@ -200,12 +205,12 @@ async function nextQuestion() {
         queue.pop(); continue;
       }
       const [nextAnswer, nextCase, enabled] = await Promise.all([
-        loadCoding(question.roomId, id, auth.uid!), loadCodingCase(question.roomId, id), isCodingQuestionEnabled(question.roomId, id),
+        loadCoding(question.roomId, id, auth.uid!, question.revision), loadCodingCase(question.roomId, id, question.revision), isCodingQuestionEnabled(question.roomId, id),
       ]);
       if (!enabled) { queue.pop(); continue; }
       let nextPhase = 1;
       if (nextAnswer.status === 'submitted') {
-        if (!nextCase || (await loadDetailed(question.roomId, id, auth.uid!, nextCase.replyId)).status === 'submitted') {
+        if (!nextCase || (await loadDetailed(question.roomId, id, auth.uid!, nextCase.replyId, question.revision)).status === 'submitted') {
           queue.pop(); continue;
         }
         // A previously submitted question can return only for its selected second-stage review.
@@ -241,7 +246,7 @@ async function loadHistory(position: number) {
   const question = entry.question;
   const id = question.messages[question.index].id;
   const [stored, selectedCase] = await Promise.all([
-    loadCoding(question.roomId, id, auth.uid!), loadCodingCase(question.roomId, id),
+    loadCoding(question.roomId, id, auth.uid!, question.revision), loadCodingCase(question.roomId, id, question.revision),
   ]);
   roomId.value = question.roomId; messages.value = question.messages; index.value = question.index; currentEvents.value = question.events || [];
   answer.value = { ...stored, source: stored.source || sourceForQuestion('event-round-robin-v2') };
@@ -271,7 +276,7 @@ async function navigateQuestion(direction: -1 | 1) {
       if (!await detailedForm.value.persist()) return;
     } else if (target.value && dirty.value) {
       const status = answer.value.status === 'submitted' && complete.value ? 'submitted' : 'draft';
-      answer.value = await saveCoding(roomId.value, target.value.id, auth.uid!, { ...answer.value, status, viewContext: { policy: 'human-before-after-5-v1', messageIds: context.value.filter(humanText).map(m => m.id) } });
+      answer.value = await saveCoding(roomId.value, target.value.id, auth.uid!, { ...answer.value, status, viewContext: { policy: 'human-before-after-5-v1', bankVersion: bankVersion.value?.id || '', messageIds: context.value.filter(humanText).map(m => m.id) } }, currentRevision.value);
       baseline.value = JSON.stringify(answer.value);
       markProgress(1, status);
     }
@@ -303,10 +308,10 @@ async function toggleManagement() {
   else if (target.value) {
     busy.value = true;
     try {
-      const storedAnswer = await loadCoding(roomId.value, target.value.id, auth.uid!);
+      const storedAnswer = await loadCoding(roomId.value, target.value.id, auth.uid!, currentRevision.value);
       answer.value = { ...storedAnswer, source: storedAnswer.source || { ...sourceForQuestion('researcher-selection'), events: [] } };
       baseline.value = JSON.stringify(answer.value);
-      review.value = await reviewCoding(roomId.value, target.value.id); replyId.value = aiReplies.value[0]?.id || '';
+      review.value = await reviewCoding(roomId.value, target.value.id, currentRevision.value); replyId.value = aiReplies.value[0]?.id || '';
     }
     catch { error.value = t('coding.loadFailed'); }
     finally { busy.value = false; }
@@ -320,7 +325,7 @@ async function chooseRoom(event: Event) {
   phase.value = 1; detailedDirty.value = false; codingCase.value = null; review.value = null;
   reviewIndex.value = {};
   answer.value = emptyCoding(); baseline.value = JSON.stringify(answer.value);
-  try { if (roomId.value) messages.value = await codingMessages(roomId.value); }
+  try { if (roomId.value) messages.value = bankQuestions.find(q => q.roomId === roomId.value)?.messages || []; }
   catch { error.value = t('coding.loadFailed'); }
   finally { busy.value = false; }
 }
@@ -330,7 +335,7 @@ async function scanRoom() {
     // Bound the read concurrency for long conversations.
     for (let start = 0; start < cutoffs.value.length; start += 5) {
       await Promise.all(cutoffs.value.slice(start, start + 5).map(async ({ message }) => {
-        reviewIndex.value[message.id] = await reviewCoding(roomId.value, message.id);
+        reviewIndex.value[message.id] = await reviewCoding(roomId.value, message.id, revisionFor(roomId.value, message.id));
       }));
     }
   } catch { error.value = t('coding.loadFailed'); }
@@ -344,8 +349,8 @@ async function chooseTarget(event: Event) {
   try {
     const id = messages.value[nextIndex].id;
     const [nextAnswer, nextCase, nextReview] = await Promise.all([
-      loadCoding(roomId.value, id, auth.uid!), loadCodingCase(roomId.value, id),
-      auth.isAdmin ? reviewCoding(roomId.value, id) : Promise.resolve(null),
+      loadCoding(roomId.value, id, auth.uid!, revisionFor(roomId.value, id)), loadCodingCase(roomId.value, id, revisionFor(roomId.value, id)),
+      auth.isAdmin ? reviewCoding(roomId.value, id, revisionFor(roomId.value, id)) : Promise.resolve(null),
     ]);
     index.value = nextIndex;
     answer.value = { ...nextAnswer, source: nextAnswer.source || { ...sourceForQuestion('researcher-selection'), events: [] } };
@@ -359,8 +364,8 @@ async function openPhase2() {
   if (!target.value || !replyId.value || !auth.uid) return;
   busy.value = true; error.value = '';
   try {
-    await openCodingCase(roomId.value, target.value.id, replyId.value, auth.uid);
-    codingCase.value = await loadCodingCase(roomId.value, target.value.id);
+    await openCodingCase(roomId.value, target.value.id, replyId.value, auth.uid, currentRevision.value);
+    codingCase.value = await loadCodingCase(roomId.value, target.value.id, currentRevision.value);
     selectedDetailed.value.add(codingQuestionKey(roomId.value, target.value.id));
   } catch { error.value = t('coding.saveFailed'); }
   finally { busy.value = false; }
@@ -374,14 +379,14 @@ async function save(status: 'draft' | 'submitted') {
   if (!target.value || !auth.uid || (status === 'submitted' && !complete.value)) return;
   busy.value = true; error.value = ''; notice.value = '';
   try {
-    answer.value = await saveCoding(roomId.value, target.value.id, auth.uid, { ...answer.value, status, viewContext: { policy: 'human-before-after-5-v1', messageIds: context.value.filter(humanText).map(m => m.id) } });
+    answer.value = await saveCoding(roomId.value, target.value.id, auth.uid, { ...answer.value, status, viewContext: { policy: 'human-before-after-5-v1', bankVersion: bankVersion.value?.id || '', messageIds: context.value.filter(humanText).map(m => m.id) } }, currentRevision.value);
     markProgress(1, status);
     baseline.value = JSON.stringify(answer.value); notice.value = t(status === 'draft' ? 'coding.draftSaved' : 'coding.submitted');
     if (!management.value && status === 'submitted') {
-      if (codingCase.value) queue.unshift({ roomId: roomId.value, messages: messages.value, index: index.value });
+      if (codingCase.value) queue.unshift({ roomId: roomId.value, messages: messages.value, index: index.value, revision: currentRevision.value });
       await nextQuestion();
     }
-    else if (auth.isAdmin) review.value = await reviewCoding(roomId.value, target.value.id);
+    else if (auth.isAdmin) review.value = await reviewCoding(roomId.value, target.value.id, currentRevision.value);
   } catch (e) { error.value = t(e instanceof Error && e.message === 'coding-conflict' ? 'coding.conflict' : 'coding.saveFailed'); }
   finally { busy.value = false; }
 }
@@ -417,7 +422,7 @@ async function save(status: 'draft' | 'submitted') {
         </section>
     </dialog>
     <main class="coding-main max-w-4xl mx-auto h-full min-h-0 flex flex-col gap-2">
-      <header class="shrink-0"><h1 class="text-lg font-semibold">{{ t('coding.title') }}</h1></header>
+      <header class="shrink-0"><h1 class="text-lg font-semibold">{{ t('coding.title') }}</h1><p class="text-xs text-slate-400">{{ bankVersion ? t('coding.bankVersionLabel', { version: bankVersion.sequence }) : t('coding.liveBank') }}</p></header>
       <div class="coding-workspace flex-1 min-h-0 min-w-0 flex flex-col gap-2" :class="{ 'has-conversation': target }">
                 <section id="coding-context" :style="{ height: conversationHeight + 'dvh' }" tabindex="0" role="region" :aria-label="t('coding.context')" class="coding-conversation shrink-0 min-w-0 rounded-xl border border-slate-800 bg-slate-900 p-3 overflow-auto" v-if="target">
             <h2 class="font-semibold mb-2">{{ t('coding.context') }}</h2><p class="text-xs text-slate-400 mb-4">{{ t('coding.windowHint') }}</p>
@@ -459,7 +464,7 @@ async function save(status: 'draft' | 'submitted') {
           <button v-if="codingCase && answer.status === 'submitted'" class="border rounded-lg px-3 py-2" :class="phase === 2 ? 'border-sky-500' : 'border-slate-700'" @click="switchPhase(2)">{{ t('coding.phase2') }}</button>
         </div>
 
-                    <DetailedCoding ref="detailedForm" v-if="phase === 2 && codingCase" id="coding-answer" :key="roomId + target.id + management" :room-id="roomId" :message-id="target.id" :reply-id="codingCase.replyId" :advance="!management" :external-busy="busy" class="min-w-0 rounded-xl border border-slate-800 bg-slate-900 p-3 sm:p-5" @dirty="detailedDirty = $event" @valid="detailedValid = $event" @saved="markProgress(2, $event)" @submitted="!management && nextQuestion()" />
+                    <DetailedCoding ref="detailedForm" v-if="phase === 2 && codingCase" id="coding-answer" :key="roomId + target.id + management" :room-id="roomId" :message-id="target.id" :reply-id="codingCase.replyId" :rating-revision="currentRevision" :bank-version="bankVersion?.id" :advance="!management" :external-busy="busy" class="min-w-0 rounded-xl border border-slate-800 bg-slate-900 p-3 sm:p-5" @dirty="detailedDirty = $event" @valid="detailedValid = $event" @saved="markProgress(2, $event)" @submitted="!management && nextQuestion()" />
           <form v-else-if="target" id="coding-answer" class="min-w-0 rounded-xl border border-slate-800 bg-slate-900 p-3 sm:p-5 space-y-5" @submit.prevent="save('submitted')">
             <fieldset :disabled="busy" class="space-y-5">
               <legend class="font-semibold mb-4">{{ t('coding.phase1') }}</legend>

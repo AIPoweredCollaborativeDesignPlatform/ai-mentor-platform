@@ -15,6 +15,7 @@ assert.equal(restore(state, ['r/1', 'r/2', 'r/4']).position, 1); // Current remo
 assert.equal(restore({ ...state, position: 3 }).position, 3); // Finished: Previous opens last item.
 assert.equal(restore({ ...state, history: [{ key: 'r/1', phase: 2, ordinal: 1 }], position: 0 }).history[0].phase, 2);
 assert.notEqual(navigationStorageKey('alice'), navigationStorageKey('bob'));
+assert.notEqual(navigationStorageKey('alice', 'v1'), navigationStorageKey('alice', 'v2'));
 assert.equal(restoreNavigation('{broken', []), null);
 assert.equal(restore({ ...state, version: 9 }), null);
 assert.equal(restore({ ...state, position: 99 }), null);

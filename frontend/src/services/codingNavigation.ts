@@ -1,7 +1,7 @@
 // Persist IDs only: answers and conversations are always reloaded from the database.
 export interface Visit { key: string; phase: number; ordinal: number }
 export interface NavigationState { version: 1; history: Visit[]; position: number; queue: string[] }
-export const navigationStorageKey = (uid: string) => `coding-navigation-v1:${uid}`;
+export const navigationStorageKey = (uid: string, version = '') => `coding-navigation-v1:${uid}${version ? ':' + version : ''}`;
 export function restoreNavigation(raw: string | null, available: string[]): NavigationState | null {
   try {
     const saved = JSON.parse(raw || 'null');

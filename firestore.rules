@@ -46,7 +46,7 @@ service cloud.firestore {
       allow create, update: if isObserver() && request.auth.uid == uid
         && exists(/databases/$(database)/documents/rooms/$(roomId)/messages/$(messageId))
         && request.resource.data.keys().hasOnly(['thinking', 'discussion', 'necessity', 'action', 'ambiguous', 'important', 'reason', 'status', 'revision', 'schemaVersion', 'updatedAt', 'source', 'viewContext'])
-        && request.resource.data.source.keys().hasOnly(['roomId', 'messageId', 'messageTimestamp', 'contextMessageIds', 'sampledAt', 'samplingMethod', 'contextPolicy', 'events'])
+        && request.resource.data.source.keys().hasOnly(['roomId', 'messageId', 'messageTimestamp', 'contextMessageIds', 'sampledAt', 'samplingMethod', 'contextPolicy', 'events', 'bankVersion'])
         && request.resource.data.source.roomId == roomId
         && request.resource.data.source.messageId == messageId
         && request.resource.data.source.messageTimestamp is number
@@ -102,7 +102,96 @@ service cloud.firestore {
         allow create, update: if isObserver() && request.auth.uid == uid
           && get(/databases/$(database)/documents/codingRooms/$(roomId)/items/$(messageId)/ratings/$(uid)).data.status == 'submitted'
           && request.resource.data.replyId == get(/databases/$(database)/documents/codingRooms/$(roomId)/items/$(messageId)).data.replyId
-          && request.resource.data.keys().hasOnly(['labels', 'scores', 'replyId', 'ambiguous', 'important', 'reason', 'status', 'revision', 'schemaVersion', 'updatedAt'])
+          && request.resource.data.keys().hasOnly(['labels', 'scores', 'replyId', 'ambiguous', 'important', 'reason', 'status', 'revision', 'schemaVersion', 'updatedAt', 'bankVersion'])
+          && request.resource.data.schemaVersion == 1
+          && request.resource.data.status in ['draft', 'submitted']
+          && request.resource.data.revision is int
+          && request.resource.data.revision == (resource == null ? 1 : resource.data.revision + 1)
+          && request.resource.data.updatedAt is number
+          && request.resource.data.ambiguous is bool && request.resource.data.important is bool
+          && request.resource.data.reason is string && request.resource.data.reason.size() <= 1000
+          && (request.resource.data.status == 'draft' || !(request.resource.data.ambiguous || request.resource.data.important)
+            || request.resource.data.reason.matches('.*[^\\s].*'))
+          && request.resource.data.labels.keys().hasOnly(['design_stage', 'thinking_mode', 'design_behavior', 'collaboration_behavior', 'collaboration_situation', 'intervention_level', 'mentor_strategy'])
+          && validCodingChoices(request.resource.data.labels.design_stage, ['discover', 'define', 'develop', 'deliver', 'uncertain'], true)
+          && validCodingChoices(request.resource.data.labels.thinking_mode, ['divergent', 'convergent', 'iterative', 'reflective', 'uncertain'], true)
+          && validCodingChoices(request.resource.data.labels.design_behavior, ['NEED', 'REFRAME', 'IDEATE', 'ELABORATE', 'CRITIQUE', 'EXTERNALIZE', 'DECIDE', 'REFLECT', 'SOCIAL'], false)
+          && validCodingChoices(request.resource.data.labels.collaboration_behavior, ['PROPOSE', 'UPTAKE', 'BUILD_ON', 'CHALLENGE', 'CLARIFY', 'INTEGRATE', 'RATIFY', 'PROCESS_NEGOTIATION'], false)
+          && validCodingChoices(request.resource.data.labels.collaboration_situation, ['effective', 'true_off_topic', 'productive_detour', 'premature_convergence_risk', 'unresolved_misunderstanding', 'constructive_disagreement', 'true_stall', 'transition_readiness', 'explicit_pause'], false)
+          && (!('effective' in request.resource.data.labels.collaboration_situation) || request.resource.data.labels.collaboration_situation.size() == 1)
+          && validCodingChoices(request.resource.data.labels.intervention_level, ['0_no_intervention', '1_optional', '2_warranted', '3_urgent'], true)
+          && validCodingChoices(request.resource.data.labels.mentor_strategy, ['SILENCE', 'REFOCUS', 'ASK_OPEN_QUESTION', 'CLARIFY', 'CONNECT_IDEAS', 'OFFER_METHOD', 'SUMMARIZE', 'INVITE_COMPARISON', 'SUGGEST_REPRESENTATION', 'ASK_PERMISSION', 'RESPECT_PAUSE', 'FACT_CHECK'], false)
+          && request.resource.data.scores.keys().hasOnly(['stageFit', 'creativeAutonomy', 'contextualRelevance', 'interactionalSupport', 'clarity', 'nonRedundancy', 'grounding'])
+          && validCodingScore(request.resource.data.scores.stageFit)
+          && validCodingScore(request.resource.data.scores.creativeAutonomy)
+          && validCodingScore(request.resource.data.scores.contextualRelevance)
+          && validCodingScore(request.resource.data.scores.interactionalSupport)
+          && validCodingScore(request.resource.data.scores.clarity)
+          && validCodingScore(request.resource.data.scores.nonRedundancy)
+          && validCodingScore(request.resource.data.scores.grounding);
+      }
+    }
+
+    match /codingBankVersions/{versionId} {
+      allow read: if isObserver();
+      allow write: if false;
+    }
+    match /codingBankState/{id} {
+      allow read: if isObserver();
+      allow write: if false;
+    }
+    match /codingRooms/{roomId}/items/{messageId}/revisions/{revisionId}/ratings/{uid} {
+      allow read: if isObserver() && (request.auth.uid == uid || isAdmin());
+      allow create, update: if get(/databases/$(database)/documents/codingBankVersions/$(revisionId)).data.status == 'ready' && isObserver() && request.auth.uid == uid
+        && exists(/databases/$(database)/documents/rooms/$(roomId)/messages/$(messageId))
+        && request.resource.data.keys().hasOnly(['thinking', 'discussion', 'necessity', 'action', 'ambiguous', 'important', 'reason', 'status', 'revision', 'schemaVersion', 'updatedAt', 'source', 'viewContext'])
+        && request.resource.data.source.keys().hasOnly(['roomId', 'messageId', 'messageTimestamp', 'contextMessageIds', 'sampledAt', 'samplingMethod', 'contextPolicy', 'events', 'bankVersion'])
+        && request.resource.data.source.roomId == roomId
+        && request.resource.data.source.messageId == messageId
+        && request.resource.data.source.messageTimestamp is number
+        && request.resource.data.source.sampledAt is number
+        && request.resource.data.source.contextMessageIds is list
+        && request.resource.data.source.contextMessageIds.size() > 0
+        && request.resource.data.source.contextMessageIds.hasAny([messageId])
+        && request.resource.data.source.samplingMethod in ['random-human-message-v1', 'researcher-selection', 'event-round-robin-v2']
+        && (resource == null || resource.data.get('source', null) == null || request.resource.data.source == resource.data.source)
+        && request.resource.data.schemaVersion == 2
+        && request.resource.data.status in ['draft', 'submitted']
+        && request.resource.data.thinking in ['', 'diverge', 'converge', 'iterate', 'reflect', 'cannotJudge']
+        && validCodingChoices(request.resource.data.discussion, ['effective', 'creativeDetour', 'misunderstanding', 'stalled', 'offTopic', 'cannotJudge'], false)
+        && request.resource.data.necessity in ['', 'unnecessary', 'optional', 'worthwhile', 'urgent', 'cannotJudge']
+        && validCodingChoices(request.resource.data.action, ['silent', 'clarify', 'connect', 'refocus', 'compare', 'cannotJudge'], false)
+        && (!request.resource.data.discussion.hasAny(['cannotJudge']) || request.resource.data.discussion.size() == 1)
+        && (!request.resource.data.action.hasAny(['cannotJudge']) || request.resource.data.action.size() == 1)
+        && request.resource.data.ambiguous is bool
+        && request.resource.data.important is bool
+        && request.resource.data.reason is string && request.resource.data.reason.size() <= 1000
+        && request.resource.data.updatedAt is number
+        && request.resource.data.revision is int
+        && request.resource.data.revision == (resource == null ? 1 : resource.data.revision + 1)
+        && (request.resource.data.status == 'draft' || (
+          request.resource.data.thinking != '' && request.resource.data.discussion.size() > 0
+          && request.resource.data.necessity != '' && request.resource.data.action.size() > 0
+          && (!(request.resource.data.ambiguous || request.resource.data.important)
+            || request.resource.data.reason.matches('.*[^\\s].*'))));
+    }
+
+    match /codingRooms/{roomId}/items/{messageId}/revisions/{revisionId} {
+      allow read: if isObserver();
+      allow create: if get(/databases/$(database)/documents/codingBankVersions/$(revisionId)).data.status == 'ready' && isAdmin()
+        && request.resource.data.keys().hasOnly(['replyId', 'selectedBy', 'selectedAt'])
+        && request.resource.data.selectedBy == request.auth.uid
+        && request.resource.data.selectedAt is number
+        && get(/databases/$(database)/documents/rooms/$(roomId)/messages/$(request.resource.data.replyId)).data.senderUid in ['ai_mentor', 'ai_mentor_3d']
+        && get(/databases/$(database)/documents/rooms/$(roomId)/messages/$(request.resource.data.replyId)).data.timestamp
+          >= get(/databases/$(database)/documents/rooms/$(roomId)/messages/$(messageId)).data.timestamp
+        && request.resource.data.replyId != messageId;
+      match /detailedRatings/{uid} {
+        allow read: if isObserver() && (request.auth.uid == uid || isAdmin());
+        allow create, update: if isObserver() && request.auth.uid == uid
+          && get(/databases/$(database)/documents/codingRooms/$(roomId)/items/$(messageId)/revisions/$(revisionId)/ratings/$(uid)).data.status == 'submitted'
+          && request.resource.data.replyId == get(/databases/$(database)/documents/codingRooms/$(roomId)/items/$(messageId)/revisions/$(revisionId)).data.replyId
+          && request.resource.data.keys().hasOnly(['labels', 'scores', 'replyId', 'ambiguous', 'important', 'reason', 'status', 'revision', 'schemaVersion', 'updatedAt', 'bankVersion'])
           && request.resource.data.schemaVersion == 1
           && request.resource.data.status in ['draft', 'submitted']
           && request.resource.data.revision is int

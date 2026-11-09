@@ -4,6 +4,10 @@
  */
 
 export const LANGUAGES = ['zh-TW', 'en'];
+export const codingBankErrors = {
+  unavailable: 'Question bank version is not ready.', incomplete: 'Question bank snapshot is incomplete.',
+  request: 'Invalid question bank request.', building: 'Another question bank build is in progress. Retry later.', admin: 'Study administrator only.',
+};
 export const DEFAULT_LANGUAGE = 'zh-TW';
 export const roomLanguage = lang => (LANGUAGES.includes(lang) ? lang : DEFAULT_LANGUAGE);
 

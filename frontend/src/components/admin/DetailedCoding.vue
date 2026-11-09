@@ -4,7 +4,7 @@ import { t, type MessageKey } from '../../i18n';
 import { useAuthStore } from '../../stores/auth';
 import { detailedOptions, scoreFields, emptyDetailed, isMultiple, loadDetailed, saveDetailed, type DetailField } from '../../services/coding';
 
-const props = defineProps<{ roomId: string; messageId: string; replyId: string; advance?: boolean; externalBusy?: boolean }>();
+const props = defineProps<{ roomId: string; messageId: string; replyId: string; advance?: boolean; externalBusy?: boolean; ratingRevision?: string; bankVersion?: string }>();
 const emit = defineEmits<{ dirty: [value: boolean]; submitted: []; saved: [status: 'draft' | 'submitted']; valid: [value: boolean] }>();
 const auth = useAuthStore();
 const answer = ref(emptyDetailed(props.replyId));
@@ -22,7 +22,7 @@ watch(() => loaded.value && complete.value, value => emit('valid', value), { imm
 const key = (value: string) => `coding.${value}` as MessageKey;
 onMounted(async () => {
   try {
-    answer.value = await loadDetailed(props.roomId, props.messageId, auth.uid!, props.replyId);
+    answer.value = await loadDetailed(props.roomId, props.messageId, auth.uid!, props.replyId, props.ratingRevision);
     baseline.value = JSON.stringify(answer.value); loaded.value = true;
   } catch { error.value = t('coding.loadFailed'); }
   finally { busy.value = false; }
@@ -40,7 +40,7 @@ async function save(status: 'draft' | 'submitted', advance = true) {
   if (!auth.uid || !loaded.value || (status === 'submitted' && !complete.value)) return false;
   busy.value = true; error.value = ''; notice.value = '';
   try {
-    answer.value = await saveDetailed(props.roomId, props.messageId, auth.uid, { ...answer.value, status });
+    answer.value = await saveDetailed(props.roomId, props.messageId, auth.uid, { ...answer.value, status, bankVersion: props.bankVersion || '' }, props.ratingRevision);
     baseline.value = JSON.stringify(answer.value);
     emit('saved', status);
     notice.value = t(status === 'draft' ? 'coding.draftSaved' : 'coding.submitted');

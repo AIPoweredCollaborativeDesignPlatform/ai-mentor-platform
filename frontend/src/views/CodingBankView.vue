@@ -3,11 +3,36 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import PageNav from '../components/PageNav.vue';
 import { useAuthStore } from '../stores/auth';
 import { intlLocale, t, type MessageKey } from '../i18n';
-import { fetchCodingBank, listCodingRatings, setCodingQuestionEnabled, codingQuestionKey, type CodingQuestion, type CodingRatingRow } from '../services/coding';
+import { fetchCodingBank, listCodingRatings, setCodingQuestionEnabled, codingQuestionKey, manageCodingBank, prepareSemanticQueue, type CodingQuestion, type CodingRatingRow, type CodingBankVersion } from '../services/coding';
 import { humanWindow } from '../services/codingSampling';
 
 const auth = useAuthStore();
 const busy = ref(true), saving = ref(''), error = ref('');
+const versions = ref<CodingBankVersion[]>([]), bankVersion = ref<CodingBankVersion | null>(null);
+const versionSelection = ref(''), activeVersion = ref(''), versionNote = ref('');
+const building = ref(false), updateSemantic = ref(false);
+let buildRequest = '';
+async function createVersion() {
+  building.value = true; error.value = '';
+  try {
+    if (updateSemantic.value) {
+      const live = await fetchCodingBank('live');
+      await prepareSemanticQueue(live.rooms);
+    }
+    buildRequest ||= crypto.randomUUID();
+    const result = await manageCodingBank({ action: 'create', requestId: buildRequest, note: versionNote.value });
+    versionSelection.value = result.version!.id; buildRequest = ''; versionNote.value = '';
+    await refresh();
+  } catch { error.value = t('coding.versionBuildFailed'); }
+  finally { building.value = false; }
+}
+async function activateVersion() {
+  if (!bankVersion.value) return;
+  building.value = true; error.value = '';
+  try { activeVersion.value = (await manageCodingBank({ action: 'activate', versionId: bankVersion.value.id })).activeVersion!; }
+  catch { error.value = t('coding.saveFailed'); }
+  finally { building.value = false; }
+}
 const rooms = ref<{ id: string; name: string }[]>([]);
 const questions = ref<CodingQuestion[]>([]);
 const disabled = ref(new Set<string>());
@@ -49,7 +74,7 @@ async function loadRoom() {
   const pending = [...roomQuestions.value];
   try {
     for (let i = 0; i < pending.length; i += 5) {
-      const batch = await Promise.all(pending.slice(i, i + 5).map(async q => [keyOf(q), await listCodingRatings(q.roomId, q.messages[q.index].id)] as const));
+      const batch = await Promise.all(pending.slice(i, i + 5).map(async q => [keyOf(q), await listCodingRatings(q.roomId, q.messages[q.index].id, q.revision)] as const));
       if (ticket !== generation) return;
       for (const [key, rows] of batch) ratings.value[key] = rows;
     }
@@ -59,7 +84,8 @@ async function loadRoom() {
 async function refresh() {
   busy.value = true; error.value = '';
   try {
-    const bank = await fetchCodingBank();
+    const [bank, catalog] = await Promise.all([fetchCodingBank(versionSelection.value || undefined), manageCodingBank({ action: 'list' })]);
+    bankVersion.value = bank.version; activeVersion.value = catalog.activeVersion || ''; versions.value = catalog.versions || [];
     questions.value = bank.allQuestions.sort((a, b) => a.messages[a.index].timestamp - b.messages[b.index].timestamp);
     rooms.value = bank.rooms.filter(r => questions.value.some(q => q.roomId === r.id));
     disabled.value = bank.disabled; ratings.value = {};
@@ -87,8 +113,8 @@ function answerFields(row: CodingRatingRow) {
 }
 function exportRoom() {
   const data = roomQuestions.value.map(q => ({ roomId: q.roomId, messageId: q.messages[q.index].id,
-    enabled: !disabled.value.has(keyOf(q)), events: q.events, ratings: ratings.value[keyOf(q)] }));
-  const url = URL.createObjectURL(new Blob([JSON.stringify({ exportedAt: Date.now(), questions: data }, null, 2)], { type: 'application/json' }));
+    enabled: !disabled.value.has(keyOf(q)), events: q.events, ratingRevision: q.revision || 'legacy', ratings: ratings.value[keyOf(q)] }));
+  const url = URL.createObjectURL(new Blob([JSON.stringify({ exportedAt: Date.now(), bankVersion: bankVersion.value, questions: data }, null, 2)], { type: 'application/json' }));
   const a = document.createElement('a'); a.href = url; a.download = `coding-${room.value}.json`; a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
@@ -108,6 +134,26 @@ onMounted(async () => {
       <p v-if="busy" role="status">{{ t('coding.loading') }}</p>
       <p v-if="!busy && !auth.isAdmin">{{ t('coding.noAccess') }}</p>
       <template v-if="auth.isAdmin">
+        <section class="border border-slate-700 rounded-xl p-4 space-y-3">
+          <h2 class="font-semibold">{{ t('coding.versionManagement') }}</h2>
+          <p class="text-sm text-slate-400">{{ t('coding.versionHint') }}</p>
+          <div class="flex flex-wrap items-end gap-3">
+            <label class="flex-1 min-w-48">{{ t('coding.viewVersion') }}<select v-model="versionSelection" :disabled="busy || building" class="block w-full bg-slate-900 border border-slate-700 rounded-lg p-2" @change="refresh"><option value="">{{ t('coding.currentBank') }}</option><option v-for="version in versions.filter(v => v.status === 'ready')" :key="version.id" :value="version.id">{{ t('coding.bankVersionLabel', { version: version.sequence }) }} · {{ date(version.completedAt || version.startedAt) }}{{ version.id === activeVersion ? ' · ' + t('coding.activeBank') : '' }}</option></select></label>
+            <button :disabled="busy || building || !bankVersion || bankVersion.id === activeVersion" class="border border-slate-700 rounded-lg px-3 py-2 disabled:opacity-40" @click="activateVersion">{{ t('coding.activateVersion') }}</button>
+          </div>
+          <template v-if="bankVersion">
+            <p>{{ t('coding.bankVersionLabel', { version: bankVersion.sequence }) }} · {{ t(bankVersion.id === activeVersion ? 'coding.activeBank' : 'coding.archivedBank') }}</p>
+            <p class="text-sm">{{ t('coding.versionSourceRange', { start: date(bankVersion.startedAt), end: date(bankVersion.completedAt || bankVersion.startedAt) }) }}</p>
+            <p v-if="bankVersion.counts" class="text-sm">{{ t('coding.versionChanges', bankVersion.counts) }}</p>
+            <p v-if="bankVersion.counts" class="text-sm" :class="bankVersion.counts.semanticCovered < bankVersion.counts.questions ? 'text-amber-400' : 'text-slate-400'">{{ t('coding.semanticCoverage', { covered: bankVersion.counts.semanticCovered, total: bankVersion.counts.questions }) }}</p>
+            <p v-if="bankVersion.note" class="text-sm whitespace-pre-wrap">{{ bankVersion.note }}</p>
+          </template>
+          <p v-else class="text-sm text-amber-400">{{ t('coding.liveBank') }}</p>
+          <label class="block">{{ t('coding.versionNote') }}<input v-model="versionNote" :disabled="building" maxlength="300" class="block w-full bg-slate-900 border border-slate-700 p-2 rounded-lg"></label>
+          <label class="flex gap-2 items-start text-sm"><input v-model="updateSemantic" type="checkbox" :disabled="building" class="mt-1">{{ t('coding.updateSemanticForVersion') }}</label>
+          <p class="text-xs text-slate-400">{{ t('coding.versionSemanticHint') }}</p>
+          <button :disabled="busy || building" class="bg-sky-600 text-white rounded-lg px-4 py-2 disabled:opacity-40" @click="createVersion">{{ t(building ? 'coding.buildingVersion' : 'coding.createVersion') }}</button>
+        </section>
         <p class="text-sm text-slate-400">{{ t('coding.bankHint') }}</p>
         <p>{{ t('coding.bankTotals', { total: questions.length, enabled: questions.length - disabled.size }) }}</p>
         <div class="flex flex-wrap gap-3">

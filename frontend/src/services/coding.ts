@@ -1,5 +1,7 @@
-import { collection, doc, getDoc, getDocs, getDocsFromServer, orderBy, query, runTransaction } from 'firebase/firestore';
-import { db } from '../firebase/config';
+import { collection, doc, getDoc, getDocs, getDocsFromServer, orderBy, query, where, runTransaction } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { humanText, atOrBefore, roundRobin, type SamplingEvent } from './codingSampling';
+import { db, functions } from '../firebase/config';
 import type { MessageItem } from '../types';
 
 export const codingOptions = {
@@ -15,7 +17,9 @@ export interface CodingSource {
   messageTimestamp: number;
   contextMessageIds: string[];
   sampledAt: number;
-  samplingMethod: 'random-human-message-v1' | 'researcher-selection';
+  samplingMethod: 'random-human-message-v1' | 'researcher-selection' | 'event-round-robin-v2';
+  events?: SamplingEvent[];
+  contextPolicy?: 'human-before-after-5-v1';
 }
 export interface CodingAnswer {
   thinking: string;
@@ -30,6 +34,7 @@ export interface CodingAnswer {
   schemaVersion: 2;
   updatedAt: number;
   source?: CodingSource;
+  viewContext?: { policy: string; messageIds: string[] };
 }
 export const emptyCoding = (): CodingAnswer => ({
   thinking: '', discussion: [], necessity: '', action: [], ambiguous: false,
@@ -43,7 +48,7 @@ export async function codingMessages(roomId: string): Promise<MessageItem[]> {
   const snapshot = await getDocsFromServer(query(collection(db, 'rooms', roomId, 'messages'), orderBy('timestamp')));
   return snapshot.docs.map(d => ({ ...d.data(), id: d.id } as MessageItem));
 }
-export interface CodingQuestion { roomId: string; messages: MessageItem[]; index: number }
+export interface CodingQuestion { roomId: string; messages: MessageItem[]; index: number; events?: SamplingEvent[] }
 export const codingQuestionKey = (roomId: string, messageId: string) => `${roomId}/${messageId}`;
 export async function loadCodingProgress(questions: CodingQuestion[], uid: string) {
   const completed: string[] = [];
@@ -67,23 +72,62 @@ export async function loadCodingProgress(questions: CodingQuestion[], uid: strin
 }
 export async function buildCodingQueue(rooms: { id: string }[]): Promise<CodingQuestion[]> {
   const candidates: CodingQuestion[] = [];
-  for (let start = 0; start < rooms.length; start += 5) {
-    await Promise.all(rooms.slice(start, start + 5).map(async room => {
-      const messages = await codingMessages(room.id);
-      messages.forEach((message, index) => {
-        if (!['ai_mentor', 'ai_mentor_3d', 'system'].includes(message.senderUid)) {
-          candidates.push({ roomId: room.id, messages, index });
-        }
-      });
-    }));
+  for (const room of rooms) {
+    const [messages, logs, events, semantic] = await Promise.all([
+      codingMessages(room.id),
+      getDocsFromServer(query(collection(db, 'aiLogs'), where('roomId', '==', room.id))),
+      getDocsFromServer(collection(db, 'rooms', room.id, 'events')),
+      getDocsFromServer(collection(db, 'codingSemantic', room.id, 'batches')),
+    ]);
+    const byIndex = new Map<number, CodingQuestion>();
+    const add = (index: number, kind: SamplingEvent['kind'], ref: string) => {
+      if (index < 0 || !humanText(messages[index])) return;
+      let q = byIndex.get(index);
+      if (!q) { q = { roomId: room.id, messages, index, events: [] }; byIndex.set(index, q); }
+      if (!q.events!.some(e => e.kind === kind && e.ref === ref)) q.events!.push({ kind, ref });
+    };
+    messages.forEach((m, i) => { if (humanText(m)) add(i, 'random', `rooms/${room.id}/messages/${m.id}`); });
+    logs.docs.forEach(d => {
+      const log = d.data();
+      if (log.kind !== 'mentor' || log.error || log.visible === false || log.output?.shouldIntervene !== true) return;
+      // Anchor to the last input message, never the log completion / AI response time.
+      const triggerIndex = messages.findIndex(m => m.id === log.triggerMessageId);
+      if (triggerIndex < 0) return;
+      const anchor = atOrBefore(messages.slice(0, triggerIndex + 1), messages[triggerIndex].timestamp);
+      add(anchor, 'intervention', `aiLogs/${d.id}`);
+    });
+    events.docs.forEach(d => {
+      const e = d.data(); const kind = String(e.kind || '');
+      const m = e.data?.message;
+      const asset = m?.assetType;
+      if (/board|whiteboard|imageboard|moodboard|model_?3d|model_3d|mesh_3d/i.test(kind)
+          || ['moodboard', 'mesh_3d', 'parametric_3d'].includes(asset)
+          || m?.type === 'whiteboard_state') {
+        if (Number.isFinite(e.at)) add(atOrBefore(messages, e.at), 'tool', `rooms/${room.id}/events/${d.id}`);
+      }
+    });
+    // Legacy rooms may have tool cards but no event log.
+    messages.forEach(m => { if (m.type === 'whiteboard_state' || ['moodboard', 'mesh_3d', 'parametric_3d'].includes(m.assetType || ''))
+      add(atOrBefore(messages, m.timestamp), 'tool', `rooms/${room.id}/messages/${m.id}`); });
+    semantic.docs.forEach(d => {
+      const batch = d.data();
+      // Ignore caches whose source text has since been edited or removed.
+      if (batch.version !== 'coding-events-v1' || !Array.isArray(batch.inputMessages)
+        || !batch.inputMessages.every((x: any) => messages.some(m => humanText(m) && m.id === x.id && m.content.slice(0, 4000) === x.content))) return;
+      for (const e of batch.events || []) add(messages.findIndex(m => m.id === e.messageId), 'semantic', `codingSemantic/${room.id}/batches/${d.id}#${e.kind}`);
+    });
+    candidates.push(...byIndex.values());
   }
-  // Shuffle individual human-message cutoffs, so large rooms receive proportional weight.
-  for (let i = candidates.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
-  }
-  return candidates;
+  return roundRobin(candidates);
 }
+export async function prepareSemanticQueue(rooms: { id: string }[]) {
+  const prepare = httpsCallable<{ roomId: string; offset: number }, { nextOffset: number | null }>(functions, 'prepareCodingSemantic', { timeout: 180000 });
+  for (const room of rooms) {
+    let offset: number | null = 0;
+    while (offset !== null) { const result: { data: { nextOffset: number | null } } = await prepare({ roomId: room.id, offset }); offset = result.data.nextOffset; }
+  }
+}
+
 const ratingRef = (roomId: string, messageId: string, uid: string) =>
   doc(db, 'codingRooms', roomId, 'items', messageId, 'ratings', uid);
 export async function loadCoding(roomId: string, messageId: string, uid: string): Promise<CodingAnswer> {

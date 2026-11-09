@@ -1,3 +1,15 @@
+## Annotation sampling update (2026-11-09)
+Deployment status: NOT deployed. Latest retry 2026-11-09: ActAs and functions listing now pass; deployment blocked by 403 secretmanager.secrets.get on ANTHROPIC_API_KEY. Request Secret Manager Viewer for deployer melody88112247@gmail.com on that secret; no secret payload access requested. Extensions-list warning was nonfatal. Online remains v7.8.34. Build, sampling tests, backend syntax/index import passed. LLM/cloud end-to-end verification pending. Retry node scripts/deploy.mjs --coding-only after permissions; then run admin semantic preparation and verify source provenance. No real expert answers created for tests.
+
+- Four source round-robin, shuffled within sources, deduplicated by room/message ID. Empty sources skipped; not a fixed 25% stratified sample.
+- Intervention anchors: aiLogs mentor + visible + shouldIntervene, anchored via triggerMessageId (never completion timestamp). Shadow/silent/error records excluded.
+- Tool anchors: room events / legacy tool cards, latest human text at or before event; no preceding human means no candidate.
+- Semantic generation: admin-only prepareCodingSemantic callable, batches of 30 targets with 5-message context, cached by input/model/detector version. Explicit researcher button uses AI budget. Results never feed live Mentor or autofill expert labels.
+- Context: target plus up to 5 human text messages each side. Later messages marked as future information. Phase two includes only its chosen AI reply.
+- Existing answer/source IDs preserved. New answers record event refs and context policy; resubmissions record viewContext. New policy changes what experts see; do not treat old/new judgments as identical experimental conditions.
+- Test: node scripts/test-coding-sampling.mjs (Node 24; requires TypeScript stripping). Build: vue-tsc + vite runner.
+- Deploy only new callable plus hosting/rules: node scripts/deploy.mjs --coding-only. Preserves full-functions hash so unrelated backend changes are not falsely marked deployed.
+
 # 交接摘要與執行指南（2026-11-05，v7.8.25）
 
 給接手的人或 AI 代理（Codex、Claude Code）：照本文件就能接續實作。

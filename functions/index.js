@@ -1,3 +1,4 @@
+import { generateCodingSemanticBatch } from './src/codingSemantic.js';
 import { Readable } from 'node:stream';
 import { initializeApp } from 'firebase-admin/app';
 import { defineSecret } from 'firebase-functions/params';
@@ -750,4 +751,15 @@ export const proxyGlb = onRequest({ invoker: 'public', memory: '256MiB', maxInst
     console.error('[proxyGlb]', err?.message || err);
     res.status(500).send('Proxy failed');
   }
+});
+
+export const prepareCodingSemantic = onCall({ secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 180, maxInstances: 1, concurrency: 1 }, async request => {
+  requireAdmin(request);
+  const roomId = String(request.data?.roomId || '');
+  const offset = request.data?.offset ?? 0;
+  if (!/^room_\d{4,6}$/.test(roomId) || !Number.isInteger(offset) || offset < 0) throw new HttpsError('invalid-argument', 'Invalid sampling request');
+  const room = await getFirestore().doc(`rooms/${roomId}`).get();
+  if (!room.exists || room.data().deletedAt) throw new HttpsError('not-found', 'Room unavailable');
+  try { return await generateCodingSemanticBatch(roomId, offset, await anthropicKey()); }
+  catch (err) { throw toHttpsError(err, 'prepareCodingSemantic'); }
 });

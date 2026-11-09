@@ -23,6 +23,7 @@ const args = new Set(process.argv.slice(2));
 const bump = args.has('--major') ? 'major' : args.has('--minor') ? 'minor' : 'patch';
 const dry = args.has('--dry');
 const webOnly = args.has('--web-only');
+const codingOnly = args.has('--coding-only');
 
 // Loading functions/ (Anthropic SDK + Admin SDK) can exceed the CLI's 10s discovery timeout on this machine
 const run = (cmd, cwd = ROOT) => execSync(cmd, { cwd, stdio: 'inherit', env: { ...process.env, FUNCTIONS_DISCOVERY_TIMEOUT: '120' } });
@@ -70,15 +71,16 @@ try {
 
   const state = existsSync(STATE_FILE) ? JSON.parse(readFileSync(STATE_FILE, 'utf-8')) : {};
   const fnHash = hashFunctions();
-  const targets = webOnly ? ['hosting', 'firestore:rules'] : ['hosting', 'firestore:rules', 'storage'];
-  if (!webOnly && (args.has('--functions') || state.functionsHash !== fnHash)) targets.push('functions');
+  const targets = (webOnly || codingOnly) ? ['hosting', 'firestore:rules'] : ['hosting', 'firestore:rules', 'storage'];
+  if (codingOnly) targets.push('functions:prepareCodingSemantic');
+  if (!webOnly && !codingOnly && (args.has('--functions') || state.functionsHash !== fnHash)) targets.push('functions');
 
   step(`Deploying to Firebase (${targets.join(', ')})`);
   run(`firebase deploy --only ${targets.join(',')} --project ${PROJECT}`);
   deployed = true;
 
   writeFileSync(STATE_FILE, JSON.stringify({
-    functionsHash: webOnly ? state.functionsHash : fnHash,
+    functionsHash: (webOnly || codingOnly) ? state.functionsHash : fnHash,
     lastVersion: version,
     lastDeployedAt: new Date().toISOString()
   }, null, 2) + '\n');

@@ -2,12 +2,13 @@
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
 import { onBeforeRouteLeave } from 'vue-router';
 import { Database, FolderSearch, Info, X } from 'lucide-vue-next';
+import { humanText, humanWindow, type SamplingEvent } from '../services/codingSampling';
 import PageNav from '../components/PageNav.vue';
 import DetailedCoding from '../components/admin/DetailedCoding.vue';
 import { intlLocale, t, type MessageKey } from '../i18n';
 import { useAuthStore } from '../stores/auth';
 import type { MessageItem } from '../types';
-import { codingMessages, codingOptions, codingRooms, emptyCoding, loadCoding, saveCoding, loadCodingCase, openCodingCase, reviewCoding, buildCodingQueue, loadDetailed, loadCodingProgress, codingQuestionKey, type CodingCase, type CodingQuestion, type CodingSource } from '../services/coding';
+import { prepareSemanticQueue, codingMessages, codingOptions, codingRooms, emptyCoding, loadCoding, saveCoding, loadCodingCase, openCodingCase, reviewCoding, buildCodingQueue, loadDetailed, loadCodingProgress, codingQuestionKey, type CodingCase, type CodingQuestion, type CodingSource } from '../services/coding';
 
 const auth = useAuthStore();
 const toolsDialog = ref<HTMLDialogElement | null>(null);
@@ -47,6 +48,7 @@ const rooms = ref<{ id: string; name: string }[]>([]);
 const roomId = ref('');
 const messages = ref<MessageItem[]>([]);
 const index = ref(-1);
+const currentEvents = ref<SamplingEvent[]>([]);
 const answer = ref(emptyCoding());
 const baseline = ref(JSON.stringify(answer.value));
 const busy = ref(true);
@@ -71,14 +73,19 @@ const codingCase = ref<CodingCase | null>(null);
 const review = ref<Awaited<ReturnType<typeof reviewCoding>> | null>(null);
 const replyId = ref('');
 const reviewIndex = ref<Record<string, Awaited<ReturnType<typeof reviewCoding>>>>({});
-const cutoffs = computed(() => messages.value.map((message, i) => ({ message, i })).filter(({ message }) => !['ai_mentor', 'ai_mentor_3d', 'system'].includes(message.senderUid)));
+const cutoffs = computed(() => messages.value.map((message, i) => ({ message, i })).filter(({ message }) => humanText(message)));
 const aiReplies = computed(() => messages.value.slice(index.value + 1).filter(m => m.senderUid === 'ai_mentor' || m.senderUid === 'ai_mentor_3d'));
 const reply = computed(() => messages.value.find(m => m.id === codingCase.value?.replyId));
 const dirty = computed(() => JSON.stringify(answer.value) !== baseline.value);
 const target = computed(() => messages.value[index.value]);
-const context = computed(() => messages.value.slice(0, phase.value === 2 && reply.value ? messages.value.indexOf(reply.value) + 1 : index.value + 1));
-const firstSpeaker = computed(() => context.value.find(message => !['ai_mentor', 'ai_mentor_3d', 'system'].includes(message.senderUid))?.senderUid);
-const isHumanMessage = (message: MessageItem) => !['ai_mentor', 'ai_mentor_3d', 'system'].includes(message.senderUid);
+const context = computed(() => {
+  if (!target.value) return [];
+  const window = humanWindow(messages.value, target.value.id);
+  // Stage two evaluates only the selected AI response, not all intervening AI messages.
+  return phase.value === 2 && reply.value ? [...window, reply.value].sort((a, b) => a.timestamp - b.timestamp) : window;
+});
+const firstSpeaker = computed(() => context.value.find(message => humanText(message))?.senderUid);
+const isHumanMessage = (message: MessageItem) => humanText(message);
 const needsReason = computed(() => answer.value.ambiguous || answer.value.important);
 const complete = computed(() => !!answer.value.thinking && !!answer.value.necessity && answer.value.discussion.length > 0 && answer.value.action.length > 0 && (!needsReason.value || !!answer.value.reason.trim()));
 const progressTotal = computed(() => phase.value === 1 ? cloudQuestionCount.value : selectedDetailed.value.size);
@@ -135,9 +142,16 @@ async function syncCloudQueue() {
   cloudRoomCount.value = new Set(cloudQueue.map(question => question.roomId)).size;
   cloudSyncedAt.value = Date.now();
 }
+async function prepareSemanticEvents() {
+  busy.value = true; error.value = ''; notice.value = t('coding.semanticPreparing');
+  try { await prepareSemanticQueue(rooms.value); await syncCloudQueue(); notice.value = t('coding.semanticReady'); }
+  catch { error.value = t('coding.semanticFailed'); }
+  finally { busy.value = false; }
+}
 function sourceForQuestion(method: CodingSource['samplingMethod']): CodingSource {
   return { roomId: roomId.value, messageId: target.value!.id, messageTimestamp: target.value!.timestamp,
-    contextMessageIds: messages.value.slice(0, index.value + 1).map(message => message.id),
+    contextMessageIds: humanWindow(messages.value, target.value!.id).map(message => message.id),
+    contextPolicy: 'human-before-after-5-v1', events: currentEvents.value,
     sampledAt: Date.now(), samplingMethod: method };
 }
 async function nextQuestion() {
@@ -162,8 +176,8 @@ async function nextQuestion() {
         nextPhase = 2;
       }
       queue.pop();
-      roomId.value = question.roomId; messages.value = question.messages; index.value = question.index;
-      answer.value = { ...nextAnswer, source: nextAnswer.source || sourceForQuestion('random-human-message-v1') };
+      roomId.value = question.roomId; messages.value = question.messages; index.value = question.index; currentEvents.value = question.events || [];
+      answer.value = { ...nextAnswer, source: nextAnswer.source || sourceForQuestion('event-round-robin-v2') };
       baseline.value = JSON.stringify(answer.value); codingCase.value = nextCase;
       phase.value = nextPhase; detailedDirty.value = false; review.value = null;
       detailedValid.value = false;
@@ -181,7 +195,7 @@ async function nextQuestion() {
 async function resetQuestionScroll() {
   await nextTick();
   const conversation = document.getElementById('coding-context');
-  if (conversation) conversation.scrollTop = conversation.scrollHeight;
+  if (conversation) { const anchor = conversation.querySelector<HTMLElement>('[data-coding-target="true"]'); conversation.scrollTop = anchor ? anchor.offsetTop - conversation.offsetTop : 0; }
   document.getElementById('coding-answer-scroll')?.scrollTo({ top: 0 });
 }
 async function loadHistory(position: number) {
@@ -191,8 +205,8 @@ async function loadHistory(position: number) {
   const [stored, selectedCase] = await Promise.all([
     loadCoding(question.roomId, id, auth.uid!), loadCodingCase(question.roomId, id),
   ]);
-  roomId.value = question.roomId; messages.value = question.messages; index.value = question.index;
-  answer.value = { ...stored, source: stored.source || sourceForQuestion('random-human-message-v1') };
+  roomId.value = question.roomId; messages.value = question.messages; index.value = question.index; currentEvents.value = question.events || [];
+  answer.value = { ...stored, source: stored.source || sourceForQuestion('event-round-robin-v2') };
   baseline.value = JSON.stringify(answer.value); codingCase.value = selectedCase;
   phase.value = entry.phase; detailedDirty.value = false; exhausted.value = false;
   detailedValid.value = false;
@@ -217,7 +231,7 @@ async function navigateQuestion(direction: -1 | 1) {
       if (!await detailedForm.value.persist()) return;
     } else if (target.value && dirty.value) {
       const status = answer.value.status === 'submitted' && complete.value ? 'submitted' : 'draft';
-      answer.value = await saveCoding(roomId.value, target.value.id, auth.uid!, { ...answer.value, status });
+      answer.value = await saveCoding(roomId.value, target.value.id, auth.uid!, { ...answer.value, status, viewContext: { policy: 'human-before-after-5-v1', messageIds: context.value.filter(humanText).map(m => m.id) } });
       baseline.value = JSON.stringify(answer.value);
       markProgress(1, status);
     }
@@ -250,7 +264,7 @@ async function toggleManagement() {
     busy.value = true;
     try {
       const storedAnswer = await loadCoding(roomId.value, target.value.id, auth.uid!);
-      answer.value = { ...storedAnswer, source: storedAnswer.source || sourceForQuestion('researcher-selection') };
+      answer.value = { ...storedAnswer, source: storedAnswer.source || { ...sourceForQuestion('researcher-selection'), events: [] } };
       baseline.value = JSON.stringify(answer.value);
       review.value = await reviewCoding(roomId.value, target.value.id); replyId.value = aiReplies.value[0]?.id || '';
     }
@@ -294,7 +308,7 @@ async function chooseTarget(event: Event) {
       auth.isAdmin ? reviewCoding(roomId.value, id) : Promise.resolve(null),
     ]);
     index.value = nextIndex;
-    answer.value = { ...nextAnswer, source: nextAnswer.source || sourceForQuestion('researcher-selection') };
+    answer.value = { ...nextAnswer, source: nextAnswer.source || { ...sourceForQuestion('researcher-selection'), events: [] } };
     baseline.value = JSON.stringify(answer.value);
     codingCase.value = nextCase; review.value = nextReview; phase.value = 1; detailedDirty.value = false;
     replyId.value = aiReplies.value[0]?.id || '';
@@ -320,7 +334,7 @@ async function save(status: 'draft' | 'submitted') {
   if (!target.value || !auth.uid || (status === 'submitted' && !complete.value)) return;
   busy.value = true; error.value = ''; notice.value = '';
   try {
-    answer.value = await saveCoding(roomId.value, target.value.id, auth.uid, { ...answer.value, status });
+    answer.value = await saveCoding(roomId.value, target.value.id, auth.uid, { ...answer.value, status, viewContext: { policy: 'human-before-after-5-v1', messageIds: context.value.filter(humanText).map(m => m.id) } });
     markProgress(1, status);
     baseline.value = JSON.stringify(answer.value); notice.value = t(status === 'draft' ? 'coding.draftSaved' : 'coding.submitted');
     if (!management.value && status === 'submitted') {
@@ -348,10 +362,12 @@ async function save(status: 'draft' | 'submitted') {
             <p v-if="cloudSyncedAt" class="text-xs text-slate-400">{{ t('coding.cloudSynced', { time: new Date(cloudSyncedAt).toLocaleTimeString(intlLocale()) }) }}</p>
             <p class="text-xs text-slate-400">{{ t('coding.cloudSampling') }}</p>
             <button type="button" :disabled="busy" class="rounded-lg border border-slate-700 px-3 py-2 disabled:opacity-40" @click="reloadQueue">{{ t('coding.syncCloud') }}</button>
+            <button v-if="auth.isAdmin" type="button" :disabled="busy" class="rounded-lg border border-slate-700 px-3 py-2 disabled:opacity-40" @click="prepareSemanticEvents">{{ t('coding.prepareSemantic') }}</button>
+            <p class="text-xs text-slate-400">{{ t('coding.semanticHint') }}</p>
           </section>
         <section v-if="activeTool === 'source' && target" class="text-sm border border-slate-800 rounded-lg p-3">
 
-          <dl class="mt-3 space-y-2 break-all">
+          <dl class="mt-3 space-y-2 break-all"><div><dt>{{ t('coding.eventSources') }}</dt><dd v-for="event in answer.source?.events" :key="event.kind + event.ref">{{ t(key('event_' + event.kind)) }} · {{ event.ref }}</dd></div>
             <div><dt class="text-slate-400">{{ t('coding.sourceRoom') }}</dt><dd>{{ roomId }}</dd></div>
             <div><dt class="text-slate-400">{{ t('coding.sourceMessage') }}</dt><dd>{{ target.id }}</dd></div>
             <div><dt class="text-slate-400">{{ t('coding.sourceTime') }}</dt><dd>{{ new Date(target.timestamp).toLocaleString() }}</dd></div>
@@ -362,8 +378,10 @@ async function save(status: 'draft' | 'submitted') {
     <main class="max-w-4xl mx-auto h-full min-h-0 flex flex-col gap-2">
       <header class="shrink-0"><h1 class="text-lg font-semibold">{{ t('coding.title') }}</h1></header>
                 <section id="coding-context" :style="{ height: conversationHeight + 'dvh' }" tabindex="0" role="region" :aria-label="t('coding.context')" class="coding-conversation shrink-0 min-w-0 rounded-xl border border-slate-800 bg-slate-900 p-3 overflow-auto" v-if="target">
-            <h2 class="font-semibold mb-4">{{ t('coding.context') }}</h2>
-            <article v-for="message in context" :key="message.id" class="w-fit max-w-[90%] p-3 mb-4 rounded-2xl border" :class="[message.id === target.id ? 'border-sky-500 bg-slate-800' : 'border-slate-700 bg-slate-950', !isHumanMessage(message) ? 'mx-auto' : message.senderUid === firstSpeaker ? 'mr-auto rounded-tl-sm' : 'ml-auto rounded-tr-sm']">
+            <h2 class="font-semibold mb-2">{{ t('coding.context') }}</h2><p class="text-xs text-slate-400 mb-4">{{ t('coding.windowHint') }}</p>
+            <article :data-coding-target="message.id === target.id" v-for="message in context" :key="message.id" class="w-fit max-w-[90%] p-3 mb-4 rounded-2xl border" :class="[message.id === target.id ? 'border-sky-500 bg-slate-800' : 'border-slate-700 bg-slate-950', !isHumanMessage(message) ? 'mx-auto' : message.senderUid === firstSpeaker ? 'mr-auto rounded-tl-sm' : 'ml-auto rounded-tr-sm']">
+              <p v-if="message.id === target.id" class="text-xs text-sky-400 mb-2">{{ t('coding.targetMessage') }}</p>
+              <p v-else-if="isHumanMessage(message) && messages.indexOf(message) > index" class="text-xs text-amber-400 mb-2">{{ t('coding.afterTarget') }}</p>
               <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mb-2"><span class="text-sm font-medium text-sky-300">{{ message.senderName }}</span><time class="text-xs text-slate-400" :datetime="new Date(message.timestamp).toISOString()">{{ new Date(message.timestamp).toLocaleTimeString(intlLocale(), { hour: '2-digit', minute: '2-digit' }) }}</time></div><p class="whitespace-pre-wrap break-words leading-relaxed">{{ message.content }}</p>
               <img v-if="message.fileData?.type === 'image' && /^(https:\/\/|data:image\/)/.test(message.fileData.url)" :src="message.fileData.url" :alt="message.fileData.name" class="max-w-full rounded-lg mt-3" loading="lazy">
               <p v-if="phase === 2 && message.id === codingCase?.replyId" class="text-sm text-emerald-400 mt-2">{{ t('coding.evaluatedReply') }}</p>

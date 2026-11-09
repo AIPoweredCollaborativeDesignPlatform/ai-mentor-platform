@@ -35,16 +35,16 @@ service cloud.firestore {
       allow read: if isObserver() && (request.auth.uid == uid || isAdmin());
       allow create, update: if isObserver() && request.auth.uid == uid
         && exists(/databases/$(database)/documents/rooms/$(roomId)/messages/$(messageId))
-        && request.resource.data.keys().hasOnly(['thinking', 'discussion', 'necessity', 'action', 'ambiguous', 'important', 'reason', 'status', 'revision', 'schemaVersion', 'updatedAt', 'source'])
-        && request.resource.data.source.keys().hasOnly(['roomId', 'messageId', 'messageTimestamp', 'contextMessageIds', 'sampledAt', 'samplingMethod'])
+        && request.resource.data.keys().hasOnly(['thinking', 'discussion', 'necessity', 'action', 'ambiguous', 'important', 'reason', 'status', 'revision', 'schemaVersion', 'updatedAt', 'source', 'viewContext'])
+        && request.resource.data.source.keys().hasOnly(['roomId', 'messageId', 'messageTimestamp', 'contextMessageIds', 'sampledAt', 'samplingMethod', 'contextPolicy', 'events'])
         && request.resource.data.source.roomId == roomId
         && request.resource.data.source.messageId == messageId
         && request.resource.data.source.messageTimestamp is number
         && request.resource.data.source.sampledAt is number
         && request.resource.data.source.contextMessageIds is list
         && request.resource.data.source.contextMessageIds.size() > 0
-        && request.resource.data.source.contextMessageIds[request.resource.data.source.contextMessageIds.size() - 1] == messageId
-        && request.resource.data.source.samplingMethod in ['random-human-message-v1', 'researcher-selection']
+        && request.resource.data.source.contextMessageIds.hasAny([messageId])
+        && request.resource.data.source.samplingMethod in ['random-human-message-v1', 'researcher-selection', 'event-round-robin-v2']
         && (resource == null || resource.data.get('source', null) == null || request.resource.data.source == resource.data.source)
         && request.resource.data.schemaVersion == 2
         && request.resource.data.status in ['draft', 'submitted']
@@ -144,6 +144,10 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    match /codingSemantic/{roomId}/batches/{batchId} {
+      allow read: if isObserver();
+      allow write: if false;
+    }
     // Research log of every AI decision: written only by Cloud Functions
     match /aiLogs/{logId} {
       allow read: if isObserver();

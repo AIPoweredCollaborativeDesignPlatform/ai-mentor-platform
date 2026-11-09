@@ -2,6 +2,8 @@ import type en from './en';
 
 // Traditional Chinese; must have every key of en.ts
 const zhTW: Record<keyof typeof en, string> = {
+  "coding.fixedBankHint": "此頁使用固定版次。新對話需由管理者建立並啟用新版後，再重新進入此頁才會納入。",
+  "coding.syncBankProgress": "更新此版答題進度",
   "coding.versionManagement": "題庫版次管理",
   "coding.bankVersionLabel": "題庫第 {version} 版",
   "coding.liveBank": "即時資料庫 · 尚未固定題庫版次",

@@ -73,7 +73,11 @@ function rememberNavigation() {
 }
 async function resumeNavigation() {
   let raw: string | null = null;
-  try { raw = localStorage.getItem(navigationStorageKey(auth.uid!, bankVersion.value?.id)); } catch { /* Start a new session. */ }
+  try {
+    raw = localStorage.getItem(navigationStorageKey(auth.uid!, bankVersion.value?.id));
+    // The initial snapshot uses the same legacy rating scopes and can retain the existing visit order.
+    if (!raw && bankVersion.value && !bankVersion.value.parentVersion) raw = localStorage.getItem(navigationStorageKey(auth.uid!));
+  } catch { /* Start a new session. */ }
   const restored = restoreNavigation(raw, queue.map(questionKey));
   if (!restored) {
     // Upgrade from versions without local navigation, or recover on another browser.
@@ -406,10 +410,10 @@ async function save(status: 'draft' | 'submitted') {
           <section v-if="activeTool === 'cloud'" class="rounded-lg border border-slate-800 p-3 text-sm space-y-2">
             <p v-if="cloudSyncedAt">{{ t('coding.cloudBank', { rooms: cloudRoomCount, questions: cloudQuestionCount }) }}</p>
             <p v-if="cloudSyncedAt" class="text-xs text-slate-400">{{ t('coding.cloudSynced', { time: new Date(cloudSyncedAt).toLocaleTimeString(intlLocale()) }) }}</p>
-            <p class="text-xs text-slate-400">{{ t('coding.cloudSampling') }}</p>
-            <button type="button" :disabled="busy" class="rounded-lg border border-slate-700 px-3 py-2 disabled:opacity-40" @click="reloadQueue">{{ t('coding.syncCloud') }}</button>
-            <button v-if="auth.isAdmin" type="button" :disabled="busy" class="rounded-lg border border-slate-700 px-3 py-2 disabled:opacity-40" @click="prepareSemanticEvents">{{ t('coding.prepareSemantic') }}</button>
-            <p class="text-xs text-slate-400">{{ t('coding.semanticHint') }}</p>
+            <p class="text-xs text-slate-400">{{ t(bankVersion ? 'coding.fixedBankHint' : 'coding.cloudSampling') }}</p>
+            <button type="button" :disabled="busy" class="rounded-lg border border-slate-700 px-3 py-2 disabled:opacity-40" @click="reloadQueue">{{ t(bankVersion ? 'coding.syncBankProgress' : 'coding.syncCloud') }}</button>
+            <button v-if="auth.isAdmin && !bankVersion" type="button" :disabled="busy" class="rounded-lg border border-slate-700 px-3 py-2 disabled:opacity-40" @click="prepareSemanticEvents">{{ t('coding.prepareSemantic') }}</button>
+            <p v-if="!bankVersion" class="text-xs text-slate-400">{{ t('coding.semanticHint') }}</p>
           </section>
         <section v-if="activeTool === 'source' && target" class="text-sm border border-slate-800 rounded-lg p-3">
 

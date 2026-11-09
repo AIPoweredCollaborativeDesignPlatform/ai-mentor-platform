@@ -1,5 +1,7 @@
 // Generated from the string table; English is the source of keys (see i18n/index.ts)
 export default {
+  "coding.fixedBankHint": "This session uses a fixed question bank. New dialogue is included after an administrator creates and activates a new version; reopen this page to use it.",
+  "coding.syncBankProgress": "Refresh progress for this version",
   "coding.versionManagement": "Question bank versions",
   "coding.bankVersionLabel": "Question bank v{version}",
   "coding.liveBank": "Live database · no fixed question bank version",

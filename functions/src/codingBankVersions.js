@@ -17,7 +17,9 @@ function currentSemanticBatch(batch, humans) {
   if (start < 0) return false;
   const targets = humans.slice(start, start + 30).map(m => m.id);
   const context = humans.slice(Math.max(0, start - 5), start + 35).map(m => ({ id: m.id, content: m.content.slice(0, 4000) }));
-  return JSON.stringify(targets) === JSON.stringify(batch.targetIds) && JSON.stringify(context) === JSON.stringify(batch.inputMessages);
+  return JSON.stringify(targets) === JSON.stringify(batch.targetIds) && Array.isArray(batch.inputMessages)
+    && context.length === batch.inputMessages.length
+    && context.every((message, i) => message.id === batch.inputMessages[i]?.id && message.content === batch.inputMessages[i]?.content);
 }
 // Preserve immutable source data, excluding reviewer-specific progress and live availability.
 export function snapshotBank(live, previous, versionId) {

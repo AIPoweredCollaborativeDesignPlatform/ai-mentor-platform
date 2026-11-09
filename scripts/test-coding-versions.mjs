@@ -10,6 +10,9 @@ assert.equal(baseline.bank.rooms[0].disabled, undefined); // Availability is a l
 assert.equal(baseline.bank.rooms[0].revisions.m1, ''); // Legacy answers retained.
 const analyzed = { ...room, semantic: [{ version: 'coding-events-v1', targetIds: room.messages.map(m => m.id), inputMessages: room.messages.map(m => ({ id: m.id, content: m.content })), events: [] }] };
 assert.equal(snapshotBank({ rooms: [analyzed] }, null, 'analysis').counts.semanticCovered, 12);
+const reorderedCache = structuredClone(analyzed);
+reorderedCache.semantic[0].inputMessages = reorderedCache.semantic[0].inputMessages.map(m => ({ content: m.content, id: m.id }));
+assert.equal(snapshotBank({ rooms: [reorderedCache] }, null, 'analysis').counts.semanticCovered, 12); // Firestore may reorder map keys.
 assert.equal(snapshotBank({ rooms: [{ ...analyzed, messages: [...room.messages, human('extra', 20)] }] }, null, 'analysis').counts.semanticCovered, 0); // Appended context invalidates old partial-batch coverage.
 const newRoom = { ...room, id: 'room_5678', messages: [human('n1')] };
 const latest = { rooms: [{ ...room, messages: [...room.messages, human('m12', 12), { ...human('ai', 13), senderUid: 'ai_mentor' }] }, newRoom] };

@@ -121,6 +121,7 @@ onMounted(async () => {
     if (savedHeight >= 15 && savedHeight <= 60) conversationHeight.value = savedHeight;
   } catch { /* Use the default height when storage is unavailable. */ }
   try {
+    await auth.waitForAuthReady();
     await auth.waitForRole();
     if (auth.isObserver) {
       await syncCloudQueue();

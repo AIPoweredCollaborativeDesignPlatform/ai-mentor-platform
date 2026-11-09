@@ -1,4 +1,5 @@
 ## Coding load performance fix (2026-11-09)
+- Cold-page initialization must await waitForAuthReady BEFORE waitForRole: the initial rolePromise is already resolved, so waiting for it alone races Firebase auth restoration and sends an unauthenticated callable request.
 - New staff-only getCodingBank callable returns field-projected room/messages/event data and caller-only progress in one response. No LLM calls, no persistent cache, fresh reads on each sync.
 - Rooms load with bounded concurrency (4); progress is read via Admin SDK getAll with status field masks. AI prompts, raw model results and board object blobs are excluded.
 - Client preserves the four-source round-robin builder, skips known completed cutoffs before per-question reads, and still reloads the actual selected answer/revision before editing.

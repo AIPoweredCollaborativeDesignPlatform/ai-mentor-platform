@@ -1,3 +1,4 @@
+import { loadCodingBank } from './src/codingBank.js';
 import { generateCodingSemanticBatch } from './src/codingSemantic.js';
 import { Readable } from 'node:stream';
 import { initializeApp } from 'firebase-admin/app';
@@ -762,4 +763,10 @@ export const prepareCodingSemantic = onCall({ secrets: [ANTHROPIC_API_KEY], time
   if (!room.exists || room.data().deletedAt) throw new HttpsError('not-found', 'Room unavailable');
   try { return await generateCodingSemanticBatch(roomId, offset, await anthropicKey()); }
   catch (err) { throw toHttpsError(err, 'prepareCodingSemantic'); }
+});
+
+export const getCodingBank = onCall({ timeoutSeconds: 120, memory: '512MiB', maxInstances: 3 }, async request => {
+  requireAuth(request);
+  if (!isObserverToken(request.auth.token)) throw new HttpsError('permission-denied', 'Study staff only');
+  return loadCodingBank(request.auth.uid);
 });

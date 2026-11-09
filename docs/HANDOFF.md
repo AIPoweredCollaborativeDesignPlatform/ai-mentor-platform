@@ -1,3 +1,10 @@
+## Coding load performance fix (2026-11-09)
+- New staff-only getCodingBank callable returns field-projected room/messages/event data and caller-only progress in one response. No LLM calls, no persistent cache, fresh reads on each sync.
+- Rooms load with bounded concurrency (4); progress is read via Admin SDK getAll with status field masks. AI prompts, raw model results and board object blobs are excluded.
+- Client preserves the four-source round-robin builder, skips known completed cutoffs before per-question reads, and still reloads the actual selected answer/revision before editing.
+- Tests: scripts/test-coding-bank.mjs, scripts/test-coding-sampling.mjs; full frontend build and backend import.
+- Deploy: node scripts/deploy.mjs --coding-bank-only. Only the new getCodingBank function, hosting and Firestore rules are published.
+
 ## Annotation sampling update (2026-11-09)
 Deployment status: v7.8.35 deployed successfully on 2026-11-09 (hosting, Firestore rules, prepareCodingSemantic callable). IAM blockers resolved. Build, sampling tests, backend syntax/index import passed. Live UI verified: 5 rooms / 88 eligible human-text cutoffs, human-only context and explicit future-message labels. User explicitly approved transmitting human room text to Anthropic/Claude and consuming platform AI quota after automatic review requested consent. First semantic analysis completed successfully in the live admin UI; status confirmed question bank updated. No real expert answers were created or changed for testing. Source refs deduplicate anchors so semantic extraction does not necessarily increase total question count. GitHub has NOT been pushed for this release.
 

@@ -1,4 +1,4 @@
-import { collection, doc, getDoc, getDocs, getDocsFromServer, orderBy, query, where, runTransaction } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, getDocsFromServer, orderBy, query, runTransaction } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { humanText, atOrBefore, roundRobin, type SamplingEvent } from './codingSampling';
 import { db, functions } from '../firebase/config';
@@ -50,35 +50,24 @@ export async function codingMessages(roomId: string): Promise<MessageItem[]> {
 }
 export interface CodingQuestion { roomId: string; messages: MessageItem[]; index: number; events?: SamplingEvent[] }
 export const codingQuestionKey = (roomId: string, messageId: string) => `${roomId}/${messageId}`;
-export async function loadCodingProgress(questions: CodingQuestion[], uid: string) {
-  const completed: string[] = [];
-  const detailedCompleted: string[] = [];
-  const selected: string[] = [];
-  for (let start = 0; start < questions.length; start += 10) {
-    await Promise.all(questions.slice(start, start + 10).map(async question => {
-      const id = question.messages[question.index].id;
-      const key = codingQuestionKey(question.roomId, id);
-      const [answer, selectedCase] = await Promise.all([
-        loadCoding(question.roomId, id, uid), loadCodingCase(question.roomId, id),
-      ]);
-      if (answer.status === 'submitted') completed.push(key);
-      if (selectedCase) {
-        selected.push(key);
-        if ((await loadDetailed(question.roomId, id, uid, selectedCase.replyId)).status === 'submitted') detailedCompleted.push(key);
-      }
-    }));
-  }
-  return { completed, detailedCompleted, selected };
+interface CodingRoomData {
+  id: string; name: string; messages: MessageItem[];
+  logs: Record<string, any>[]; events: Record<string, any>[]; semantic: Record<string, any>[];
+  completed: string[]; detailedCompleted: string[]; selected: string[];
 }
-export async function buildCodingQueue(rooms: { id: string }[]): Promise<CodingQuestion[]> {
+export async function fetchCodingBank() {
+  const fetch = httpsCallable<void, { rooms: CodingRoomData[] }>(functions, 'getCodingBank', { timeout: 120000 });
+  const { data } = await fetch();
+  const keys = (field: 'completed' | 'detailedCompleted' | 'selected') => data.rooms.flatMap(r => r[field].map(id => codingQuestionKey(r.id, id)));
+  return { rooms: data.rooms.map(r => ({ id: r.id, name: r.name })), queue: buildCodingQueue(data.rooms),
+    progress: { completed: keys('completed'), detailedCompleted: keys('detailedCompleted'), selected: keys('selected') } };
+}
+function buildCodingQueue(rooms: CodingRoomData[]): CodingQuestion[] {
   const candidates: CodingQuestion[] = [];
   for (const room of rooms) {
-    const [messages, logs, events, semantic] = await Promise.all([
-      codingMessages(room.id),
-      getDocsFromServer(query(collection(db, 'aiLogs'), where('roomId', '==', room.id))),
-      getDocsFromServer(collection(db, 'rooms', room.id, 'events')),
-      getDocsFromServer(collection(db, 'codingSemantic', room.id, 'batches')),
-    ]);
+    const { messages } = room;
+    const snapshots = (records: Record<string, any>[]) => ({ docs: records.map(record => ({ id: record.id, data: () => record })) });
+    const logs = snapshots(room.logs), events = snapshots(room.events), semantic = snapshots(room.semantic);
     const byIndex = new Map<number, CodingQuestion>();
     const add = (index: number, kind: SamplingEvent['kind'], ref: string) => {
       if (index < 0 || !humanText(messages[index])) return;

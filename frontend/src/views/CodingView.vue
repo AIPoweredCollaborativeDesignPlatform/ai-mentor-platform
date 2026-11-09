@@ -8,7 +8,7 @@ import DetailedCoding from '../components/admin/DetailedCoding.vue';
 import { intlLocale, t, type MessageKey } from '../i18n';
 import { useAuthStore } from '../stores/auth';
 import type { MessageItem } from '../types';
-import { prepareSemanticQueue, codingMessages, codingOptions, codingRooms, emptyCoding, loadCoding, saveCoding, loadCodingCase, openCodingCase, reviewCoding, buildCodingQueue, loadDetailed, loadCodingProgress, codingQuestionKey, type CodingCase, type CodingQuestion, type CodingSource } from '../services/coding';
+import { prepareSemanticQueue, codingMessages, codingOptions, emptyCoding, loadCoding, saveCoding, loadCodingCase, openCodingCase, reviewCoding, fetchCodingBank, loadDetailed, codingQuestionKey, type CodingCase, type CodingQuestion, type CodingSource } from '../services/coding';
 
 const auth = useAuthStore();
 const toolsDialog = ref<HTMLDialogElement | null>(null);
@@ -131,9 +131,7 @@ onMounted(async () => {
 });
 onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload));
 async function syncCloudQueue() {
-  const cloudRooms = await codingRooms();
-  const cloudQueue = await buildCodingQueue(cloudRooms);
-  const progress = await loadCodingProgress(cloudQueue, auth.uid!);
+  const { rooms: cloudRooms, queue: cloudQueue, progress } = await fetchCodingBank();
   rooms.value = cloudRooms; queue = cloudQueue;
   completedQuestions.value = new Set(progress.completed);
   completedDetailed.value = new Set(progress.detailedCompleted);
@@ -164,6 +162,10 @@ async function nextQuestion() {
     while (queue.length) {
       const question = queue[queue.length - 1];
       const id = question.messages[question.index].id;
+      const progressKey = codingQuestionKey(question.roomId, id);
+      if (completedQuestions.value.has(progressKey) && (!selectedDetailed.value.has(progressKey) || completedDetailed.value.has(progressKey))) {
+        queue.pop(); continue;
+      }
       const [nextAnswer, nextCase] = await Promise.all([
         loadCoding(question.roomId, id, auth.uid!), loadCodingCase(question.roomId, id),
       ]);

@@ -1,3 +1,4 @@
+import { buildCodingExport, exportCsvCell } from '../functions/src/codingExport.js';
 import assert from 'node:assert/strict';
 import { snapshotBank, snapshotParts, createBankVersion, activateBankVersion, loadVersionedBank, readBankVersion } from '../functions/src/codingBankVersions.js';
 
@@ -93,6 +94,19 @@ assert.ok(Object.values(fresh.rooms[0].revisions).every(scope => scope === reset
 assert.equal((await createBankVersion('admin', reset.id, '', db, true)).id, reset.id);
 await activateBankVersion('admin', first.id, db);
 assert.deepEqual((await loadVersionedBank('me', undefined, false, db)).rooms[0].completed, ['m1']);
+records.set(`codingRooms/room_1234/items/m1/revisions/${second.id}/ratings/me`, { status: 'draft', reason: '=unsafe', thinking: 'reflect' });
+records.set(`codingRooms/room_1234/items/m1/revisions/${second.id}/detailedRatings/other`, { status: 'submitted', scores: { clarity: 5 } });
+records.set(`codingRooms/room_1234/items/m2/revisions/${second.id}/ratings/me`, { status: 'submitted' });
+const exported = await buildCodingExport(second.id, db);
+assert.equal(exported.summary.answerCount, 3);
+assert.equal(exported.summary.questionCount, 2);
+const archive = JSON.parse(exported.files.find(f => f.name === 'coding-data.json').content);
+assert.equal(archive.answers.some(a => a.reviewerUid === 'other' && a.stage === 2), true);
+assert.equal(archive.answers.some(a => a.answer.status === 'draft'), true);
+assert.equal(archive.answers.every(a => a.ratingRevision === second.id), true);
+assert.equal(archive.questions[0].humanContext.length, 2);
+assert.equal(archive.version.id, second.id);
+assert.ok(exportCsvCell('=unsafe').startsWith('"\''));
 records.set(`codingBankVersions/${first.id}/parts/000000`, { index: 0, payload: 'corrupt' });
 await assert.rejects(readBankVersion(first.id, db));
 console.log('Version tests passed: latest rooms/messages, context changes, unchanged answer reuse, immutable snapshots, Unicode chunking, idempotency, activation/rollback, failed version protection, observer access, integrity.');

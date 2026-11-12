@@ -2,6 +2,15 @@ import type en from './en';
 
 // Traditional Chinese; must have every key of en.ts
 const zhTW: Record<keyof typeof en, string> = {
+  "coding.exportWholeVersion": "匯出所選版次的全部作答",
+  "coding.exportWholeHint": "一次上傳此版所有房間、所有專家、兩階段的草稿與已提交答案，存至平台已連結的研究用 Google 雲端硬碟。包含作答 CSV，以及含版次、來源與對話情境的 JSON 備份；每次上傳會建立獨立資料夾。沿用的答案以匯出當下資料為準，並記錄讀取起訖時間。",
+  "coding.uploadAllAnswers": "將此版全部作答上傳 Google 雲端硬碟",
+  "coding.uploadingAnswers": "正在收集並上傳全部作答…",
+  "coding.exportNeedsVersion": "請先建立或選擇固定題庫版次。",
+  "coding.cloudExportDone": "已匯出 {count} 筆作答 · {time}",
+  "coding.openExportFolder": "開啟雲端資料夾",
+  "coding.driveSetup": "前往後台管理 Google 雲端硬碟連線",
+  "coding.cloudExportFailed": "上傳尚未完成，請到後台確認 Google 雲端硬碟連線後重試。若上傳中斷，雲端可能留有未完成的資料夾。",
   "coding.resetBank": "清空目前題目並重新出題",
   "coding.resetHint": "研究測試用：依最新對話重建並立即啟用新題庫，答案與第二階段案例選取從零開始。舊版與答案仍可查閱。題目停用設定仍適用；已開啟的答題頁需重新進入才切換。",
   "coding.resetConfirm": "確定立即重新出題並啟用嗎？新版答題進度將從零開始，舊版及答案仍保留。上方的語意分析勾選設定也會套用。",

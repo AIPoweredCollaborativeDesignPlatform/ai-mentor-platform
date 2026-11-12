@@ -1,5 +1,14 @@
 // Generated from the string table; English is the source of keys (see i18n/index.ts)
 export default {
+  "coding.exportWholeVersion": "Export all answers for the selected version",
+  "coding.exportWholeHint": "Uploads every room and reviewer, both stages, drafts and submissions, to the platform's connected study Google Drive. Includes CSV answers and a JSON archive with version, source and context. Each upload creates a separate folder. Shared unchanged answers are read at export time; collection start/end times are recorded.",
+  "coding.uploadAllAnswers": "Upload this version's answers to Google Drive",
+  "coding.uploadingAnswers": "Collecting and uploading all answers…",
+  "coding.exportNeedsVersion": "Create or select a fixed question bank version first.",
+  "coding.cloudExportDone": "{count} answer records exported · {time}",
+  "coding.openExportFolder": "Open Drive folder",
+  "coding.driveSetup": "Manage Google Drive connection in administration",
+  "coding.cloudExportFailed": "Upload did not complete. Check the Google Drive connection in administration and retry. A partial folder may remain if the upload was interrupted.",
   "coding.resetBank": "Clear current questions and regenerate",
   "coding.resetHint": "Research testing: rebuild from latest conversations and immediately activate a fresh bank. All answers and case selections start empty. Previous versions and answers remain available. Question availability settings still apply; open sessions switch when reopened.",
   "coding.resetConfirm": "Regenerate and activate a fresh question bank now? Progress will start at zero for this new version. Earlier versions and answers remain available. The semantic analysis option above still applies.",

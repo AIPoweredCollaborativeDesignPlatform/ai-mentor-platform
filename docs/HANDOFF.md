@@ -1,3 +1,9 @@
+## Whole-version coding export to Google Drive (2026-11-12)
+- Admin-only exportCodingBank callable reuses existing study Drive OAuth (drive.file), with existing OAuth secrets. Reads the selected immutable bank manifest, traverses every target's canonical legacy/revision scope, and collects all reviewers' stage-one/stage-two drafts/submissions. No collection-group query and no AI calls.
+- Uploads answers.csv (UTF-8 BOM, spreadsheet formula escaping) and coding-data.json (version metadata, full answers, source references, human ±5 context and selected AI reply) into a separate coding-bank-vN_timestamp folder under the existing research Drive root. Read start/end times distinguish the collection interval from an atomic database snapshot. Interrupted uploads can leave partial folders.
+- Successful exports store lastExport metadata/folder link on the bank metadata only; immutable source parts/digest are unchanged. UI exposes the latest folder, all-room upload and a Drive connection management link; single-room JSON download remains available.
+- Tests cover canonical scope isolation, multiple reviewers, both stages, drafts, full JSON context, version provenance and CSV escaping, plus existing version/reset integration tests. Frontend type check, backend syntax/import passed. Live upload verification pending deployment.
+
 ## Fresh research-test bank reset (2026-11-12)
 - Released v7.8.42. Live button presence verified. Native confirmation interaction stalled in browser automation; the temporary test tab was closed without confirming a reset. Full production reset was not executed.
 - Admin bank management adds a confirmed one-action reset: fresh latest-source snapshot, isolated answer/case scopes for every target, then activation. Prior banks/ratings are retained; availability controls still apply globally. Open sessions remain pinned until reopened.

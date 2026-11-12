@@ -160,6 +160,14 @@ async function uploadFile(token, parentId, name, mimeType, content) {
   });
 }
 
+export async function uploadCodingExport(oauth, sequence, files) {
+  const token = await accessToken(oauth);
+  const root = await ensureRootFolder(token);
+  const folder = await createFolder(token, `coding-bank-v${sequence}_${Date.now()}`, root);
+  for (const file of files) await uploadFile(token, folder.id, file.name, file.mimeType, file.content);
+  return { folderUrl: folder.webViewLink || `https://drive.google.com/drive/folders/${folder.id}`, fileCount: files.length };
+}
+
 // ---------- Export content ----------
 
 // Firestore Timestamps → epoch ms (the replacer may see them before or after their toJSON())

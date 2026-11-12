@@ -5,9 +5,19 @@ import { useAuthStore } from '../stores/auth';
 import { intlLocale, t, type MessageKey } from '../i18n';
 import { fetchCodingBank, listCodingRatings, setCodingQuestionEnabled, codingQuestionKey, manageCodingBank, prepareSemanticQueue, type CodingQuestion, type CodingRatingRow, type CodingBankVersion } from '../services/coding';
 import { humanWindow } from '../services/codingSampling';
+import { exportCodingBankToDrive, type CodingCloudExport } from '../services/coding';
 
 const auth = useAuthStore();
 const busy = ref(true), saving = ref(''), error = ref('');
+const uploading = ref(false), cloudExport = ref<CodingCloudExport | null>(null);
+async function exportAllToDrive() {
+  if (!bankVersion.value) return;
+  uploading.value = true; error.value = '';
+  const versionId = bankVersion.value.id;
+  try { const result = await exportCodingBankToDrive(versionId); if (bankVersion.value?.id === versionId) cloudExport.value = result; }
+  catch { error.value = t('coding.cloudExportFailed'); }
+  finally { uploading.value = false; }
+}
 const versions = ref<CodingBankVersion[]>([]), bankVersion = ref<CodingBankVersion | null>(null);
 const versionSelection = ref(''), activeVersion = ref(''), versionNote = ref('');
 const building = ref(false), updateSemantic = ref(false);
@@ -90,6 +100,7 @@ async function refresh() {
   try {
     const [bank, catalog] = await Promise.all([fetchCodingBank(versionSelection.value || undefined), manageCodingBank({ action: 'list' })]);
     bankVersion.value = bank.version; activeVersion.value = catalog.activeVersion || ''; versions.value = catalog.versions || [];
+    cloudExport.value = (bank.version as (CodingBankVersion & { lastExport?: CodingCloudExport }) | null)?.lastExport || null;
     questions.value = bank.allQuestions.sort((a, b) => a.messages[a.index].timestamp - b.messages[b.index].timestamp);
     rooms.value = bank.rooms.filter(r => questions.value.some(q => q.roomId === r.id));
     disabled.value = bank.disabled; ratings.value = {};
@@ -138,6 +149,14 @@ onMounted(async () => {
       <p v-if="busy" role="status">{{ t('coding.loading') }}</p>
       <p v-if="!busy && !auth.isAdmin">{{ t('coding.noAccess') }}</p>
       <template v-if="auth.isAdmin">
+        <section class="border border-slate-700 rounded-xl p-4 space-y-3">
+          <h2 class="font-semibold">{{ t('coding.exportWholeVersion') }}</h2>
+          <p class="text-sm text-slate-400">{{ t('coding.exportWholeHint') }}</p>
+          <button :disabled="busy || building || uploading || !bankVersion" class="bg-sky-600 text-white rounded-lg px-4 py-2 disabled:opacity-40" @click="exportAllToDrive">{{ t(uploading ? 'coding.uploadingAnswers' : 'coding.uploadAllAnswers') }}</button>
+          <p v-if="!bankVersion" class="text-sm text-amber-400">{{ t('coding.exportNeedsVersion') }}</p>
+          <p v-if="cloudExport" class="text-sm">{{ t('coding.cloudExportDone', { count: cloudExport.answerCount, time: date(cloudExport.completedAt) }) }} <a :href="cloudExport.folderUrl" target="_blank" rel="noopener noreferrer" class="text-sky-400 underline">{{ t('coding.openExportFolder') }}</a></p>
+          <router-link to="/admin" class="text-sm text-sky-400 underline">{{ t('coding.driveSetup') }}</router-link>
+        </section>
         <section class="border border-slate-700 rounded-xl p-4 space-y-3">
           <h2 class="font-semibold">{{ t('coding.versionManagement') }}</h2>
           <p class="text-sm text-slate-400">{{ t('coding.versionHint') }}</p>

@@ -21,7 +21,8 @@ import { FRIENDLY_ERRORS } from './src/mentor.js';
 import { assignProfileToRoom, ensureRoomAi, handleNewMessage, handlePollVote, handleSuggestionAnswer, loadProfile, postAiMessage, runCheck, startPresence } from './src/engine.js';
 import { endSession, joinRoom, maybeStartSession, reopenSession, runSessionJob, sessionTick } from './src/session.js';
 import { logBoardObjectChange, logMessageChange } from './src/events.js';
-import { authUrl, exportRoom, handleCallback, runDueExports } from './src/drive.js';
+import { authUrl, exportRoom, handleCallback, runDueExports, uploadCodingExport } from './src/drive.js';
+import { buildCodingExport } from './src/codingExport.js';
 import { createRoom, listPins, markRoomDeleted, revertAutoRoomName, updateMyProfile, updateRoomDetails } from './src/rooms.js';
 import { consentTextFor, roomLanguage, str } from './src/i18n.js';
 import { keyStatus, resolveKeys, setKeyOverride, testProviders } from './src/apiKeys.js';
@@ -487,6 +488,17 @@ export const exportRoomNow = onCall(
     return exportRoom(String(roomId), oauthSecrets(), { manual: true });
   }
 );
+
+export const exportCodingBank = onCall({ timeoutSeconds: 540, memory: '1GiB', maxInstances: 2, secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async request => {
+  requireAdmin(request);
+  const versionId = request.data?.versionId;
+  if (typeof versionId !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(versionId)) throw new HttpsError('invalid-argument', codingBankErrors.request);
+  const data = await buildCodingExport(versionId);
+  const uploaded = await uploadCodingExport(oauthSecrets(), data.summary.sequence, data.files);
+  const result = { ...data.summary, ...uploaded, exportedBy: request.auth.uid };
+  await getFirestore().doc(`codingBankVersions/${versionId}`).set({ lastExport: result }, { merge: true });
+  return result;
+});
 
 export const onSessionJob = onDocumentCreated(
   { document: 'sessionJobs/{jobId}', secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 300, maxInstances: 10 },

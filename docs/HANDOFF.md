@@ -1,4 +1,5 @@
 ## Fresh research-test bank reset (2026-11-12)
+- Released v7.8.42. Live button presence verified. Native confirmation interaction stalled in browser automation; the temporary test tab was closed without confirming a reset. Full production reset was not executed.
 - Admin bank management adds a confirmed one-action reset: fresh latest-source snapshot, isolated answer/case scopes for every target, then activation. Prior banks/ratings are retained; availability controls still apply globally. Open sessions remain pinned until reopened.
 - manageCodingBank reset action uses an idempotent request ID distinct from incremental builds. Metadata resetAnswers distinguishes fresh banks; initial navigation migration is disabled for a fresh reset. Optional semantic refresh uses the existing explicit checkbox.
 - Tests: version integration covers isolated fresh scopes/zero progress and returning to original submitted answers. Full frontend build, backend syntax/import passed. Production ratings and active bank are not reset merely to test the button.

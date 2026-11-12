@@ -1,5 +1,10 @@
 // Generated from the string table; English is the source of keys (see i18n/index.ts)
 export default {
+  "coding.mediaWindowHint": "Target plus up to five human text/media messages each side, including intervening media cards. AI prose is hidden in stage one; media created by AI is shown as evidence.",
+  "coding.mediaEvidence": "Media evidence",
+  "coding.openMedia": "Open full-size media",
+  "coding.mediaMissing": "No saved image preview is available for this media. Do not infer its contents from the message title alone.",
+  "coding.boardPreviewPolicy": "Saved whiteboard preview from bank creation; this is not a reconstruction of the board at the discussion timestamp.",
   "coding.appendRoomsTitle": "Add selected new rooms to this version",
   "coding.appendRoomsHint": "Keep this version's existing questions, contexts and answers, and create a complete new version with the selected rooms added. The semantic-analysis checkbox above applies only to the selected rooms. Rooms already containing questions cannot be added twice. Create a baseline version first; selected rooms must contain eligible human text. Activate the new version after reviewing it.",
   "coding.roomAlreadyIncluded": "Already included",

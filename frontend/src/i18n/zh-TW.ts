@@ -2,6 +2,11 @@ import type en from './en';
 
 // Traditional Chinese; must have every key of en.ts
 const zhTW: Record<keyof typeof en, string> = {
+  "coding.mediaWindowHint": "顯示標註點及前後各最多 5 則人類文字／媒材訊息，並帶入其間的媒材卡片。第一階段隱藏 AI 文字回覆，AI 產生的媒材則作為判斷依據顯示。",
+  "coding.mediaEvidence": "討論媒材",
+  "coding.openMedia": "開啟原尺寸媒材",
+  "coding.mediaMissing": "此媒材沒有可用的已存圖片預覽，請勿僅依訊息標題推測內容。",
+  "coding.boardPreviewPolicy": "此為建庫時保存的白板預覽，並非討論時間點的逐筆還原。",
   "coding.appendRoomsTitle": "勾選新房間加入此版題庫",
   "coding.appendRoomsHint": "保留目前查看版次的原題目、對話情境與答案，再加入勾選房間，建立完整新版。上方語意分析勾選只會套用到這些房間。已有題目的房間不能重複加入；請先有基準版次，並選擇含人類文字對話的房間。建立後可檢查新版，再設為目前出題版本。",
   "coding.roomAlreadyIncluded": "已加入題庫",

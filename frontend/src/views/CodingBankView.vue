@@ -4,6 +4,8 @@ import PageNav from '../components/PageNav.vue';
 import { useAuthStore } from '../stores/auth';
 import { intlLocale, t, type MessageKey } from '../i18n';
 import { fetchCodingBank, listCodingRatings, setCodingQuestionEnabled, codingQuestionKey, manageCodingBank, prepareSemanticQueue, type CodingQuestion, type CodingRatingRow, type CodingBankVersion } from '../services/coding';
+import CodingMedia from '../components/admin/CodingMedia.vue';
+import { mediaWindow, hasCodingMedia, humanSender } from '../../../functions/src/codingMedia.js';
 import { humanWindow } from '../services/codingSampling';
 import { exportCodingBankToDrive, type CodingCloudExport } from '../services/coding';
 
@@ -98,7 +100,7 @@ const reviewers = computed(() => {
 });
 const count = (q: CodingQuestion, phase: number, status: string) => ratings.value[keyOf(q)]?.filter(r => r.phase === phase && r.answer.status === status).length;
 const selectedRows = computed(() => selected.value ? ratings.value[keyOf(selected.value)] || [] : []);
-const context = computed(() => selected.value ? humanWindow(selected.value.messages, selected.value.messages[selected.value.index].id) : []);
+const context = computed(() => selected.value ? (selected.value.mediaPolicy ? mediaWindow : humanWindow)(selected.value.messages, selected.value.messages[selected.value.index].id) : []);
 let generation = 0;
 async function loadRoom() {
   const ticket = ++generation;
@@ -239,7 +241,7 @@ onMounted(async () => {
         <div v-if="selected" class="max-w-4xl mx-auto space-y-4">
           <header class="sticky top-0 bg-slate-950 py-2 flex justify-between items-center gap-3"><h2 id="coding-detail-title" class="font-semibold">{{ t('coding.answerDetails') }}</h2><button class="border border-slate-700 rounded-lg px-4 py-2" autofocus @click="selected = null">{{ t('coding.closeTools') }}</button></header>
           <p class="break-all text-sm">{{ keyOf(selected) }}</p>
-          <section class="space-y-2"><p v-for="m in context" :key="m.id" class="rounded-xl border p-3 whitespace-pre-wrap break-words" :class="m.id === selected.messages[selected.index].id ? 'border-sky-500' : 'border-slate-800'"><span class="block text-xs text-slate-400 mb-1">{{ m.senderName }} · {{ date(m.timestamp) }} {{ m.id === selected.messages[selected.index].id ? t('coding.targetMessage') : '' }}</span>{{ m.content }}</p></section>
+          <section class="space-y-2"><p v-for="m in context" :key="m.id" class="rounded-xl border p-3 whitespace-pre-wrap break-words" :class="m.id === selected.messages[selected.index].id ? 'border-sky-500' : 'border-slate-800'"><span class="block text-xs text-slate-400 mb-1">{{ m.senderName }} · {{ date(m.timestamp) }} {{ m.id === selected.messages[selected.index].id ? t('coding.targetMessage') : '' }}</span><span v-if="humanSender(m)">{{ m.content }}</span><CodingMedia v-if="hasCodingMedia(m)" :message="m" /></p></section>
           <p v-if="!selectedRows.length">{{ t('coding.noRatings') }}</p>
           <article v-for="row in selectedRows" :key="row.uid + row.phase" class="border border-slate-700 rounded-xl p-4 space-y-3">
             <h3 class="font-medium break-all">{{ t('coding.reviewerId') }}: {{ row.uid }}</h3><p>{{ label('phase' + row.phase) }} · {{ label('status_' + row.answer.status) }} · {{ date(row.answer.updatedAt) }}</p>

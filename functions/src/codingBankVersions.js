@@ -1,3 +1,4 @@
+import { codingTarget, mediaWindow, mediaEvidence, hasCodingMedia } from './codingMedia.js';
 import { createHash } from 'node:crypto';
 import { getFirestore } from 'firebase-admin/firestore';
 import { HttpsError } from 'firebase-functions/v2/https';
@@ -28,18 +29,18 @@ export function snapshotBank(live, previous, versionId, resetAnswers = false) {
   const present = new Set();
   const rooms = live.rooms.map(room => {
     const { completed, detailedCompleted, visits, disabled, selected, ...source } = room;
-    const humans = room.messages.filter(codingHuman);
+    const humans = room.messages.filter(room.mediaPolicy ? codingTarget : codingHuman);
     const fingerprints = {}, revisions = {};
     const old = before.get(room.id);
     const covered = new Set();
-    source.semantic = room.semantic.filter(batch => currentSemanticBatch(batch, humans));
+    source.semantic = room.semantic.filter(batch => currentSemanticBatch(batch, room.messages.filter(codingHuman)));
     for (const batch of source.semantic) {
       for (const id of batch.targetIds || []) covered.add(id);
     }
     humans.forEach((m, i) => {
       present.add(`${room.id}/${m.id}`);
       // Changes to any human text, identity, order, or timestamp in the ±5 window need a new judgment.
-      fingerprints[m.id] = hash({ policy: 'human-before-after-5-v1', target: m.id,
+      fingerprints[m.id] = room.mediaPolicy && mediaWindow(room.messages, m.id).some(hasCodingMedia) ? hash({ policy: 'multimodal-v1', evidence: mediaWindow(room.messages, m.id).map(mediaEvidence), target: m.id }) : hash({ policy: 'human-before-after-5-v1', target: m.id,
         messages: humans.slice(Math.max(0, i - 5), i + 6).map(x => [x.id, x.senderUid, x.senderName || '', x.timestamp, x.content]) });
       if (resetAnswers) { revisions[m.id] = versionId; counts.added++; }
       else if (!previous) { revisions[m.id] = ''; counts.reused++; } // First snapshot establishes the legacy baseline.
@@ -103,22 +104,22 @@ export async function createBankVersion(uid, requestId, note = '', db = getFires
     const selectedRooms = reservation.meta.addedRoomIds || null;
     if (selectedRooms?.some(id => previous.rooms.some(room => room.id === id && Object.keys(room.fingerprints || {}).length))) fail('failed-precondition', 'request');
     const live = await loadCodingBank(null, db, selectedRooms);
-    if (selectedRooms && live.rooms.some(room => !room.messages.some(codingHuman))) fail('failed-precondition', 'request');
+    if (selectedRooms && live.rooms.some(room => !room.messages.some(codingTarget))) fail('failed-precondition', 'request');
     const { bank, counts } = snapshotBank(live, selectedRooms ? { rooms: [] } : previous, ref.id, reservation.meta.resetAnswers);
     if (selectedRooms) {
       bank.rooms.unshift(...previous.rooms.filter(room => !selectedRooms.includes(room.id)));
       for (const room of previous.rooms) {
-        const humans = room.messages.filter(codingHuman);
+        const humans = room.messages.filter(room.mediaPolicy ? codingTarget : codingHuman);
         counts.questions += humans.length; counts.reused += humans.length;
-        const covered = new Set(room.semantic.filter(b => currentSemanticBatch(b, humans)).flatMap(b => b.targetIds));
+        const covered = new Set(room.semantic.filter(b => currentSemanticBatch(b, room.messages.filter(codingHuman))).flatMap(b => b.targetIds));
         counts.semanticCovered += humans.filter(m => covered.has(m.id)).length;
       }
     }
     const roomCount = bank.rooms.filter(r => Object.keys(r.fingerprints).length).length;
     const parts = snapshotParts(bank);
-    for (let start = 0; start < parts.length; start += 100) {
+    for (let start = 0; start < parts.length; start += 20) {
       const batch = db.batch();
-      parts.slice(start, start + 100).forEach((payload, i) => batch.set(ref.collection('parts').doc(String(start + i).padStart(6, '0')), { index: start + i, payload }));
+      parts.slice(start, start + 20).forEach((payload, i) => batch.set(ref.collection('parts').doc(String(start + i).padStart(6, '0')), { index: start + i, payload }));
       await batch.commit();
     }
     // A retry of an interrupted build may produce fewer parts than the earlier attempt.
@@ -129,7 +130,7 @@ export async function createBankVersion(uid, requestId, note = '', db = getFires
       await cleanup.commit();
     }
     const ready = { ...reservation.meta, status: 'ready', completedAt: Date.now(), counts, roomCount, parts: parts.length,
-      digest: hash(parts.join('')), samplingPolicy: 'event-round-robin-v2', contextPolicy: 'human-before-after-5-v1' };
+      digest: hash(parts.join('')), samplingPolicy: 'event-round-robin-v2', contextPolicy: bank.rooms.some(r => r.mediaPolicy) ? 'mixed-multimodal-v1' : 'human-before-after-5-v1' };
     await db.runTransaction(async tx => {
       const state = (await tx.get(stateRef)).data();
       if (state?.buildId !== ref.id) fail('aborted', 'building');
@@ -168,7 +169,7 @@ export async function loadVersionedBank(uid, requested, admin, db = getFirestore
   if (!id) return { ...await loadCodingBank(uid, db), version: null, activeVersion };
   const { bank, meta } = await readBankVersion(id, db);
   for (let i = 0; i < bank.rooms.length; i += 4) await Promise.all(bank.rooms.slice(i, i + 4).map(async room => {
-    const targets = room.messages.filter(codingHuman);
+    const targets = room.messages.filter(room.mediaPolicy ? codingTarget : codingHuman);
     const refs = targets.map(m => itemRef(db, room.id, m.id, room.revisions[m.id]));
     const [cases, ratings, controls] = await Promise.all([
       readMany(db, refs), readMany(db, refs.map(ref => ref.collection('ratings').doc(uid))),

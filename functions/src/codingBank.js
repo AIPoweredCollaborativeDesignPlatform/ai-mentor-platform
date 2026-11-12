@@ -1,5 +1,6 @@
 import { getFirestore } from 'firebase-admin/firestore';
 import { codingBankErrors } from './i18n.js';
+import { codingTarget, hasCodingMedia } from './codingMedia.js';
 
 const rows = snapshot => snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
 export const codingHuman = m => m.senderUid && !['ai_mentor', 'ai_mentor_3d', 'system'].includes(m.senderUid)
@@ -28,8 +29,9 @@ export async function loadCodingBank(uid, db = getFirestore(), roomIds = null) {
     const batch = await Promise.all(rooms.slice(start, start + 4).map(async room => {
       const base = db.collection('rooms').doc(room.id);
       const messages = rows(await base.collection('messages').orderBy('timestamp')
-        .select('senderUid', 'senderName', 'timestamp', 'type', 'content', 'assetType', 'status').get());
-      const targets = messages.filter(codingHuman);
+        .select('senderUid', 'senderName', 'timestamp', 'type', 'content', 'assetType', 'status', 'fileData', 'assetPayload', 'collage', 'whiteboardThumbnail', 'metadata.isPrivate', 'metadata.wasPublished').get());
+      for (const m of messages) if (!hasCodingMedia(m)) { delete m.assetPayload; delete m.collage; }
+      const targets = messages.filter(codingTarget);
       if (!targets.length) return { id: room.id, name: room.roomName || room.name || room.id, messages: [], logs: [], events: [], semantic: [], completed: [], detailedCompleted: [], selected: [] };
       const items = db.collection('codingRooms').doc(room.id).collection('items');
       const visits = [];
@@ -48,7 +50,7 @@ export async function loadCodingBank(uid, db = getFirestore(), roomIds = null) {
       const detailedCompleted = uid ? await submitted(db, selected.map(id => items.doc(id).collection('detailedRatings').doc(uid))) : [];
       return { id: room.id, name: room.roomName || room.name || room.id, messages,
         logs: rows(logs), events: rows(events), semantic: rows(semantic), completed, detailedCompleted, selected,
-        disabled: controls.docs.filter(d => d.data().enabled === false).map(d => d.id), visits };
+        disabled: controls.docs.filter(d => d.data().enabled === false).map(d => d.id), visits, mediaPolicy: 'multimodal-v1' };
     }));
     result.push(...batch);
   }

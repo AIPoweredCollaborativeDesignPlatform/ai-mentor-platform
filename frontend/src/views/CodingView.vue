@@ -4,6 +4,8 @@ import { onBeforeRouteLeave } from 'vue-router';
 import { Database, FolderSearch, Info, X, ListChecks } from 'lucide-vue-next';
 import { navigationStorageKey, restoreNavigation } from '../services/codingNavigation';
 import { isCodingQuestionEnabled } from '../services/coding';
+import { mediaWindow, codingTarget, hasCodingMedia, humanSender } from '../../../functions/src/codingMedia.js';
+import CodingMedia from '../components/admin/CodingMedia.vue';
 import { humanText, humanWindow, type SamplingEvent } from '../services/codingSampling';
 import PageNav from '../components/PageNav.vue';
 import DetailedCoding from '../components/admin/DetailedCoding.vue';
@@ -16,6 +18,8 @@ const auth = useAuthStore();
 const bankVersion = ref<CodingBankVersion | null>(null);
 let bankQuestions: CodingQuestion[] = [];
 const revisionFor = (room: string, id: string) => bankQuestions.find(q => q.roomId === room && q.messages[q.index].id === id)?.revision || '';
+const multimodal = computed(() => !!bankQuestions.find(q => q.roomId === roomId.value && q.messages[q.index].id === target.value?.id)?.mediaPolicy);
+const questionWindow = () => multimodal.value ? mediaWindow(messages.value, target.value!.id) : humanWindow(messages.value, target.value!.id);
 const currentRevision = computed(() => target.value ? revisionFor(roomId.value, target.value.id) : '');
 const toolsDialog = ref<HTMLDialogElement | null>(null);
 const activeTool = ref<'cloud' | 'source'>('cloud');
@@ -112,19 +116,19 @@ const codingCase = ref<CodingCase | null>(null);
 const review = ref<Awaited<ReturnType<typeof reviewCoding>> | null>(null);
 const replyId = ref('');
 const reviewIndex = ref<Record<string, Awaited<ReturnType<typeof reviewCoding>>>>({});
-const cutoffs = computed(() => messages.value.map((message, i) => ({ message, i })).filter(({ message }) => humanText(message)));
+const cutoffs = computed(() => messages.value.map((message, i) => ({ message, i })).filter(({ message }) => multimodal.value ? codingTarget(message) : humanText(message)));
 const aiReplies = computed(() => messages.value.slice(index.value + 1).filter(m => m.senderUid === 'ai_mentor' || m.senderUid === 'ai_mentor_3d'));
 const reply = computed(() => messages.value.find(m => m.id === codingCase.value?.replyId));
 const dirty = computed(() => JSON.stringify(answer.value) !== baseline.value);
 const target = computed(() => messages.value[index.value]);
 const context = computed(() => {
   if (!target.value) return [];
-  const window = humanWindow(messages.value, target.value.id);
+  const window = questionWindow();
   // Stage two evaluates only the selected AI response, not all intervening AI messages.
-  return phase.value === 2 && reply.value ? [...window, reply.value].sort((a, b) => a.timestamp - b.timestamp) : window;
+  return phase.value === 2 && reply.value ? [...window.filter(m => m.id !== reply.value!.id), reply.value].sort((a, b) => a.timestamp - b.timestamp) : window;
 });
 const firstSpeaker = computed(() => context.value.find(message => humanText(message))?.senderUid);
-const isHumanMessage = (message: MessageItem) => humanText(message);
+const isHumanMessage = (message: MessageItem) => humanSender(message);
 const needsReason = computed(() => answer.value.ambiguous || answer.value.important);
 const complete = computed(() => !!answer.value.thinking && !!answer.value.necessity && answer.value.discussion.length > 0 && answer.value.action.length > 0 && (!needsReason.value || !!answer.value.reason.trim()));
 const progressTotal = computed(() => phase.value === 1 ? cloudQuestionCount.value : selectedDetailed.value.size);
@@ -190,8 +194,8 @@ async function prepareSemanticEvents() {
 }
 function sourceForQuestion(method: CodingSource['samplingMethod']): CodingSource {
   return { bankVersion: bankVersion.value?.id || '', roomId: roomId.value, messageId: target.value!.id, messageTimestamp: target.value!.timestamp,
-    contextMessageIds: humanWindow(messages.value, target.value!.id).map(message => message.id),
-    contextPolicy: 'human-before-after-5-v1', events: currentEvents.value,
+    contextMessageIds: questionWindow().map(message => message.id),
+    contextPolicy: multimodal.value ? 'multimodal-v1' : 'human-before-after-5-v1', events: currentEvents.value,
     sampledAt: Date.now(), samplingMethod: method };
 }
 async function nextQuestion() {
@@ -280,7 +284,7 @@ async function navigateQuestion(direction: -1 | 1) {
       if (!await detailedForm.value.persist()) return;
     } else if (target.value && dirty.value) {
       const status = answer.value.status === 'submitted' && complete.value ? 'submitted' : 'draft';
-      answer.value = await saveCoding(roomId.value, target.value.id, auth.uid!, { ...answer.value, status, viewContext: { policy: 'human-before-after-5-v1', bankVersion: bankVersion.value?.id || '', messageIds: context.value.filter(humanText).map(m => m.id) } }, currentRevision.value);
+      answer.value = await saveCoding(roomId.value, target.value.id, auth.uid!, { ...answer.value, status, viewContext: { policy: multimodal.value ? 'multimodal-v1' : 'human-before-after-5-v1', bankVersion: bankVersion.value?.id || '', messageIds: context.value.map(m => m.id) } }, currentRevision.value);
       baseline.value = JSON.stringify(answer.value);
       markProgress(1, status);
     }
@@ -383,7 +387,7 @@ async function save(status: 'draft' | 'submitted') {
   if (!target.value || !auth.uid || (status === 'submitted' && !complete.value)) return;
   busy.value = true; error.value = ''; notice.value = '';
   try {
-    answer.value = await saveCoding(roomId.value, target.value.id, auth.uid, { ...answer.value, status, viewContext: { policy: 'human-before-after-5-v1', bankVersion: bankVersion.value?.id || '', messageIds: context.value.filter(humanText).map(m => m.id) } }, currentRevision.value);
+    answer.value = await saveCoding(roomId.value, target.value.id, auth.uid, { ...answer.value, status, viewContext: { policy: multimodal.value ? 'multimodal-v1' : 'human-before-after-5-v1', bankVersion: bankVersion.value?.id || '', messageIds: context.value.map(m => m.id) } }, currentRevision.value);
     markProgress(1, status);
     baseline.value = JSON.stringify(answer.value); notice.value = t(status === 'draft' ? 'coding.draftSaved' : 'coding.submitted');
     if (!management.value && status === 'submitted') {
@@ -429,14 +433,13 @@ async function save(status: 'draft' | 'submitted') {
       <header class="shrink-0"><h1 class="text-lg font-semibold">{{ t('coding.title') }}</h1><p class="text-xs text-slate-400">{{ bankVersion ? t('coding.bankVersionLabel', { version: bankVersion.sequence }) : t('coding.liveBank') }}</p></header>
       <div class="coding-workspace flex-1 min-h-0 min-w-0 flex flex-col gap-2" :class="{ 'has-conversation': target }">
                 <section id="coding-context" :style="{ height: conversationHeight + 'dvh' }" tabindex="0" role="region" :aria-label="t('coding.context')" class="coding-conversation shrink-0 min-w-0 rounded-xl border border-slate-800 bg-slate-900 p-3 overflow-auto" v-if="target">
-            <h2 class="font-semibold mb-2">{{ t('coding.context') }}</h2><p class="text-xs text-slate-400 mb-4">{{ t('coding.windowHint') }}</p>
+            <h2 class="font-semibold mb-2">{{ t('coding.context') }}</h2><p class="text-xs text-slate-400 mb-4">{{ t(multimodal ? 'coding.mediaWindowHint' : 'coding.windowHint') }}</p>
             <article :data-coding-target="message.id === target.id" v-for="message in context" :key="message.id" class="w-fit max-w-[90%] p-3 mb-4 rounded-2xl border" :class="[message.id === target.id ? 'border-sky-500 bg-slate-800' : 'border-slate-700 bg-slate-950', !isHumanMessage(message) ? 'mx-auto' : message.senderUid === firstSpeaker ? 'mr-auto rounded-tl-sm' : 'ml-auto rounded-tr-sm']">
               <p v-if="message.id === target.id" class="text-xs text-sky-400 mb-2">{{ t('coding.targetMessage') }}</p>
-              <p v-else-if="isHumanMessage(message) && messages.indexOf(message) > index" class="text-xs text-amber-400 mb-2">{{ t('coding.afterTarget') }}</p>
-              <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mb-2"><span class="text-sm font-medium text-sky-300">{{ message.senderName }}</span><time class="text-xs text-slate-400" :datetime="new Date(message.timestamp).toISOString()">{{ new Date(message.timestamp).toLocaleTimeString(intlLocale(), { hour: '2-digit', minute: '2-digit' }) }}</time></div><p class="whitespace-pre-wrap break-words leading-relaxed">{{ message.content }}</p>
-              <img v-if="message.fileData?.type === 'image' && /^(https:\/\/|data:image\/)/.test(message.fileData.url)" :src="message.fileData.url" :alt="message.fileData.name" class="max-w-full rounded-lg mt-3" loading="lazy">
+              <p v-else-if="messages.indexOf(message) > index" class="text-xs text-amber-400 mb-2">{{ t('coding.afterTarget') }}</p>
+              <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mb-2"><span class="text-sm font-medium text-sky-300">{{ message.senderName }}</span><time class="text-xs text-slate-400" :datetime="new Date(message.timestamp).toISOString()">{{ new Date(message.timestamp).toLocaleTimeString(intlLocale(), { hour: '2-digit', minute: '2-digit' }) }}</time></div><p v-if="humanSender(message) || (phase === 2 && message.id === codingCase?.replyId)" class="whitespace-pre-wrap break-words leading-relaxed">{{ message.content }}</p>
+              <CodingMedia v-if="hasCodingMedia(message)" :message="message" />
               <p v-if="phase === 2 && message.id === codingCase?.replyId" class="text-sm text-emerald-400 mt-2">{{ t('coding.evaluatedReply') }}</p>
-              <p v-if="message.type !== 'text'" class="text-xs text-amber-300 mt-2">{{ t('coding.mediaContext') }}</p>
             </article>
           </section>
       <div v-if="target" role="separator" tabindex="0" aria-orientation="horizontal" aria-controls="coding-context" :aria-label="t('coding.conversationHeight')" :title="t('coding.dragHeight')" :aria-valuenow="Math.round(conversationHeight)" :aria-valuemin="15" :aria-valuemax="60" class="coding-resize-handle shrink-0 self-center flex items-center justify-center gap-1.5 text-slate-400 hover:text-sky-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500" @pointerdown="startHeightDrag" @pointermove="moveHeightDrag" @pointerup="stopHeightDrag" @pointercancel="stopHeightDrag" @lostpointercapture="stopHeightDrag" @keydown="resizeWithKeyboard">

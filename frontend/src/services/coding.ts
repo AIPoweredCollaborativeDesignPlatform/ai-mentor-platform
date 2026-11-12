@@ -1,3 +1,4 @@
+import { codingTarget, hasCodingMedia } from '../../../functions/src/codingMedia.js';
 import { collection, doc, getDoc, getDocFromServer, getDocs, getDocsFromServer, orderBy, query, runTransaction, setDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { humanText, atOrBefore, roundRobin, type SamplingEvent } from './codingSampling';
@@ -20,7 +21,7 @@ export interface CodingSource {
   sampledAt: number;
   samplingMethod: 'random-human-message-v1' | 'researcher-selection' | 'event-round-robin-v2';
   events?: SamplingEvent[];
-  contextPolicy?: 'human-before-after-5-v1';
+  contextPolicy?: 'human-before-after-5-v1' | 'multimodal-v1';
 }
 export interface CodingAnswer {
   thinking: string;
@@ -49,7 +50,7 @@ export async function codingMessages(roomId: string): Promise<MessageItem[]> {
   const snapshot = await getDocsFromServer(query(collection(db, 'rooms', roomId, 'messages'), orderBy('timestamp')));
   return snapshot.docs.map(d => ({ ...d.data(), id: d.id } as MessageItem));
 }
-export interface CodingQuestion { roomId: string; messages: MessageItem[]; index: number; events?: SamplingEvent[]; revision?: string }
+export interface CodingQuestion { roomId: string; messages: MessageItem[]; index: number; events?: SamplingEvent[]; revision?: string; mediaPolicy?: string }
 export interface CodingBankVersion { resetAnswers?: boolean; id: string; sequence: number; status: string; startedAt: number; completedAt?: number; note: string; parentVersion: string; roomCount?: number; counts?: { questions: number; added: number; changed: number; reused: number; removed: number; semanticCovered: number } }
 export async function manageCodingBank(data: { action: 'list' | 'create' | 'activate' | 'reset' | 'rooms' | 'append'; requestId?: string; note?: string; versionId?: string; baseVersion?: string; roomIds?: string[] }) {
   return (await httpsCallable<typeof data, { versions?: CodingBankVersion[]; activeVersion?: string; version?: CodingBankVersion; rooms?: { id: string; name: string }[] }>(functions, 'manageCodingBank', { timeout: 540000 })(data)).data;
@@ -66,6 +67,7 @@ interface CodingRoomData {
   disabled?: string[];
   visits?: { id: string; at: number }[];
   revisions?: Record<string, string>;
+  mediaPolicy?: string;
 }
 export async function fetchCodingBank(versionId?: string) {
   const fetch = httpsCallable<{ versionId?: string }, { rooms: CodingRoomData[]; version?: CodingBankVersion; activeVersion?: string }>(functions, 'getCodingBank', { timeout: 120000 });
@@ -99,23 +101,25 @@ function buildCodingQueue(rooms: CodingRoomData[]): CodingQuestion[] {
   const candidates: CodingQuestion[] = [];
   for (const room of rooms) {
     const { messages } = room;
+    const eligible = (m: MessageItem) => room.mediaPolicy ? codingTarget(m) : humanText(m);
+    const anchorBefore = (at: number) => { let found = -1; messages.forEach((m, i) => { if (eligible(m) && m.timestamp <= at) found = i; }); return found; };
     const snapshots = (records: Record<string, any>[]) => ({ docs: records.map(record => ({ id: record.id, data: () => record })) });
     const logs = snapshots(room.logs), events = snapshots(room.events), semantic = snapshots(room.semantic);
     const byIndex = new Map<number, CodingQuestion>();
     const add = (index: number, kind: SamplingEvent['kind'], ref: string) => {
-      if (index < 0 || !humanText(messages[index])) return;
+      if (index < 0 || !eligible(messages[index])) return;
       let q = byIndex.get(index);
-      if (!q) { q = { roomId: room.id, messages, index, events: [], revision: room.revisions?.[messages[index].id] || '' }; byIndex.set(index, q); }
+      if (!q) { q = { roomId: room.id, messages, index, events: [], revision: room.revisions?.[messages[index].id] || '', mediaPolicy: room.mediaPolicy }; byIndex.set(index, q); }
       if (!q.events!.some(e => e.kind === kind && e.ref === ref)) q.events!.push({ kind, ref });
     };
-    messages.forEach((m, i) => { if (humanText(m)) add(i, 'random', `rooms/${room.id}/messages/${m.id}`); });
+    messages.forEach((m, i) => { if (eligible(m)) add(i, 'random', `rooms/${room.id}/messages/${m.id}`); });
     logs.docs.forEach(d => {
       const log = d.data();
       if (log.kind !== 'mentor' || log.error || log.visible === false || log.output?.shouldIntervene !== true) return;
       // Anchor to the last input message, never the log completion / AI response time.
       const triggerIndex = messages.findIndex(m => m.id === log.triggerMessageId);
       if (triggerIndex < 0) return;
-      const anchor = atOrBefore(messages.slice(0, triggerIndex + 1), messages[triggerIndex].timestamp);
+      let anchor = -1; messages.slice(0, triggerIndex + 1).forEach((m, i) => { if (eligible(m)) anchor = i; });
       add(anchor, 'intervention', `aiLogs/${d.id}`);
     });
     events.docs.forEach(d => {
@@ -125,12 +129,12 @@ function buildCodingQueue(rooms: CodingRoomData[]): CodingQuestion[] {
       if (/board|whiteboard|imageboard|moodboard|model_?3d|model_3d|mesh_3d/i.test(kind)
           || ['moodboard', 'mesh_3d', 'parametric_3d'].includes(asset)
           || m?.type === 'whiteboard_state') {
-        if (Number.isFinite(e.at)) add(atOrBefore(messages, e.at), 'tool', `rooms/${room.id}/events/${d.id}`);
+        if (Number.isFinite(e.at)) add(room.mediaPolicy ? anchorBefore(e.at) : atOrBefore(messages, e.at), 'tool', `rooms/${room.id}/events/${d.id}`);
       }
     });
     // Legacy rooms may have tool cards but no event log.
-    messages.forEach(m => { if (m.type === 'whiteboard_state' || ['moodboard', 'mesh_3d', 'parametric_3d'].includes(m.assetType || ''))
-      add(atOrBefore(messages, m.timestamp), 'tool', `rooms/${room.id}/messages/${m.id}`); });
+    messages.forEach(m => { if ((room.mediaPolicy && hasCodingMedia(m)) || m.type === 'whiteboard_state' || ['moodboard', 'mesh_3d', 'parametric_3d'].includes(m.assetType || ''))
+      add(room.mediaPolicy ? anchorBefore(m.timestamp) : atOrBefore(messages, m.timestamp), 'tool', `rooms/${room.id}/messages/${m.id}`); });
     semantic.docs.forEach(d => {
       const batch = d.data();
       // Ignore caches whose source text has since been edited or removed.

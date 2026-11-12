@@ -23,19 +23,37 @@ async function exportAllToDrive() {
 const versions = ref<CodingBankVersion[]>([]), bankVersion = ref<CodingBankVersion | null>(null);
 const versionSelection = ref(''), activeVersion = ref(''), versionNote = ref('');
 const building = ref(false), updateSemantic = ref(false);
+const questionCount = ref<number | null>(null), estimating = ref(false);
+const estimate = ref<{ available: number; recommended: number } | null>(null);
+async function suggestCount() {
+  estimating.value = true; error.value = '';
+  try {
+    const result = await manageCodingBank({ action: 'estimate', ...(checkedRooms.value.length ? { roomIds: [...checkedRooms.value] } : {}) });
+    estimate.value = { available: result.available!, recommended: result.recommended! };
+    questionCount.value = result.recommended!;
+  } catch { error.value = t('coding.loadFailed'); }
+  finally { estimating.value = false; }
+}
+async function deleteVersion(id: string, restore = false) {
+  building.value = true; error.value = '';
+  try { await manageCodingBank({ action: restore ? 'restore' : 'delete', versionId: id }); versionSelection.value = ''; await refresh(); }
+  catch { error.value = t('coding.deleteVersionFailed'); }
+  finally { building.value = false; }
+}
 const availableRooms = ref<{ id: string; name: string }[]>([]), checkedRooms = ref<string[]>([]);
 const roomIncluded = (id: string) => questions.value.some(q => q.roomId === id);
 let appendRequest = '';
-watch(checkedRooms, () => { appendRequest = ''; }, { deep: true });
+watch(checkedRooms, () => { appendRequest = ''; estimate.value = null; questionCount.value = null; }, { deep: true });
+watch(questionCount, () => { appendRequest = ''; buildRequest = ''; resetRequest = ''; });
 async function appendRooms() {
-  if (!bankVersion.value || !checkedRooms.value.length) return;
+  if (!bankVersion.value || !checkedRooms.value.length || !questionCount.value) return;
   const baseVersion = bankVersion.value.id;
   const roomIds = [...checkedRooms.value];
   building.value = true; error.value = '';
   try {
     if (updateSemantic.value) await prepareSemanticQueue(roomIds.map(id => ({ id })));
     appendRequest ||= crypto.randomUUID();
-    const result = await manageCodingBank({ action: 'append', requestId: appendRequest, baseVersion, roomIds, note: versionNote.value });
+    const result = await manageCodingBank({ action: 'append', requestId: appendRequest, baseVersion, roomIds, note: versionNote.value, questionCount: questionCount.value });
     versionSelection.value = result.version!.id; appendRequest = ''; checkedRooms.value = []; versionNote.value = '';
     await refresh();
   } catch { error.value = t('coding.appendFailed'); }
@@ -44,6 +62,7 @@ async function appendRooms() {
 let buildRequest = '';
 let resetRequest = '';
 async function createVersion(reset = false) {
+  if (!questionCount.value || checkedRooms.value.length) return;
   if (reset && !window.confirm(t('coding.resetConfirm'))) return;
   building.value = true; error.value = '';
   try {
@@ -52,7 +71,7 @@ async function createVersion(reset = false) {
       await prepareSemanticQueue(live.rooms);
     }
     if (reset) resetRequest ||= crypto.randomUUID(); else buildRequest ||= crypto.randomUUID();
-    const result = await manageCodingBank({ action: reset ? 'reset' : 'create', requestId: reset ? resetRequest : buildRequest, note: versionNote.value });
+    const result = await manageCodingBank({ action: reset ? 'reset' : 'create', requestId: reset ? resetRequest : buildRequest, note: versionNote.value, questionCount: questionCount.value });
     versionSelection.value = result.version!.id;
     if (reset) resetRequest = ''; else buildRequest = '';
     versionNote.value = '';
@@ -182,9 +201,12 @@ onMounted(async () => {
           <h2 class="font-semibold">{{ t('coding.versionManagement') }}</h2>
           <p class="text-sm text-slate-400">{{ t('coding.versionHint') }}</p>
           <div class="flex flex-wrap items-end gap-3">
-            <label class="flex-1 min-w-48">{{ t('coding.viewVersion') }}<select v-model="versionSelection" :disabled="busy || building" class="block w-full bg-slate-900 border border-slate-700 rounded-lg p-2" @change="refresh"><option value="">{{ t('coding.currentBank') }}</option><option v-for="version in versions.filter(v => v.status === 'ready')" :key="version.id" :value="version.id">{{ t('coding.bankVersionLabel', { version: version.sequence }) }} · {{ date(version.completedAt || version.startedAt) }}{{ version.id === activeVersion ? ' · ' + t('coding.activeBank') : '' }}</option></select></label>
+            <label class="flex-1 min-w-48">{{ t('coding.viewVersion') }}<select v-model="versionSelection" :disabled="busy || building" class="block w-full bg-slate-900 border border-slate-700 rounded-lg p-2" @change="refresh"><option value="">{{ t('coding.currentBank') }}</option><option v-for="version in versions.filter(v => v.status === 'ready' && !v.deletedAt)" :key="version.id" :value="version.id">{{ t('coding.bankVersionLabel', { version: version.sequence }) }} · {{ date(version.completedAt || version.startedAt) }}{{ version.id === activeVersion ? ' · ' + t('coding.activeBank') : '' }}</option></select></label>
             <button :disabled="busy || building || !bankVersion || bankVersion.id === activeVersion" class="border border-slate-700 rounded-lg px-3 py-2 disabled:opacity-40" @click="activateVersion">{{ t('coding.activateVersion') }}</button>
           </div>
+          <button v-if="bankVersion" :disabled="busy || building || bankVersion.id === activeVersion" class="border border-rose-500 text-rose-400 rounded-lg px-3 py-2 disabled:opacity-40" @click="deleteVersion(bankVersion.id)">{{ t('coding.deleteVersion') }}</button>
+          <p class="text-xs text-slate-400">{{ t('coding.deleteVersionHint') }}</p>
+          <details><summary>{{ t('coding.deletedVersions') }}</summary><div v-for="v in versions.filter(v => v.deletedAt)" :key="v.id" class="flex justify-between gap-3 py-2"><span>{{ t('coding.bankVersionLabel', { version: v.sequence }) }}</span><button :disabled="building" class="text-sky-400 underline" @click="deleteVersion(v.id, true)">{{ t('coding.restoreVersion') }}</button></div></details>
           <template v-if="bankVersion">
             <p>{{ t('coding.bankVersionLabel', { version: bankVersion.sequence }) }} · {{ t(bankVersion.id === activeVersion ? 'coding.activeBank' : 'coding.archivedBank') }}</p>
             <p class="text-sm">{{ t('coding.versionSourceRange', { start: date(bankVersion.startedAt), end: date(bankVersion.completedAt || bankVersion.startedAt) }) }}</p>
@@ -194,21 +216,27 @@ onMounted(async () => {
             <p v-if="bankVersion.note" class="text-sm whitespace-pre-wrap">{{ bankVersion.note }}</p>
           </template>
           <p v-else class="text-sm text-amber-400">{{ t('coding.liveBank') }}</p>
+          <section class="border border-slate-700 rounded-lg p-3 space-y-2">
+            <p class="text-sm">{{ t('coding.countHint') }}</p>
+            <button :disabled="busy || building || estimating" class="border border-slate-700 rounded-lg px-3 py-2" @click="suggestCount">{{ t('coding.suggestCount') }}</button>
+            <p v-if="estimate" class="text-sm text-slate-400">{{ t('coding.countEstimate', estimate) }}</p>
+            <label class="block">{{ t('coding.questionCount') }}<input v-model.number="questionCount" type="number" min="1" step="1" :max="estimate?.available" :disabled="building || estimating" class="block w-40 bg-slate-900 border border-slate-700 rounded-lg p-2"></label>
+          </section>
           <label class="block">{{ t('coding.versionNote') }}<input v-model="versionNote" :disabled="building" maxlength="300" class="block w-full bg-slate-900 border border-slate-700 p-2 rounded-lg"></label>
           <label class="flex gap-2 items-start text-sm"><input v-model="updateSemantic" type="checkbox" :disabled="building" class="mt-1">{{ t('coding.updateSemanticForVersion') }}</label>
           <p class="text-xs text-slate-400">{{ t('coding.versionSemanticHint') }}</p>
-          <button :disabled="busy || building" class="bg-sky-600 text-white rounded-lg px-4 py-2 disabled:opacity-40" @click="createVersion(false)">{{ t(building ? 'coding.buildingVersion' : 'coding.createVersion') }}</button>
+          <button :disabled="busy || building || checkedRooms.length > 0 || !questionCount || questionCount < 1" class="bg-sky-600 text-white rounded-lg px-4 py-2 disabled:opacity-40" @click="createVersion(false)">{{ t(building ? 'coding.buildingVersion' : 'coding.createVersion') }}</button>
           <section class="border-t border-slate-700 pt-3 space-y-3">
             <h3 class="font-medium">{{ t('coding.appendRoomsTitle') }}</h3>
             <p class="text-sm text-slate-400">{{ t('coding.appendRoomsHint') }}</p>
             <div class="max-h-64 overflow-y-auto grid sm:grid-cols-2 gap-2">
               <label v-for="r in availableRooms" :key="r.id" class="flex items-start gap-2 border border-slate-700 rounded-lg p-3" :class="{ 'opacity-50': roomIncluded(r.id) }"><input v-model="checkedRooms" :value="r.id" type="checkbox" :disabled="busy || building || !bankVersion || roomIncluded(r.id)"><span class="break-all">{{ r.name }} · {{ r.id }}<span v-if="roomIncluded(r.id)"> · {{ t('coding.roomAlreadyIncluded') }}</span></span></label>
             </div>
-            <button :disabled="busy || building || !bankVersion || !checkedRooms.length" class="border border-sky-500 text-sky-400 rounded-lg px-4 py-2 disabled:opacity-40" @click="appendRooms">{{ t('coding.appendRoomsButton', { count: checkedRooms.length }) }}</button>
+            <button :disabled="busy || building || !bankVersion || !checkedRooms.length || !questionCount || questionCount < 1" class="border border-sky-500 text-sky-400 rounded-lg px-4 py-2 disabled:opacity-40" @click="appendRooms">{{ t('coding.appendRoomsButton', { count: checkedRooms.length }) }}</button>
           </section>
           <div class="border-t border-slate-700 pt-3 space-y-2">
             <p class="text-sm text-slate-400">{{ t('coding.resetHint') }}</p>
-            <button :disabled="busy || building" class="border border-amber-500 text-amber-400 rounded-lg px-4 py-2 disabled:opacity-40" @click="createVersion(true)">{{ t('coding.resetBank') }}</button>
+            <button :disabled="busy || building || checkedRooms.length > 0 || !questionCount || questionCount < 1" class="border border-amber-500 text-amber-400 rounded-lg px-4 py-2 disabled:opacity-40" @click="createVersion(true)">{{ t('coding.resetBank') }}</button>
           </div>
         </section>
         <p class="text-sm text-slate-400">{{ t('coding.bankHint') }}</p>

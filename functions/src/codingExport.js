@@ -12,14 +12,15 @@ export async function buildCodingExport(versionId, db = getFirestore()) {
   const { meta, bank } = await readBankVersion(versionId, db);
   const startedAt = Date.now(), questions = [], answers = [];
   for (const room of bank.rooms) {
-    const humans = room.messages.filter(room.mediaPolicy ? codingTarget : codingHuman);
+    const contextTargets = room.messages.filter(room.mediaPolicy ? codingTarget : codingHuman);
+    const humans = room.messages.filter(m => (room.mediaPolicy ? codingTarget(m) : codingHuman(m)) && (!room.questionIds || room.questionIds.includes(m.id)));
     for (let start = 0; start < humans.length; start += 5) await Promise.all(humans.slice(start, start + 5).map(async message => {
-      const i = humans.findIndex(m => m.id === message.id);
+      const i = contextTargets.findIndex(m => m.id === message.id);
       const revision = room.revisions[message.id] || '';
       const base = db.doc(`codingRooms/${room.id}/items/${message.id}${revision ? '/revisions/' + revision : ''}`);
       const [phase1, phase2, selected] = await Promise.all([base.collection('ratings').get(), base.collection('detailedRatings').get(), base.get()]);
       questions.push({ roomId: room.id, roomName: room.name, messageId: message.id, ratingRevision: revision || 'legacy',
-        target: message, humanContext: humans.slice(Math.max(0, i - 5), i + 6),
+        target: message, humanContext: contextTargets.slice(Math.max(0, i - 5), i + 6),
         mediaContext: room.mediaPolicy ? mediaWindow(room.messages, message.id) : [], contextPolicy: room.mediaPolicy || 'human-before-after-5-v1',
         selectedReply: room.messages.find(m => m.id === selected.data()?.replyId) || null });
       for (const [stage, snapshot] of [[1, phase1], [2, phase2]]) for (const doc of snapshot.docs) answers.push({

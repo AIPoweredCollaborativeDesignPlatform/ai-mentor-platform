@@ -4,6 +4,7 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { HttpsError } from 'firebase-functions/v2/https';
 import { loadCodingBank, codingHuman } from './codingBank.js';
 import { codingBankErrors } from './i18n.js';
+import { chooseQuestions } from './codingSelection.js';
 
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const fail = (code, key) => { throw new HttpsError(code, codingBankErrors[key]); };
@@ -69,7 +70,7 @@ export function snapshotParts(bank) {
 }
 export async function readBankVersion(id, db = getFirestore()) {
   const ref = versionRef(db, id), meta = (await ref.get()).data();
-  if (!meta || meta.status !== 'ready') fail('failed-precondition', 'unavailable');
+  if (!meta || meta.status !== 'ready' || meta.deletedAt) fail('failed-precondition', 'unavailable');
   const parts = (await ref.collection('parts').orderBy('index').get()).docs;
   if (parts.length !== meta.parts) fail('data-loss', 'incomplete');
   const json = parts.map(d => d.data().payload).join('');
@@ -80,7 +81,24 @@ export async function listBankVersions(db = getFirestore()) {
   const [state, versions] = await Promise.all([db.doc('codingBankState/current').get(), db.collection('codingBankVersions').orderBy('sequence', 'desc').get()]);
   return { activeVersion: state.data()?.activeVersion || '', versions: versions.docs.map(d => ({ id: d.id, ...d.data() })) };
 }
-export async function createBankVersion(uid, requestId, note = '', db = getFirestore(), resetAnswers = false, selection = null) {
+export async function setBankDeleted(uid, id, deleted, db = getFirestore()) {
+  const stateRef = db.doc('codingBankState/current'), ref = versionRef(db, id);
+  await db.runTransaction(async tx => {
+    const [state, version] = await Promise.all([tx.get(stateRef), tx.get(ref)]);
+    if (version.data()?.status !== 'ready' || (deleted && state.data()?.activeVersion === id)) fail('failed-precondition', 'unavailable');
+    tx.set(ref, { deletedAt: deleted ? Date.now() : 0, deletedBy: uid }, { merge: true });
+    if (deleted && state.data()?.latestVersion === id) tx.set(stateRef, { latestVersion: state.data()?.activeVersion || '' }, { merge: true });
+  });
+  return { deleted };
+}
+export async function estimateQuestions(roomIds = null, db = getFirestore()) {
+  if (roomIds && (!Array.isArray(roomIds) || !roomIds.length || !roomIds.every(id => /^room_\d{4,6}$/.test(id)))) fail('invalid-argument', 'request');
+  const live = await loadCodingBank(null, db, roomIds);
+  const available = live.rooms.reduce((sum, room) => sum + room.messages.filter(m => codingTarget(m) && !(room.disabled || []).includes(m.id)).length, 0);
+  return { available, recommended: Math.min(60, available) };
+}
+export async function createBankVersion(uid, requestId, note = '', db = getFirestore(), resetAnswers = false, selection = null, questionCount = null) {
+  if (questionCount !== null && (!Number.isInteger(questionCount) || questionCount < 1)) fail('invalid-argument', 'request');
   if (selection && (!/^[a-zA-Z0-9-]{16,80}$/.test(selection.baseVersion || '') || !Array.isArray(selection.roomIds)
     || !selection.roomIds.length || selection.roomIds.length > 100 || new Set(selection.roomIds).size !== selection.roomIds.length
     || !selection.roomIds.every(id => typeof id === 'string' && /^room_\d{4,6}$/.test(id)))) fail('invalid-argument', 'request');
@@ -93,7 +111,7 @@ export async function createBankVersion(uid, requestId, note = '', db = getFires
     if (state.buildUntil > Date.now()) fail('aborted', 'building');
     const sequence = (state.sequence || 0) + 1;
     const meta = { sequence, status: 'building', createdBy: uid, startedAt: Date.now(), note, parentVersion: selection?.baseVersion || state.latestVersion || '', resetAnswers,
-      ...(selection ? { addedRoomIds: selection.roomIds, mode: 'append-rooms' } : {}) };
+      questionCount, ...(selection ? { addedRoomIds: selection.roomIds, mode: 'append-rooms' } : {}) };
     tx.set(stateRef, { sequence, buildId: ref.id, buildUntil: Date.now() + 10 * 60000 }, { merge: true });
     tx.set(ref, meta);
     return { meta };
@@ -106,10 +124,27 @@ export async function createBankVersion(uid, requestId, note = '', db = getFires
     const live = await loadCodingBank(null, db, selectedRooms);
     if (selectedRooms && live.rooms.some(room => !room.messages.some(codingTarget))) fail('failed-precondition', 'request');
     const { bank, counts } = snapshotBank(live, selectedRooms ? { rooms: [] } : previous, ref.id, reservation.meta.resetAnswers);
+    if (reservation.meta.questionCount !== null) for (const room of bank.rooms) {
+      const disabled = live.rooms.find(r => r.id === room.id)?.disabled || [];
+      for (const id of disabled) { delete room.fingerprints[id]; delete room.revisions[id]; }
+    }
+    const availableQuestions = bank.rooms.reduce((sum, room) => sum + Object.keys(room.fingerprints).length, 0);
+    if (reservation.meta.questionCount !== null) {
+      try { chooseQuestions(bank, reservation.meta.questionCount, ref.id); } catch { fail('invalid-argument', 'request'); }
+      counts.questions = 0; counts.added = 0; counts.changed = 0; counts.reused = 0; counts.semanticCovered = 0;
+      for (const room of bank.rooms) for (const id of room.questionIds) {
+        counts.questions++;
+        const old = selectedRooms ? null : previous?.rooms.find(r => r.id === room.id);
+        if (room.revisions[id] !== ref.id) counts.reused++;
+        else if (old?.fingerprints[id]) counts.changed++; else counts.added++;
+        if (room.semantic.some(b => b.targetIds?.includes(id))) counts.semanticCovered++;
+      }
+      counts.removed = selectedRooms ? 0 : (previous?.rooms || []).reduce((sum, old) => sum + Object.keys(old.fingerprints).filter(id => !bank.rooms.find(r => r.id === old.id)?.fingerprints[id]).length, 0);
+    }
     if (selectedRooms) {
       bank.rooms.unshift(...previous.rooms.filter(room => !selectedRooms.includes(room.id)));
       for (const room of previous.rooms) {
-        const humans = room.messages.filter(room.mediaPolicy ? codingTarget : codingHuman);
+        const humans = room.messages.filter(m => (room.mediaPolicy ? codingTarget(m) : codingHuman(m)) && (!room.questionIds || room.questionIds.includes(m.id)));
         counts.questions += humans.length; counts.reused += humans.length;
         const covered = new Set(room.semantic.filter(b => currentSemanticBatch(b, room.messages.filter(codingHuman))).flatMap(b => b.targetIds));
         counts.semanticCovered += humans.filter(m => covered.has(m.id)).length;
@@ -129,7 +164,7 @@ export async function createBankVersion(uid, requestId, note = '', db = getFires
       staleParts.slice(start, start + 100).forEach(d => cleanup.delete(d.ref));
       await cleanup.commit();
     }
-    const ready = { ...reservation.meta, status: 'ready', completedAt: Date.now(), counts, roomCount, parts: parts.length,
+    const ready = { ...reservation.meta, availableQuestions, status: 'ready', completedAt: Date.now(), counts, roomCount, parts: parts.length,
       digest: hash(parts.join('')), samplingPolicy: 'event-round-robin-v2', contextPolicy: bank.rooms.some(r => r.mediaPolicy) ? 'mixed-multimodal-v1' : 'human-before-after-5-v1' };
     await db.runTransaction(async tx => {
       const state = (await tx.get(stateRef)).data();
@@ -151,7 +186,7 @@ export async function activateBankVersion(uid, id, db = getFirestore()) {
   const stateRef = db.doc('codingBankState/current');
   await db.runTransaction(async tx => {
     const meta = (await tx.get(versionRef(db, id))).data();
-    if (meta?.status !== 'ready') fail('failed-precondition', 'unavailable');
+    if (meta?.status !== 'ready' || meta.deletedAt) fail('failed-precondition', 'unavailable');
     tx.set(stateRef, { activeVersion: id, activatedBy: uid, activatedAt: Date.now() }, { merge: true });
     tx.set(stateRef.collection('activations').doc(), { versionId: id, by: uid, at: Date.now() });
   });
@@ -169,7 +204,7 @@ export async function loadVersionedBank(uid, requested, admin, db = getFirestore
   if (!id) return { ...await loadCodingBank(uid, db), version: null, activeVersion };
   const { bank, meta } = await readBankVersion(id, db);
   for (let i = 0; i < bank.rooms.length; i += 4) await Promise.all(bank.rooms.slice(i, i + 4).map(async room => {
-    const targets = room.messages.filter(room.mediaPolicy ? codingTarget : codingHuman);
+    const targets = room.messages.filter(m => (room.mediaPolicy ? codingTarget(m) : codingHuman(m)) && (!room.questionIds || room.questionIds.includes(m.id)));
     const refs = targets.map(m => itemRef(db, room.id, m.id, room.revisions[m.id]));
     const [cases, ratings, controls] = await Promise.all([
       readMany(db, refs), readMany(db, refs.map(ref => ref.collection('ratings').doc(uid))),

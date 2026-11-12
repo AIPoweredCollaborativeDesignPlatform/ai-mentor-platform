@@ -116,7 +116,7 @@ const codingCase = ref<CodingCase | null>(null);
 const review = ref<Awaited<ReturnType<typeof reviewCoding>> | null>(null);
 const replyId = ref('');
 const reviewIndex = ref<Record<string, Awaited<ReturnType<typeof reviewCoding>>>>({});
-const cutoffs = computed(() => messages.value.map((message, i) => ({ message, i })).filter(({ message }) => multimodal.value ? codingTarget(message) : humanText(message)));
+const cutoffs = computed(() => messages.value.map((message, i) => ({ message, i })).filter(({ message }) => bankQuestions.some(q => q.roomId === roomId.value && q.messages[q.index].id === message.id)).filter(({ message }) => multimodal.value ? codingTarget(message) : humanText(message)));
 const aiReplies = computed(() => messages.value.slice(index.value + 1).filter(m => m.senderUid === 'ai_mentor' || m.senderUid === 'ai_mentor_3d'));
 const reply = computed(() => messages.value.find(m => m.id === codingCase.value?.replyId));
 const dirty = computed(() => JSON.stringify(answer.value) !== baseline.value);

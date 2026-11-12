@@ -1,4 +1,4 @@
-import { loadVersionedBank, listBankVersions, createBankVersion, activateBankVersion } from './src/codingBankVersions.js';
+import { loadVersionedBank, listBankVersions, setBankDeleted, estimateQuestions, createBankVersion, activateBankVersion } from './src/codingBankVersions.js';
 import { codingBankErrors } from './src/i18n.js';
 import { generateCodingSemanticBatch } from './src/codingSemantic.js';
 import { Readable } from 'node:stream';
@@ -790,14 +790,16 @@ export const manageCodingBank = onCall({ timeoutSeconds: 540, memory: '512MiB', 
   requireAdmin(request);
   const data = request.data || {};
   if (data.action === 'list') return listBankVersions();
+  if (data.action === 'estimate') return estimateQuestions(data.roomIds || null);
+  if (['delete', 'restore'].includes(data.action) && /^[a-zA-Z0-9-]{16,80}$/.test(data.versionId || '')) return setBankDeleted(request.auth.uid, data.versionId, data.action === 'delete');
   if (data.action === 'rooms') {
     const rooms = await getFirestore().collection('rooms').select('roomName', 'name', 'deletedAt').get();
     return { rooms: rooms.docs.filter(d => !d.data().deletedAt).map(d => ({ id: d.id, name: d.data().roomName || d.data().name || d.id })) };
   }
-  if (data.action === 'append') return { version: await createBankVersion(request.auth.uid, data.requestId, data.note || '', getFirestore(), false, { baseVersion: data.baseVersion, roomIds: data.roomIds }) };
-  if (data.action === 'create') return { version: await createBankVersion(request.auth.uid, data.requestId, data.note || '') };
+  if (data.action === 'append') return { version: await createBankVersion(request.auth.uid, data.requestId, data.note || '', getFirestore(), false, { baseVersion: data.baseVersion, roomIds: data.roomIds }, data.questionCount ?? null) };
+  if (data.action === 'create') return { version: await createBankVersion(request.auth.uid, data.requestId, data.note || '', getFirestore(), false, null, data.questionCount ?? null) };
   if (data.action === 'reset') {
-    const version = await createBankVersion(request.auth.uid, data.requestId, data.note || '', getFirestore(), true);
+    const version = await createBankVersion(request.auth.uid, data.requestId, data.note || '', getFirestore(), true, null, data.questionCount ?? null);
     if (!version.resetAnswers) throw new HttpsError('invalid-argument', codingBankErrors.request);
     await activateBankVersion(request.auth.uid, version.id);
     return { version, activeVersion: version.id };

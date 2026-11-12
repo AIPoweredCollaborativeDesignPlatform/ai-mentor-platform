@@ -1,5 +1,14 @@
 // Generated from the string table; English is the source of keys (see i18n/index.ts)
 export default {
+  "coding.deleteVersion": "Delete this version",
+  "coding.deleteVersionHint": "Deleted versions move to the recoverable list; answers and shared rating scopes remain stored. The active version cannot be deleted. Activate another version first.",
+  "coding.deletedVersions": "Deleted versions (recoverable)",
+  "coding.restoreVersion": "Restore",
+  "coding.deleteVersionFailed": "Could not change version status. The active version cannot be deleted.",
+  "coding.questionCount": "Questions to generate",
+  "coding.suggestCount": "Calculate available and suggested counts",
+  "coding.countEstimate": "Available: {available} · Suggested: {recommended}",
+  "coding.countHint": "Enter a positive whole number, or calculate a suggestion first (up to 60 for a pilot; not a statistical sample-size guarantee). With rooms checked, the number applies to newly added questions only. Otherwise it applies to a full rebuild/reset. Actual selected IDs are frozen in the version using randomized four-source rotation; question context stays intact. This count alone does not limit AI analysis tokens.",
   "coding.closeMedia": "Close media preview",
   "coding.mediaWindowHint": "Target plus up to five human text/media messages each side, including intervening media cards. AI prose is hidden in stage one; media created by AI is shown as evidence.",
   "coding.mediaEvidence": "Media evidence",

@@ -51,9 +51,9 @@ export async function codingMessages(roomId: string): Promise<MessageItem[]> {
   return snapshot.docs.map(d => ({ ...d.data(), id: d.id } as MessageItem));
 }
 export interface CodingQuestion { roomId: string; messages: MessageItem[]; index: number; events?: SamplingEvent[]; revision?: string; mediaPolicy?: string }
-export interface CodingBankVersion { resetAnswers?: boolean; id: string; sequence: number; status: string; startedAt: number; completedAt?: number; note: string; parentVersion: string; roomCount?: number; counts?: { questions: number; added: number; changed: number; reused: number; removed: number; semanticCovered: number } }
-export async function manageCodingBank(data: { action: 'list' | 'create' | 'activate' | 'reset' | 'rooms' | 'append'; requestId?: string; note?: string; versionId?: string; baseVersion?: string; roomIds?: string[] }) {
-  return (await httpsCallable<typeof data, { versions?: CodingBankVersion[]; activeVersion?: string; version?: CodingBankVersion; rooms?: { id: string; name: string }[] }>(functions, 'manageCodingBank', { timeout: 540000 })(data)).data;
+export interface CodingBankVersion { deletedAt?: number; resetAnswers?: boolean; id: string; sequence: number; status: string; startedAt: number; completedAt?: number; note: string; parentVersion: string; roomCount?: number; counts?: { questions: number; added: number; changed: number; reused: number; removed: number; semanticCovered: number } }
+export async function manageCodingBank(data: { action: 'list' | 'create' | 'activate' | 'reset' | 'rooms' | 'append' | 'estimate' | 'delete' | 'restore'; requestId?: string; note?: string; versionId?: string; baseVersion?: string; roomIds?: string[]; questionCount?: number }) {
+  return (await httpsCallable<typeof data, { versions?: CodingBankVersion[]; activeVersion?: string; version?: CodingBankVersion; rooms?: { id: string; name: string }[]; available?: number; recommended?: number }>(functions, 'manageCodingBank', { timeout: 540000 })(data)).data;
 }
 export interface CodingCloudExport { folderUrl: string; answerCount: number; questionCount: number; completedAt: number }
 export async function exportCodingBankToDrive(versionId: string) {
@@ -68,6 +68,7 @@ interface CodingRoomData {
   visits?: { id: string; at: number }[];
   revisions?: Record<string, string>;
   mediaPolicy?: string;
+  questionIds?: string[];
 }
 export async function fetchCodingBank(versionId?: string) {
   const fetch = httpsCallable<{ versionId?: string }, { rooms: CodingRoomData[]; version?: CodingBankVersion; activeVersion?: string }>(functions, 'getCodingBank', { timeout: 120000 });
@@ -107,7 +108,7 @@ function buildCodingQueue(rooms: CodingRoomData[]): CodingQuestion[] {
     const logs = snapshots(room.logs), events = snapshots(room.events), semantic = snapshots(room.semantic);
     const byIndex = new Map<number, CodingQuestion>();
     const add = (index: number, kind: SamplingEvent['kind'], ref: string) => {
-      if (index < 0 || !eligible(messages[index])) return;
+      if (index < 0 || !eligible(messages[index]) || (room.questionIds && !room.questionIds.includes(messages[index].id))) return;
       let q = byIndex.get(index);
       if (!q) { q = { roomId: room.id, messages, index, events: [], revision: room.revisions?.[messages[index].id] || '', mediaPolicy: room.mediaPolicy }; byIndex.set(index, q); }
       if (!q.events!.some(e => e.kind === kind && e.ref === ref)) q.events!.push({ kind, ref });

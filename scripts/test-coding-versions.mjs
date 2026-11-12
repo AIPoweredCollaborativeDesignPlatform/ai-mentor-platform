@@ -1,6 +1,7 @@
+import { chooseQuestions } from '../functions/src/codingSelection.js';
 import { buildCodingExport, exportCsvCell } from '../functions/src/codingExport.js';
 import assert from 'node:assert/strict';
-import { snapshotBank, snapshotParts, createBankVersion, activateBankVersion, loadVersionedBank, readBankVersion } from '../functions/src/codingBankVersions.js';
+import { snapshotBank, snapshotParts, createBankVersion, activateBankVersion, loadVersionedBank, readBankVersion, setBankDeleted } from '../functions/src/codingBankVersions.js';
 
 const human = (id, timestamp = 1) => ({ id, senderUid: 'human', senderName: 'Designer', type: 'text', content: id, timestamp });
 const room = { id: 'room_1234', name: 'Test', messages: Array.from({ length: 12 }, (_, i) => human(`m${i}`, i)), semantic: [], logs: [], events: [], completed: ['m1'], visits: [{ id: 'm1', at: 3 }], disabled: ['m1'] };
@@ -98,6 +99,14 @@ assert.equal(appended.counts.added, 2);
 assert.equal(appended.counts.reused, 1);
 assert.equal(appended.counts.changed, 0);
 assert.equal(appended.parentVersion, first.id);
+const appendLimited = await createBankVersion('admin', 'append-limited-00001', '', db, false, { baseVersion: first.id, roomIds: ['room_5678', 'room_6789'] }, 1);
+assert.equal(appendLimited.counts.questions, 2);
+assert.equal(appendLimited.counts.reused, 1);
+assert.equal(appendLimited.counts.added, 1);
+const appendLimitedBank = (await readBankVersion(appendLimited.id, db)).bank;
+assert.equal(appendLimitedBank.rooms[0].revisions.m1, '');
+assert.equal(appendLimitedBank.rooms.slice(1).flatMap(r => r.questionIds).length, 1);
+
 assert.equal(appendedBank.rooms[0].messages[0].content, 'm1');
 assert.equal(appendedBank.rooms[0].revisions.m1, '');
 assert.equal(sourceReads.slice(readStart).includes('rooms/room_1234/messages'), false);
@@ -129,6 +138,22 @@ assert.equal(archive.answers.every(a => a.ratingRevision === second.id), true);
 assert.equal(archive.questions[0].humanContext.length, 2);
 assert.equal(archive.version.id, second.id);
 assert.ok(exportCsvCell('=unsafe').startsWith('"\''));
+const limited = await createBankVersion('admin', 'version-limited-0001', '', db, false, null, 1);
+assert.equal(limited.counts.questions, 1);
+const limitedData = await readBankVersion(limited.id, db);
+assert.equal(limitedData.bank.rooms.flatMap(r => r.questionIds).length, 1);
+assert.equal(limitedData.bank.rooms[0].messages.filter(m => m.senderUid === 'human').length, 2); // Full context stays available.
+assert.equal((await buildCodingExport(limited.id, db)).summary.questionCount, 1);
+const repeat = structuredClone(limitedData.bank);
+assert.deepEqual(chooseQuestions(repeat, 1, limited.id).rooms[0].questionIds, limitedData.bank.rooms[0].questionIds);
+await assert.rejects(createBankVersion('admin', 'version-count-bad01', '', db, false, null, 999));
+await assert.rejects(setBankDeleted('admin', first.id, true, db)); // Active bank protected.
+await setBankDeleted('admin', limited.id, true, db);
+await assert.rejects(readBankVersion(limited.id, db));
+assert.equal(records.get('codingBankState/current').latestVersion, first.id);
+await setBankDeleted('admin', limited.id, false, db);
+assert.equal((await readBankVersion(limited.id, db)).meta.id, limited.id);
+assert.equal(records.get('codingRooms/room_1234/items/m1/ratings/me').status, 'submitted');
 records.set(`codingBankVersions/${first.id}/parts/000000`, { index: 0, payload: 'corrupt' });
 await assert.rejects(readBankVersion(first.id, db));
 console.log('Version tests passed: latest rooms/messages, context changes, unchanged answer reuse, immutable snapshots, Unicode chunking, idempotency, activation/rollback, failed version protection, observer access, integrity.');

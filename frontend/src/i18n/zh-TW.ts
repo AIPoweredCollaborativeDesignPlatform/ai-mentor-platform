@@ -2,6 +2,15 @@ import type en from './en';
 
 // Traditional Chinese; must have every key of en.ts
 const zhTW: Record<keyof typeof en, string> = {
+  "coding.deleteVersion": "刪除此版次",
+  "coding.deleteVersionHint": "刪除後移至可還原清單，作答與共用答案仍保留。目前出題版本不能刪除，請先啟用其他版次。",
+  "coding.deletedVersions": "已刪除版次（可還原）",
+  "coding.restoreVersion": "還原",
+  "coding.deleteVersionFailed": "無法變更版次狀態；目前出題版本不能刪除。",
+  "coding.questionCount": "本次出題數",
+  "coding.suggestCount": "計算可用與建議題數",
+  "coding.countEstimate": "可用 {available} 題 · 建議 {recommended} 題",
+  "coding.countHint": "可先計算建議題數，再自行增減正整數。試標建議最多 60 題，並非統計樣本數保證。勾選房間時，此數量僅計新增題目；未勾選時，用於完整重建／清空重建。依四類來源輪流隨機選題後，題目 ID 固定在該版，前後對話保留。題數設定本身不會限制 AI 分析 token。",
   "coding.closeMedia": "關閉媒材預覽",
   "coding.mediaWindowHint": "顯示標註點及前後各最多 5 則人類文字／媒材訊息，並帶入其間的媒材卡片。第一階段隱藏 AI 文字回覆，AI 產生的媒材則作為判斷依據顯示。",
   "coding.mediaEvidence": "討論媒材",

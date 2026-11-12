@@ -2,6 +2,7 @@ import type en from './en';
 
 // Traditional Chinese; must have every key of en.ts
 const zhTW: Record<keyof typeof en, string> = {
+  "coding.closeMedia": "關閉媒材預覽",
   "coding.mediaWindowHint": "顯示標註點及前後各最多 5 則人類文字／媒材訊息，並帶入其間的媒材卡片。第一階段隱藏 AI 文字回覆，AI 產生的媒材則作為判斷依據顯示。",
   "coding.mediaEvidence": "討論媒材",
   "coding.openMedia": "開啟原尺寸媒材",

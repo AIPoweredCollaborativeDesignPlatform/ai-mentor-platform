@@ -1,5 +1,6 @@
 // Generated from the string table; English is the source of keys (see i18n/index.ts)
 export default {
+  "coding.closeMedia": "Close media preview",
   "coding.mediaWindowHint": "Target plus up to five human text/media messages each side, including intervening media cards. AI prose is hidden in stage one; media created by AI is shown as evidence.",
   "coding.mediaEvidence": "Media evidence",
   "coding.openMedia": "Open full-size media",

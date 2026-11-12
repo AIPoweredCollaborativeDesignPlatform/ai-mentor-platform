@@ -51,8 +51,8 @@ export async function codingMessages(roomId: string): Promise<MessageItem[]> {
 }
 export interface CodingQuestion { roomId: string; messages: MessageItem[]; index: number; events?: SamplingEvent[]; revision?: string }
 export interface CodingBankVersion { resetAnswers?: boolean; id: string; sequence: number; status: string; startedAt: number; completedAt?: number; note: string; parentVersion: string; roomCount?: number; counts?: { questions: number; added: number; changed: number; reused: number; removed: number; semanticCovered: number } }
-export async function manageCodingBank(data: { action: 'list' | 'create' | 'activate' | 'reset'; requestId?: string; note?: string; versionId?: string }) {
-  return (await httpsCallable<typeof data, { versions?: CodingBankVersion[]; activeVersion?: string; version?: CodingBankVersion }>(functions, 'manageCodingBank', { timeout: 540000 })(data)).data;
+export async function manageCodingBank(data: { action: 'list' | 'create' | 'activate' | 'reset' | 'rooms' | 'append'; requestId?: string; note?: string; versionId?: string; baseVersion?: string; roomIds?: string[] }) {
+  return (await httpsCallable<typeof data, { versions?: CodingBankVersion[]; activeVersion?: string; version?: CodingBankVersion; rooms?: { id: string; name: string }[] }>(functions, 'manageCodingBank', { timeout: 540000 })(data)).data;
 }
 export interface CodingCloudExport { folderUrl: string; answerCount: number; questionCount: number; completedAt: number }
 export async function exportCodingBankToDrive(versionId: string) {

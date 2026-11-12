@@ -790,6 +790,11 @@ export const manageCodingBank = onCall({ timeoutSeconds: 540, memory: '512MiB', 
   requireAdmin(request);
   const data = request.data || {};
   if (data.action === 'list') return listBankVersions();
+  if (data.action === 'rooms') {
+    const rooms = await getFirestore().collection('rooms').select('roomName', 'name', 'deletedAt').get();
+    return { rooms: rooms.docs.filter(d => !d.data().deletedAt).map(d => ({ id: d.id, name: d.data().roomName || d.data().name || d.id })) };
+  }
+  if (data.action === 'append') return { version: await createBankVersion(request.auth.uid, data.requestId, data.note || '', getFirestore(), false, { baseVersion: data.baseVersion, roomIds: data.roomIds }) };
   if (data.action === 'create') return { version: await createBankVersion(request.auth.uid, data.requestId, data.note || '') };
   if (data.action === 'reset') {
     const version = await createBankVersion(request.auth.uid, data.requestId, data.note || '', getFirestore(), true);

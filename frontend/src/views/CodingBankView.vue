@@ -21,6 +21,24 @@ async function exportAllToDrive() {
 const versions = ref<CodingBankVersion[]>([]), bankVersion = ref<CodingBankVersion | null>(null);
 const versionSelection = ref(''), activeVersion = ref(''), versionNote = ref('');
 const building = ref(false), updateSemantic = ref(false);
+const availableRooms = ref<{ id: string; name: string }[]>([]), checkedRooms = ref<string[]>([]);
+const roomIncluded = (id: string) => questions.value.some(q => q.roomId === id);
+let appendRequest = '';
+watch(checkedRooms, () => { appendRequest = ''; }, { deep: true });
+async function appendRooms() {
+  if (!bankVersion.value || !checkedRooms.value.length) return;
+  const baseVersion = bankVersion.value.id;
+  const roomIds = [...checkedRooms.value];
+  building.value = true; error.value = '';
+  try {
+    if (updateSemantic.value) await prepareSemanticQueue(roomIds.map(id => ({ id })));
+    appendRequest ||= crypto.randomUUID();
+    const result = await manageCodingBank({ action: 'append', requestId: appendRequest, baseVersion, roomIds, note: versionNote.value });
+    versionSelection.value = result.version!.id; appendRequest = ''; checkedRooms.value = []; versionNote.value = '';
+    await refresh();
+  } catch { error.value = t('coding.appendFailed'); }
+  finally { building.value = false; }
+}
 let buildRequest = '';
 let resetRequest = '';
 async function createVersion(reset = false) {
@@ -98,7 +116,8 @@ async function loadRoom() {
 async function refresh() {
   busy.value = true; error.value = '';
   try {
-    const [bank, catalog] = await Promise.all([fetchCodingBank(versionSelection.value || undefined), manageCodingBank({ action: 'list' })]);
+    const [bank, catalog, liveRooms] = await Promise.all([fetchCodingBank(versionSelection.value || undefined), manageCodingBank({ action: 'list' }), manageCodingBank({ action: 'rooms' })]);
+    availableRooms.value = liveRooms.rooms || []; checkedRooms.value = []; appendRequest = '';
     bankVersion.value = bank.version; activeVersion.value = catalog.activeVersion || ''; versions.value = catalog.versions || [];
     cloudExport.value = (bank.version as (CodingBankVersion & { lastExport?: CodingCloudExport }) | null)?.lastExport || null;
     questions.value = bank.allQuestions.sort((a, b) => a.messages[a.index].timestamp - b.messages[b.index].timestamp);
@@ -177,6 +196,14 @@ onMounted(async () => {
           <label class="flex gap-2 items-start text-sm"><input v-model="updateSemantic" type="checkbox" :disabled="building" class="mt-1">{{ t('coding.updateSemanticForVersion') }}</label>
           <p class="text-xs text-slate-400">{{ t('coding.versionSemanticHint') }}</p>
           <button :disabled="busy || building" class="bg-sky-600 text-white rounded-lg px-4 py-2 disabled:opacity-40" @click="createVersion(false)">{{ t(building ? 'coding.buildingVersion' : 'coding.createVersion') }}</button>
+          <section class="border-t border-slate-700 pt-3 space-y-3">
+            <h3 class="font-medium">{{ t('coding.appendRoomsTitle') }}</h3>
+            <p class="text-sm text-slate-400">{{ t('coding.appendRoomsHint') }}</p>
+            <div class="max-h-64 overflow-y-auto grid sm:grid-cols-2 gap-2">
+              <label v-for="r in availableRooms" :key="r.id" class="flex items-start gap-2 border border-slate-700 rounded-lg p-3" :class="{ 'opacity-50': roomIncluded(r.id) }"><input v-model="checkedRooms" :value="r.id" type="checkbox" :disabled="busy || building || !bankVersion || roomIncluded(r.id)"><span class="break-all">{{ r.name }} · {{ r.id }}<span v-if="roomIncluded(r.id)"> · {{ t('coding.roomAlreadyIncluded') }}</span></span></label>
+            </div>
+            <button :disabled="busy || building || !bankVersion || !checkedRooms.length" class="border border-sky-500 text-sky-400 rounded-lg px-4 py-2 disabled:opacity-40" @click="appendRooms">{{ t('coding.appendRoomsButton', { count: checkedRooms.length }) }}</button>
+          </section>
           <div class="border-t border-slate-700 pt-3 space-y-2">
             <p class="text-sm text-slate-400">{{ t('coding.resetHint') }}</p>
             <button :disabled="busy || building" class="border border-amber-500 text-amber-400 rounded-lg px-4 py-2 disabled:opacity-40" @click="createVersion(true)">{{ t('coding.resetBank') }}</button>

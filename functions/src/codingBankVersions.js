@@ -79,7 +79,10 @@ export async function listBankVersions(db = getFirestore()) {
   const [state, versions] = await Promise.all([db.doc('codingBankState/current').get(), db.collection('codingBankVersions').orderBy('sequence', 'desc').get()]);
   return { activeVersion: state.data()?.activeVersion || '', versions: versions.docs.map(d => ({ id: d.id, ...d.data() })) };
 }
-export async function createBankVersion(uid, requestId, note = '', db = getFirestore(), resetAnswers = false) {
+export async function createBankVersion(uid, requestId, note = '', db = getFirestore(), resetAnswers = false, selection = null) {
+  if (selection && (!/^[a-zA-Z0-9-]{16,80}$/.test(selection.baseVersion || '') || !Array.isArray(selection.roomIds)
+    || !selection.roomIds.length || selection.roomIds.length > 100 || new Set(selection.roomIds).size !== selection.roomIds.length
+    || !selection.roomIds.every(id => typeof id === 'string' && /^room_\d{4,6}$/.test(id)))) fail('invalid-argument', 'request');
   if (!/^[a-zA-Z0-9-]{16,80}$/.test(requestId) || typeof note !== 'string' || note.length > 300) fail('invalid-argument', 'request');
   const ref = versionRef(db, requestId), stateRef = db.doc('codingBankState/current');
   const reservation = await db.runTransaction(async tx => {
@@ -88,7 +91,8 @@ export async function createBankVersion(uid, requestId, note = '', db = getFires
     const state = current.data() || {};
     if (state.buildUntil > Date.now()) fail('aborted', 'building');
     const sequence = (state.sequence || 0) + 1;
-    const meta = { sequence, status: 'building', createdBy: uid, startedAt: Date.now(), note, parentVersion: state.latestVersion || '', resetAnswers };
+    const meta = { sequence, status: 'building', createdBy: uid, startedAt: Date.now(), note, parentVersion: selection?.baseVersion || state.latestVersion || '', resetAnswers,
+      ...(selection ? { addedRoomIds: selection.roomIds, mode: 'append-rooms' } : {}) };
     tx.set(stateRef, { sequence, buildId: ref.id, buildUntil: Date.now() + 10 * 60000 }, { merge: true });
     tx.set(ref, meta);
     return { meta };
@@ -96,8 +100,21 @@ export async function createBankVersion(uid, requestId, note = '', db = getFires
   if (reservation.ready) return reservation.ready;
   try {
     const previous = reservation.meta.parentVersion ? (await readBankVersion(reservation.meta.parentVersion, db)).bank : null;
-    const live = await loadCodingBank(null, db);
-    const { bank, counts, roomCount } = snapshotBank(live, previous, ref.id, reservation.meta.resetAnswers);
+    const selectedRooms = reservation.meta.addedRoomIds || null;
+    if (selectedRooms?.some(id => previous.rooms.some(room => room.id === id && Object.keys(room.fingerprints || {}).length))) fail('failed-precondition', 'request');
+    const live = await loadCodingBank(null, db, selectedRooms);
+    if (selectedRooms && live.rooms.some(room => !room.messages.some(codingHuman))) fail('failed-precondition', 'request');
+    const { bank, counts } = snapshotBank(live, selectedRooms ? { rooms: [] } : previous, ref.id, reservation.meta.resetAnswers);
+    if (selectedRooms) {
+      bank.rooms.unshift(...previous.rooms.filter(room => !selectedRooms.includes(room.id)));
+      for (const room of previous.rooms) {
+        const humans = room.messages.filter(codingHuman);
+        counts.questions += humans.length; counts.reused += humans.length;
+        const covered = new Set(room.semantic.filter(b => currentSemanticBatch(b, humans)).flatMap(b => b.targetIds));
+        counts.semanticCovered += humans.filter(m => covered.has(m.id)).length;
+      }
+    }
+    const roomCount = bank.rooms.filter(r => Object.keys(r.fingerprints).length).length;
     const parts = snapshotParts(bank);
     for (let start = 0; start < parts.length; start += 100) {
       const batch = db.batch();

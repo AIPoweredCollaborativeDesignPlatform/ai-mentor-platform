@@ -1,4 +1,5 @@
 import { getFirestore } from 'firebase-admin/firestore';
+import { codingBankErrors } from './i18n.js';
 
 const rows = snapshot => snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
 export const codingHuman = m => m.senderUid && !['ai_mentor', 'ai_mentor_3d', 'system'].includes(m.senderUid)
@@ -18,8 +19,9 @@ async function submitted(db, refs, visits) {
   return [...ids];
 }
 
-export async function loadCodingBank(uid, db = getFirestore()) {
-  const rooms = rows(await db.collection('rooms').select('deletedAt', 'roomName', 'name').get()).filter(r => !r.deletedAt);
+export async function loadCodingBank(uid, db = getFirestore(), roomIds = null) {
+  const rooms = rows(await db.collection('rooms').select('deletedAt', 'roomName', 'name').get()).filter(r => !r.deletedAt && (!roomIds || roomIds.includes(r.id)));
+  if (roomIds && rooms.length !== roomIds.length) throw new Error(codingBankErrors.request);
   const result = [];
   // Bounded parallelism across rooms; field masks omit prompts, board objects and asset blobs.
   for (let start = 0; start < rooms.length; start += 4) {

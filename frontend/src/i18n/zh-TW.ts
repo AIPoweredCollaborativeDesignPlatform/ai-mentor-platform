@@ -2,6 +2,11 @@ import type en from './en';
 
 // Traditional Chinese; must have every key of en.ts
 const zhTW: Record<keyof typeof en, string> = {
+  "coding.appendRoomsTitle": "勾選新房間加入此版題庫",
+  "coding.appendRoomsHint": "保留目前查看版次的原題目、對話情境與答案，再加入勾選房間，建立完整新版。上方語意分析勾選只會套用到這些房間。已有題目的房間不能重複加入；請先有基準版次，並選擇含人類文字對話的房間。建立後可檢查新版，再設為目前出題版本。",
+  "coding.roomAlreadyIncluded": "已加入題庫",
+  "coding.appendRoomsButton": "加入勾選的 {count} 個房間並建立新版",
+  "coding.appendFailed": "房間尚未加入。請確認勾選房間仍存在、有人類文字對話，且尚未加入此版，再重試；既有版次仍保留。",
   "coding.exportWholeVersion": "匯出所選版次的全部作答",
   "coding.exportWholeHint": "一次上傳此版所有房間、所有專家、兩階段的草稿與已提交答案，存至平台已連結的研究用 Google 雲端硬碟。包含作答 CSV，以及含版次、來源與對話情境的 JSON 備份；每次上傳會建立獨立資料夾。沿用的答案以匯出當下資料為準，並記錄讀取起訖時間。",
   "coding.uploadAllAnswers": "將此版全部作答上傳 Google 雲端硬碟",

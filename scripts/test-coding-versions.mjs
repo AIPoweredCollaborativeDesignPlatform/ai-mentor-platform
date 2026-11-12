@@ -40,6 +40,7 @@ const records = new Map([
   ['codingRooms/room_1234/items/m1/ratings/me', { status: 'submitted', source: { sampledAt: 5 } }],
 ]);
 let auto = 0;
+const sourceReads = [];
 class Ref {
   constructor(path, sort) { this.path = path; this.sort = sort; this.id = path.split('/').at(-1); }
   get parent() { return new Ref(this.path.split('/').slice(0, -1).join('/')); }
@@ -49,6 +50,7 @@ class Ref {
   where() { return this; }
   orderBy(key) { return new Ref(this.path, key); }
   async get() {
+    sourceReads.push(this.path);
     if (this.path.split('/').length % 2 === 0) return snap(this.path);
     const docs = [...records.keys()].filter(path => path.startsWith(this.path + '/') && path.split('/').length === this.path.split('/').length + 1).map(snap);
     if (this.sort) docs.sort((a, b) => (a.data()[this.sort] || 0) - (b.data()[this.sort] || 0));
@@ -83,6 +85,26 @@ assert.deepEqual((await loadVersionedBank('me', undefined, false, db)).rooms[0].
 await assert.rejects(loadVersionedBank('me', 'live', false, db));
 records.set('codingBankVersions/not-ready', { status: 'building' });
 await assert.rejects(activateBankVersion('admin', 'not-ready', db));
+records.set('rooms/room_5678', { name: 'New room' });
+records.set('rooms/room_5678/messages/new1', human('new1'));
+records.set('rooms/room_6789', { name: 'Second new room' });
+records.set('rooms/room_6789/messages/new2', human('new2'));
+records.set('rooms/room_1234/messages/m1', { ...human('m1'), content: 'Live edit outside selected rooms' });
+const readStart = sourceReads.length;
+const appended = await createBankVersion('admin', 'version-append-000001', '', db, false, { baseVersion: first.id, roomIds: ['room_5678', 'room_6789'] });
+const appendedBank = (await readBankVersion(appended.id, db)).bank;
+assert.equal(appended.counts.questions, 3);
+assert.equal(appended.counts.added, 2);
+assert.equal(appended.counts.reused, 1);
+assert.equal(appended.counts.changed, 0);
+assert.equal(appended.parentVersion, first.id);
+assert.equal(appendedBank.rooms[0].messages[0].content, 'm1');
+assert.equal(appendedBank.rooms[0].revisions.m1, '');
+assert.equal(sourceReads.slice(readStart).includes('rooms/room_1234/messages'), false);
+assert.ok(appendedBank.rooms.slice(1).every(r => Object.values(r.revisions).every(revision => revision === appended.id)));
+await assert.rejects(createBankVersion('admin', 'version-append-bad01', '', db, false, { baseVersion: first.id, roomIds: ['room_1234'] }));
+records.delete('rooms/room_5678'); records.delete('rooms/room_5678/messages/new1');
+records.delete('rooms/room_6789'); records.delete('rooms/room_6789/messages/new2');
 const reset = await createBankVersion('admin', 'version-reset-00000001', 'test reset', db, true);
 assert.equal(reset.resetAnswers, true);
 assert.equal(reset.counts.reused, 0);

@@ -1,5 +1,10 @@
 // Generated from the string table; English is the source of keys (see i18n/index.ts)
 export default {
+  "coding.appendRoomsTitle": "Add selected new rooms to this version",
+  "coding.appendRoomsHint": "Keep this version's existing questions, contexts and answers, and create a complete new version with the selected rooms added. The semantic-analysis checkbox above applies only to the selected rooms. Rooms already containing questions cannot be added twice. Create a baseline version first; selected rooms must contain eligible human text. Activate the new version after reviewing it.",
+  "coding.roomAlreadyIncluded": "Already included",
+  "coding.appendRoomsButton": "Add {count} selected rooms and create a new version",
+  "coding.appendFailed": "Rooms were not added. Check that the selected rooms are available, contain human text and are not already included, then retry. Existing versions are preserved.",
   "coding.exportWholeVersion": "Export all answers for the selected version",
   "coding.exportWholeHint": "Uploads every room and reviewer, both stages, drafts and submissions, to the platform's connected study Google Drive. Includes CSV answers and a JSON archive with version, source and context. Each upload creates a separate folder. Shared unchanged answers are read at export time; collection start/end times are recorded.",
   "coding.uploadAllAnswers": "Upload this version's answers to Google Drive",

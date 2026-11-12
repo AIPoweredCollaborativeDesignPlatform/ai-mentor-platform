@@ -1,5 +1,9 @@
 // Generated from the string table; English is the source of keys (see i18n/index.ts)
 export default {
+  "coding.resetBank": "Clear current questions and regenerate",
+  "coding.resetHint": "Research testing: rebuild from latest conversations and immediately activate a fresh bank. All answers and case selections start empty. Previous versions and answers remain available. Question availability settings still apply; open sessions switch when reopened.",
+  "coding.resetConfirm": "Regenerate and activate a fresh question bank now? Progress will start at zero for this new version. Earlier versions and answers remain available. The semantic analysis option above still applies.",
+  "coding.resetVersion": "Fresh research test bank · no previous answers inherited",
   "coding.fixedBankHint": "This session uses a fixed question bank. New dialogue is included after an administrator creates and activates a new version; reopen this page to use it.",
   "coding.syncBankProgress": "Refresh progress for this version",
   "coding.versionManagement": "Question bank versions",

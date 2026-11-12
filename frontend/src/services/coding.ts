@@ -50,8 +50,8 @@ export async function codingMessages(roomId: string): Promise<MessageItem[]> {
   return snapshot.docs.map(d => ({ ...d.data(), id: d.id } as MessageItem));
 }
 export interface CodingQuestion { roomId: string; messages: MessageItem[]; index: number; events?: SamplingEvent[]; revision?: string }
-export interface CodingBankVersion { id: string; sequence: number; status: string; startedAt: number; completedAt?: number; note: string; parentVersion: string; roomCount?: number; counts?: { questions: number; added: number; changed: number; reused: number; removed: number; semanticCovered: number } }
-export async function manageCodingBank(data: { action: 'list' | 'create' | 'activate'; requestId?: string; note?: string; versionId?: string }) {
+export interface CodingBankVersion { resetAnswers?: boolean; id: string; sequence: number; status: string; startedAt: number; completedAt?: number; note: string; parentVersion: string; roomCount?: number; counts?: { questions: number; added: number; changed: number; reused: number; removed: number; semanticCovered: number } }
+export async function manageCodingBank(data: { action: 'list' | 'create' | 'activate' | 'reset'; requestId?: string; note?: string; versionId?: string }) {
   return (await httpsCallable<typeof data, { versions?: CodingBankVersion[]; activeVersion?: string; version?: CodingBankVersion }>(functions, 'manageCodingBank', { timeout: 540000 })(data)).data;
 }
 export const codingQuestionKey = (roomId: string, messageId: string) => `${roomId}/${messageId}`;

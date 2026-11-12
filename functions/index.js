@@ -779,6 +779,12 @@ export const manageCodingBank = onCall({ timeoutSeconds: 540, memory: '512MiB', 
   const data = request.data || {};
   if (data.action === 'list') return listBankVersions();
   if (data.action === 'create') return { version: await createBankVersion(request.auth.uid, data.requestId, data.note || '') };
+  if (data.action === 'reset') {
+    const version = await createBankVersion(request.auth.uid, data.requestId, data.note || '', getFirestore(), true);
+    if (!version.resetAnswers) throw new HttpsError('invalid-argument', codingBankErrors.request);
+    await activateBankVersion(request.auth.uid, version.id);
+    return { version, activeVersion: version.id };
+  }
   if (data.action === 'activate' && /^[a-zA-Z0-9-]{16,80}$/.test(data.versionId || '')) return activateBankVersion(request.auth.uid, data.versionId);
   throw new HttpsError('invalid-argument', codingBankErrors.request);
 });

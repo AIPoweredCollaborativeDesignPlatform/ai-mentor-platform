@@ -1,3 +1,8 @@
+## Fresh research-test bank reset (2026-11-12)
+- Admin bank management adds a confirmed one-action reset: fresh latest-source snapshot, isolated answer/case scopes for every target, then activation. Prior banks/ratings are retained; availability controls still apply globally. Open sessions remain pinned until reopened.
+- manageCodingBank reset action uses an idempotent request ID distinct from incremental builds. Metadata resetAnswers distinguishes fresh banks; initial navigation migration is disabled for a fresh reset. Optional semantic refresh uses the existing explicit checkbox.
+- Tests: version integration covers isolated fresh scopes/zero progress and returning to original submitted answers. Full frontend build, backend syntax/import passed. Production ratings and active bank are not reset merely to test the button.
+
 ## Versioned question banks (2026-11-10)
 - New admin manageCodingBank callable: list, create (idempotent request ID, build lease), activate (transaction + activation audit). Uses all current non-deleted rooms via fresh source reads. No automatic LLM calls; optional UI semantic refresh clearly states provider transmission/credits. Coverage counts only matching cached target IDs.
 - Immutable codingBankVersions/{id} metadata and chunked parts (350KB UTF-8 payload, digest validation); codingBankState/current holds monotonic sequence, latest completed, active pointer, build lease. Incomplete/failed snapshots cannot be activated. Source read interval is recorded, not claimed to be a globally atomic database snapshot. Client writes to version metadata/parts are denied.

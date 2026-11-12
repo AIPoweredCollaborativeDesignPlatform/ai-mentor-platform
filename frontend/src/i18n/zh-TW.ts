@@ -2,6 +2,10 @@ import type en from './en';
 
 // Traditional Chinese; must have every key of en.ts
 const zhTW: Record<keyof typeof en, string> = {
+  "coding.resetBank": "清空目前題目並重新出題",
+  "coding.resetHint": "研究測試用：依最新對話重建並立即啟用新題庫，答案與第二階段案例選取從零開始。舊版與答案仍可查閱。題目停用設定仍適用；已開啟的答題頁需重新進入才切換。",
+  "coding.resetConfirm": "確定立即重新出題並啟用嗎？新版答題進度將從零開始，舊版及答案仍保留。上方的語意分析勾選設定也會套用。",
+  "coding.resetVersion": "研究測試重新出題 · 不沿用既有答案",
   "coding.fixedBankHint": "此頁使用固定版次。新對話需由管理者建立並啟用新版後，再重新進入此頁才會納入。",
   "coding.syncBankProgress": "更新此版答題進度",
   "coding.versionManagement": "題庫版次管理",

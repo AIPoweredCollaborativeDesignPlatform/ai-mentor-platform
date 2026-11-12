@@ -12,16 +12,20 @@ const versions = ref<CodingBankVersion[]>([]), bankVersion = ref<CodingBankVersi
 const versionSelection = ref(''), activeVersion = ref(''), versionNote = ref('');
 const building = ref(false), updateSemantic = ref(false);
 let buildRequest = '';
-async function createVersion() {
+let resetRequest = '';
+async function createVersion(reset = false) {
+  if (reset && !window.confirm(t('coding.resetConfirm'))) return;
   building.value = true; error.value = '';
   try {
     if (updateSemantic.value) {
       const live = await fetchCodingBank('live');
       await prepareSemanticQueue(live.rooms);
     }
-    buildRequest ||= crypto.randomUUID();
-    const result = await manageCodingBank({ action: 'create', requestId: buildRequest, note: versionNote.value });
-    versionSelection.value = result.version!.id; buildRequest = ''; versionNote.value = '';
+    if (reset) resetRequest ||= crypto.randomUUID(); else buildRequest ||= crypto.randomUUID();
+    const result = await manageCodingBank({ action: reset ? 'reset' : 'create', requestId: reset ? resetRequest : buildRequest, note: versionNote.value });
+    versionSelection.value = result.version!.id;
+    if (reset) resetRequest = ''; else buildRequest = '';
+    versionNote.value = '';
     await refresh();
   } catch { error.value = t('coding.versionBuildFailed'); }
   finally { building.value = false; }
@@ -146,13 +150,18 @@ onMounted(async () => {
             <p class="text-sm">{{ t('coding.versionSourceRange', { start: date(bankVersion.startedAt), end: date(bankVersion.completedAt || bankVersion.startedAt) }) }}</p>
             <p v-if="bankVersion.counts" class="text-sm">{{ t('coding.versionChanges', bankVersion.counts) }}</p>
             <p v-if="bankVersion.counts" class="text-sm" :class="bankVersion.counts.semanticCovered < bankVersion.counts.questions ? 'text-amber-400' : 'text-slate-400'">{{ t('coding.semanticCoverage', { covered: bankVersion.counts.semanticCovered, total: bankVersion.counts.questions }) }}</p>
+            <p v-if="bankVersion.resetAnswers" class="text-amber-400 text-sm">{{ t('coding.resetVersion') }}</p>
             <p v-if="bankVersion.note" class="text-sm whitespace-pre-wrap">{{ bankVersion.note }}</p>
           </template>
           <p v-else class="text-sm text-amber-400">{{ t('coding.liveBank') }}</p>
           <label class="block">{{ t('coding.versionNote') }}<input v-model="versionNote" :disabled="building" maxlength="300" class="block w-full bg-slate-900 border border-slate-700 p-2 rounded-lg"></label>
           <label class="flex gap-2 items-start text-sm"><input v-model="updateSemantic" type="checkbox" :disabled="building" class="mt-1">{{ t('coding.updateSemanticForVersion') }}</label>
           <p class="text-xs text-slate-400">{{ t('coding.versionSemanticHint') }}</p>
-          <button :disabled="busy || building" class="bg-sky-600 text-white rounded-lg px-4 py-2 disabled:opacity-40" @click="createVersion">{{ t(building ? 'coding.buildingVersion' : 'coding.createVersion') }}</button>
+          <button :disabled="busy || building" class="bg-sky-600 text-white rounded-lg px-4 py-2 disabled:opacity-40" @click="createVersion(false)">{{ t(building ? 'coding.buildingVersion' : 'coding.createVersion') }}</button>
+          <div class="border-t border-slate-700 pt-3 space-y-2">
+            <p class="text-sm text-slate-400">{{ t('coding.resetHint') }}</p>
+            <button :disabled="busy || building" class="border border-amber-500 text-amber-400 rounded-lg px-4 py-2 disabled:opacity-40" @click="createVersion(true)">{{ t('coding.resetBank') }}</button>
+          </div>
         </section>
         <p class="text-sm text-slate-400">{{ t('coding.bankHint') }}</p>
         <p>{{ t('coding.bankTotals', { total: questions.length, enabled: questions.length - disabled.size }) }}</p>

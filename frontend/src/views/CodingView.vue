@@ -76,7 +76,7 @@ async function resumeNavigation() {
   try {
     raw = localStorage.getItem(navigationStorageKey(auth.uid!, bankVersion.value?.id));
     // The initial snapshot uses the same legacy rating scopes and can retain the existing visit order.
-    if (!raw && bankVersion.value && !bankVersion.value.parentVersion) raw = localStorage.getItem(navigationStorageKey(auth.uid!));
+    if (!raw && bankVersion.value && !bankVersion.value.parentVersion && !bankVersion.value.resetAnswers) raw = localStorage.getItem(navigationStorageKey(auth.uid!));
   } catch { /* Start a new session. */ }
   const restored = restoreNavigation(raw, queue.map(questionKey));
   if (!restored) {

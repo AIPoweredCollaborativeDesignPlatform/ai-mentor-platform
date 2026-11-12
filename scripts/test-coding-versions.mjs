@@ -82,6 +82,17 @@ assert.deepEqual((await loadVersionedBank('me', undefined, false, db)).rooms[0].
 await assert.rejects(loadVersionedBank('me', 'live', false, db));
 records.set('codingBankVersions/not-ready', { status: 'building' });
 await assert.rejects(activateBankVersion('admin', 'not-ready', db));
+const reset = await createBankVersion('admin', 'version-reset-00000001', 'test reset', db, true);
+assert.equal(reset.resetAnswers, true);
+assert.equal(reset.counts.reused, 0);
+await activateBankVersion('admin', reset.id, db);
+const fresh = await loadVersionedBank('me', undefined, false, db);
+assert.deepEqual(fresh.rooms[0].completed, []);
+assert.deepEqual(fresh.rooms[0].selected, []);
+assert.ok(Object.values(fresh.rooms[0].revisions).every(scope => scope === reset.id));
+assert.equal((await createBankVersion('admin', reset.id, '', db, true)).id, reset.id);
+await activateBankVersion('admin', first.id, db);
+assert.deepEqual((await loadVersionedBank('me', undefined, false, db)).rooms[0].completed, ['m1']);
 records.set(`codingBankVersions/${first.id}/parts/000000`, { index: 0, payload: 'corrupt' });
 await assert.rejects(readBankVersion(first.id, db));
 console.log('Version tests passed: latest rooms/messages, context changes, unchanged answer reuse, immutable snapshots, Unicode chunking, idempotency, activation/rollback, failed version protection, observer access, integrity.');

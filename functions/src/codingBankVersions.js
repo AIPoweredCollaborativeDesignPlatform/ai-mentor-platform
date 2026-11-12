@@ -22,7 +22,7 @@ function currentSemanticBatch(batch, humans) {
     && context.every((message, i) => message.id === batch.inputMessages[i]?.id && message.content === batch.inputMessages[i]?.content);
 }
 // Preserve immutable source data, excluding reviewer-specific progress and live availability.
-export function snapshotBank(live, previous, versionId) {
+export function snapshotBank(live, previous, versionId, resetAnswers = false) {
   const before = new Map((previous?.rooms || []).map(r => [r.id, r]));
   const counts = { questions: 0, added: 0, changed: 0, reused: 0, removed: 0, semanticCovered: 0 };
   const present = new Set();
@@ -41,7 +41,8 @@ export function snapshotBank(live, previous, versionId) {
       // Changes to any human text, identity, order, or timestamp in the ±5 window need a new judgment.
       fingerprints[m.id] = hash({ policy: 'human-before-after-5-v1', target: m.id,
         messages: humans.slice(Math.max(0, i - 5), i + 6).map(x => [x.id, x.senderUid, x.senderName || '', x.timestamp, x.content]) });
-      if (!previous) { revisions[m.id] = ''; counts.reused++; } // First snapshot establishes the legacy baseline.
+      if (resetAnswers) { revisions[m.id] = versionId; counts.added++; }
+      else if (!previous) { revisions[m.id] = ''; counts.reused++; } // First snapshot establishes the legacy baseline.
       else if (old?.fingerprints?.[m.id] === fingerprints[m.id]) { revisions[m.id] = old.revisions[m.id]; counts.reused++; }
       else { revisions[m.id] = versionId; if (old?.fingerprints?.[m.id]) counts.changed++; else counts.added++; }
       if (covered.has(m.id)) counts.semanticCovered++;
@@ -78,7 +79,7 @@ export async function listBankVersions(db = getFirestore()) {
   const [state, versions] = await Promise.all([db.doc('codingBankState/current').get(), db.collection('codingBankVersions').orderBy('sequence', 'desc').get()]);
   return { activeVersion: state.data()?.activeVersion || '', versions: versions.docs.map(d => ({ id: d.id, ...d.data() })) };
 }
-export async function createBankVersion(uid, requestId, note = '', db = getFirestore()) {
+export async function createBankVersion(uid, requestId, note = '', db = getFirestore(), resetAnswers = false) {
   if (!/^[a-zA-Z0-9-]{16,80}$/.test(requestId) || typeof note !== 'string' || note.length > 300) fail('invalid-argument', 'request');
   const ref = versionRef(db, requestId), stateRef = db.doc('codingBankState/current');
   const reservation = await db.runTransaction(async tx => {
@@ -87,7 +88,7 @@ export async function createBankVersion(uid, requestId, note = '', db = getFires
     const state = current.data() || {};
     if (state.buildUntil > Date.now()) fail('aborted', 'building');
     const sequence = (state.sequence || 0) + 1;
-    const meta = { sequence, status: 'building', createdBy: uid, startedAt: Date.now(), note, parentVersion: state.latestVersion || '' };
+    const meta = { sequence, status: 'building', createdBy: uid, startedAt: Date.now(), note, parentVersion: state.latestVersion || '', resetAnswers };
     tx.set(stateRef, { sequence, buildId: ref.id, buildUntil: Date.now() + 10 * 60000 }, { merge: true });
     tx.set(ref, meta);
     return { meta };
@@ -96,7 +97,7 @@ export async function createBankVersion(uid, requestId, note = '', db = getFires
   try {
     const previous = reservation.meta.parentVersion ? (await readBankVersion(reservation.meta.parentVersion, db)).bank : null;
     const live = await loadCodingBank(null, db);
-    const { bank, counts, roomCount } = snapshotBank(live, previous, ref.id);
+    const { bank, counts, roomCount } = snapshotBank(live, previous, ref.id, reservation.meta.resetAnswers);
     const parts = snapshotParts(bank);
     for (let start = 0; start < parts.length; start += 100) {
       const batch = db.batch();

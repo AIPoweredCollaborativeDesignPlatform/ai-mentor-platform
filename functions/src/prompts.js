@@ -2,7 +2,7 @@
 // Profiles may override any block (profile.prompts); the profile version then identifies the wording used.
 import { localized } from './i18n.js';
 
-export const PROMPT_VERSION = 'v16-2026-11-05';
+export const PROMPT_VERSION = 'v18-2026-11-12';
 
 const LANGUAGE_NAMES = { en: 'English', 'zh-TW': 'Traditional Chinese (繁體中文)' };
 export const languageName = code => LANGUAGE_NAMES[code] || LANGUAGE_NAMES['zh-TW'];
@@ -70,12 +70,13 @@ Ready to move on when: a concept is chosen and checked.`,
    | Criteria | Option A | Option B | Consensus / Trade-off |
    Documents use sections: ## 1. Objectives & Consensus, ## 2. Comparison Matrix, ## 3. Key Discussion Points, ## 4. Action Items & Owners.
 9. Fact checks: verify with the web search tool when available and cite REAL, direct http(s) URLs in "references".
-10. 3D: describe a static, watertight product prototype (no animation). When the team wants a 3D model of a sketch or image in the conversation (marked [image id=...]), set assetData.fromImage to that id: the model is then built from the image itself, and prompt3D only describes it.
+10. 3D: describe a static, watertight product prototype (no animation). When the team wants a 3D model of a sketch or image in the conversation (marked [image id=...]), set assetData.fromImage to that id: the model is then built from the image itself, and prompt3D only describes it. A build takes minutes and costs credits, so before building or rebuilding one when others are online, set assetData.askFirst to true and let aiMessage briefly ask the others (by name) whether they want to add anything; the model is built automatically after a short quiet moment, or with their additions. Skip the question (askFirst false) when someone asked to build it right away, or the others already said they have nothing to add. When changing an existing model, keep its fromImage and gather every requested change into one build.
 11. Moodboards (image boards) are a loose collage the designers can rearrange, not a grid. Provide a title, a one-sentence description, keywords, a palette (hex + name), materials (name + feature) and 4-6 images chosen for what the team needs now, for example: a rendered view of the concept, the product in its usage scene, reference products or analogies from other fields, loose pencil form sketches, a material or detail close-up.
     Give each image "size": "large" (at most one, the main visual) | "medium" | "small".
     Each image "prompt" must be a concrete, vivid ENGLISH visual description for an image generator (for sketches say "loose pencil sketch on white paper").
     When you post an asset, the aiMessage just hands it over in one casual line.
 12. Idea sketches ("sketch"): when the team is generating forms, or words are not enough to picture an idea, draw 2-4 quick idea sketches of what they discussed: variations of form or mechanism, or different views of one idea. Each sketch "prompt" is a concrete ENGLISH description of the object and view only (the pencil-sketch style is added automatically). The aiMessage hands them over in one casual line.
+    When the team asks you to work from an image in the conversation (a hand sketch, a photo, an earlier sketch; marked [image id=...]), set assetData.fromImage to that id and assetData.mode to "refine" (clean up and resolve the same design) or "variations" (develop other forms from it); the image is then redrawn as clean pencil sketches on a white background, and "sketches" may be left empty.
 13. Never evaluate or grade people.`,
 
   outputFormat: `Before deciding, write short working notes in "assessment". They are ALWAYS required (also when you stay silent), are written in English, are kept for the research log and drive the stage display; never write them into aiMessage. Use your own words.
@@ -96,9 +97,9 @@ Return ONLY one JSON object (no prose before or after):
   "actionOptions": ["Option A", "Option B"],
   "assetType": "parametric_3d" | "moodboard" | "sketch" | "summary" | "fact_check" | null,
   "assetData": {
-    // parametric_3d: { "title", "prompt3D": "detailed text-to-3D prompt (shape, materials, textures, style)", "fromImage": "image message id (optional)", "meshType": "group", "components": [ { "shape": "box"|"cylinder"|"sphere"|"torus", "dimensions": {}, "position": {}, "material": { "color", "roughness", "metalness" } } ] }
+    // parametric_3d: { "title", "prompt3D": "detailed text-to-3D prompt (shape, materials, textures, style)", "fromImage": "image message id (optional)", "askFirst": true|false, "meshType": "group", "components": [ { "shape": "box"|"cylinder"|"sphere"|"torus", "dimensions": {}, "position": {}, "material": { "color", "roughness", "metalness" } } ] }
     // moodboard: { "title", "description", "keywords": [], "images": [ { "title", "category", "size", "isAiGenerated": true, "prompt" } ], "palette": [ { "hex", "name" } ], "materials": [ { "name", "feature" } ] }
-    // sketch: { "title", "description", "sketches": [ { "title", "prompt" } ] }
+    // sketch: { "title", "description", "sketches": [ { "title", "prompt" } ], "fromImage": "image message id (optional)", "mode": "refine" | "variations" }
     // summary: { "title", "content": "rich Markdown with tables and action items" }
     // fact_check: { "claim", "verdict", "details", "references": ["https://..."] }
   }
@@ -129,7 +130,9 @@ Each brief is a piece of furniture or an everyday product of medium difficulty, 
 Return ONLY one JSON object: {"message": "your chat message (without listing the briefs)", "topics": ["brief 1", "brief 2", "brief 3", "brief 4"]}. The briefs are shown as a poll under your message.`,
   taskOpen: `There is no fixed design task: the team chooses its own (furniture or an everyday product), from your opening suggestions or their own idea. Treat whatever they agree on in the conversation as the task.`,
   roomTitle: `The room still has its default name. Once the team's design direction is clear (an agreed problem statement or a chosen concept), add a top-level "roomTitle" to your JSON: a short, plain name for their design in {{lang}} (at most 16 characters in Chinese or 5 words in English). Add it only once, and only when the direction is really settled; otherwise leave it out.`,
-  sessionReminder: `About {{minutesLeft}} minute(s) remain in the session. Remind the team of the remaining time and, based on where the discussion stands, suggest one thing worth focusing on. Do not rush them.`,
+  sessionReminder: `About {{minutesLeft}} minute(s) remain in the session. By the usual plan the team would now be in the "{{plannedStage}}" stage of the Double Diamond; from your own judgement they are in "{{currentStage}}".
+Remind them of the remaining time and, in plain words (no stage jargon), say how that compares with the plan: on track, ahead, or behind and what is still missing. Then suggest one thing worth focusing on next. Encourage, do not rush or blame.
+If the conversation shows you already told them the remaining time in the last two minutes, reply with exactly SKIP.`,
   sessionTimeUp: `The session time is up. Tell the team that time is up, briefly acknowledge where they ended, and thank them. Do not open new topics.`,
 
   vision: `You are analyzing a snapshot of a collaborative design whiteboard.
@@ -154,7 +157,8 @@ The team's language is {{lang}}; use it to understand any notes.
 /** Image + conversation -> on-topic prompts for image-to-image sketches (src/sketchBrief.js). */
 export const SKETCH_BRIEF_PROMPT = `You prepare prompts for an image-to-image generator that draws idea sketches in a product design session. You see an image the designers shared (a hand sketch, a photo or an earlier sketch) and their conversation.
 1. Work out what the image shows and which idea from the conversation it belongs to: the design task, the users and situation, the needs and the ideas they discussed. Read an unclear drawing in the light of the conversation; never treat it as an unrelated object.
-2. Write the prompts asked for. Each "prompt" is a concrete ENGLISH description of the object: product type, who uses it and where, overall form, main parts, mechanism and materials, faithful to the image's composition and to the discussion. No drawing-style words (the style is added automatically). Each "title" is 2-6 words in {{lang}}.
+2. Describe only the designed object, never the medium: no paper, sticky note, whiteboard, pen strokes, handwriting, notes, arrows or background from the image.
+3. Write the prompts asked for. Each "prompt" is a concrete ENGLISH description of the object: product type, who uses it and where, overall form, main parts, mechanism and materials, faithful to the image's composition and to the discussion. No drawing-style words (the style is added automatically). Each "title" is 2-6 words in {{lang}}.
 Return ONLY one JSON object: {"subject": "one English sentence: what the image shows and how it relates to the discussion", "items": [{"title": "...", "prompt": "..."}]}`;
 
 /** Admin profile editor: one-sentence description -> persona settings (index.js draftAiProfile). */
@@ -188,7 +192,7 @@ export const PROMPT_PLACEHOLDERS = {
   sessionKickoff: ['duration'],
   sessionKickoffTopics: ['duration'],
   roomTitle: ['lang'],
-  sessionReminder: ['minutesLeft'],
+  sessionReminder: ['minutesLeft', 'plannedStage', 'currentStage'],
   textToSvg: ['svgRules', 'request'],
   sketchToSvg: ['lang', 'svgRules', 'notes']
 };
@@ -252,7 +256,7 @@ function teamDynamics(participants, messages) {
 /** Last 20 messages with reactions and live poll results inlined. */
 export function buildTranscript(messages, participants) {
   return messages.slice(-20).map(m => {
-    let line = `${m.senderName}: ${m.content}${m.imageUrl ? ` [image id=${m.id}]` : ''}`;
+    let line = `${m.senderName}: ${m.content}${m.imageUrl ? ` [image id=${m.id}]` : ''}${m.aiTool ? ` [tool tag: ${m.aiTool}]` : ''}`;
     const reactions = Object.entries(m.reactions || {})
       .filter(([, uids]) => Array.isArray(uids) && uids.length)
       .map(([emoji, uids]) => `${emoji} x${uids.length} (${uids.map(uid => participants?.[uid]?.displayName || 'Member').join(', ')})`);
@@ -365,7 +369,7 @@ const sessionDuration = profile => {
  * Facilitation messages of the experiment flow (src/session.js). Always written by the AI itself,
  * never canned: `kind` is kickoff (open the topic after the opening text), reminder or time_up.
  */
-export function sessionMessagePrompt({ kind, profile, language, minutesLeft }) {
+export function sessionMessagePrompt({ kind, profile, language, minutesLeft, plannedStage = 'unknown', currentStage = 'not judged yet' }) {
   const prompts = profile?.prompts;
   const goalKey = kind === 'kickoff' && profile?.session?.taskMode === 'ai_suggest' ? 'sessionKickoffTopics'
     : { kickoff: 'sessionKickoff', reminder: 'sessionReminder', time_up: 'sessionTimeUp' }[kind];
@@ -373,7 +377,7 @@ export function sessionMessagePrompt({ kind, profile, language, minutesLeft }) {
     name: profile?.displayName?.[language] || profile?.displayName?.en || 'AI Mentor',
     persona: profile?.persona || 'calm, neutral and brief',
     task: localized(profile?.session?.taskDescription, language) || 'n/a',
-    goal: fill(block(prompts, goalKey), { minutesLeft, duration: sessionDuration(profile) }),
+    goal: fill(block(prompts, goalKey), { minutesLeft, plannedStage, currentStage, duration: sessionDuration(profile) }),
     lang: languageName(language),
     ...styleVars(profile, language)
   });

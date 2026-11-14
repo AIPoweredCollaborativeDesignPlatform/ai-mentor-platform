@@ -7,10 +7,11 @@ import { logAiCall } from './log.js';
 
 const TASKS = {
   variations: 'Write 3 items: (1) the same idea, more resolved; (2) a bolder variation of its form and proportions; (3) a different mechanism, joint or way of use. All three stay the same kind of product for the same users and needs.',
-  refine: 'Write 2 items describing the same object faithfully: (1) for a clean presentation sketch; (2) for a realistic render (also name plausible materials and finishes).'
+  refine: 'Write 2 items describing the same object faithfully: (1) for a clean presentation sketch; (2) for a realistic render (also name plausible materials and finishes).',
+  refineSketch: 'Write 3 items describing the same design faithfully, cleaned up and resolved, each from a different view (three-quarter, front, side). Keep its form, parts and proportions.'
 };
 
-const imageBlock = image => (image.startsWith('data:') ? imageBlockFromDataUrl(image) : { type: 'image', source: { type: 'url', url: image } });
+export const imageBlock = image => (image.startsWith('data:') ? imageBlockFromDataUrl(image) : { type: 'image', source: { type: 'url', url: image } });
 
 /**
  * Before fal draws anything, Claude looks at the shared image together with the conversation and writes

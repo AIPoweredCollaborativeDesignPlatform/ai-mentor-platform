@@ -29,13 +29,15 @@ const LOCK_MS = 150_000;
 const TYPING_BEFORE_POST_MS = 2500;
 const CONTEXT_MESSAGES = 60;
 const AI_UIDS = new Set(['ai_mentor', 'ai_mentor_3d', 'system']);
+// Tool tags a participant can attach to a message (composer buttons): the AI must answer with that asset type
+const TOOLS = new Set(['parametric_3d', 'sketch', 'moodboard', 'fact_check', 'summary']);
 
 const isPrivateBoard = m => m.type === 'whiteboard_state' && m.metadata?.isPrivate !== false;
 // The image a message carries (an upload, or the first AI sketch / moodboard image); 3D can be built from it
 const imageOf = m => (m.type === 'file' && m.fileData?.type === 'image' ? m.fileData.url
   : ['sketch', 'moodboard'].includes(m.assetType) ? m.assetPayload?.images?.find(i => i?.url)?.url : null) || null;
 
-const EMPTY_STATE = { msgsSinceCheck: 0, msgsSinceMemory: 0, lastCheckAt: 0, lastInterventionAt: 0, lastMessageId: null, lastMessageAt: 0, lastStallMessageId: null, lockUntil: 0 };
+const EMPTY_STATE = { msgsSinceCheck: 0, msgsSinceMemory: 0, lastCheckAt: 0, lastInterventionAt: 0, lastMessageId: null, lastMessageAt: 0, lastStallMessageId: null, lockUntil: 0, pending3DAsk: null };
 
 /** Snapshots a profile into a room (frozen) and publishes the participant-safe view. */
 export async function assignProfileToRoom(roomId, profile, assignedBy) {
@@ -76,7 +78,7 @@ export async function fetchContext(roomId) {
   ]);
   const messages = msgSnap.docs.reverse().map(d => {
     const m = d.data();
-    return { id: d.id, senderUid: m.senderUid, senderName: m.senderName, content: String(m.content || '').slice(0, 1500), timestamp: m.timestamp, reactions: m.reactions || {}, actionOptions: m.actionOptions || [], pollVotes: m.pollVotes || {}, suggestion: m.suggestion || null, assetType: m.assetType || null, imageUrl: imageOf(m), privateBoard: isPrivateBoard(m) };
+    return { id: d.id, senderUid: m.senderUid, senderName: m.senderName, content: String(m.content || '').slice(0, 1500), timestamp: m.timestamp, reactions: m.reactions || {}, actionOptions: m.actionOptions || [], pollVotes: m.pollVotes || {}, suggestion: m.suggestion || null, assetType: m.assetType || null, aiTool: m.aiTool || null, imageUrl: imageOf(m), privateBoard: isPrivateBoard(m) };
     // Private whiteboard drafts are personal scratch space: the AI never sees their cards
   }).filter(m => m.senderUid !== 'system' && !m.privateBoard);
   const room = roomSnap.data() || {};
@@ -149,7 +151,7 @@ export async function postAiMessage(roomId, room, profile, { content, assetType 
 }
 
 /** Runs one check. `forced` = explicit mention or retry; otherwise reason is pause | stall | max_messages. */
-export async function runCheck(roomId, secrets, { reason, forced = false, callerUid = null, callerName = '', retryMessageId = null, note = '' }) {
+export async function runCheck(roomId, secrets, { reason, forced = false, callerUid = null, callerName = '', retryMessageId = null, note = '', requiredTool = null }) {
   const roomAi = await ensureRoomAi(roomId);
   const profile = roomAi.profile;
   const state = { ...EMPTY_STATE, ...(roomAi.state || {}) };
@@ -173,11 +175,18 @@ export async function runCheck(roomId, secrets, { reason, forced = false, caller
     return;
   }
 
+  // A direct request while the AI waits for additions before a 3D build supersedes that wait
+  if (forced && state.pending3DAsk) {
+    await roomAiRef(roomId).set({ state: { pending3DAsk: null } }, { merge: true });
+    note = [note, 'You had just asked the others whether they wanted to add anything before you build the 3D model. Read their latest messages: build it now with every addition (askFirst false), unless they asked you to wait.'].filter(Boolean).join(' ');
+  }
+
   const startedAt = Date.now();
   const stopPresence = visible && forced
     ? startPresence(roomId, 'text', { type: 'AI Mentor', callerName, callerUid, prompt: '' })
     : null;
   let pending3D = null;
+  let ask3D = null;
 
   try {
     const { room, messages, participants } = await fetchContext(roomId);
@@ -203,7 +212,8 @@ export async function runCheck(roomId, secrets, { reason, forced = false, caller
       callerUid,
       visible,
       note,
-      rosterNote
+      rosterNote,
+      requiredTool
     });
 
     const latestRoom = (await roomRef(roomId).get()).data() || {};
@@ -230,7 +240,15 @@ export async function runCheck(roomId, secrets, { reason, forced = false, caller
       const actionOptions = reason === 'poll_settled' || recentPoll ? [] : out.result.actionOptions;
       // Offers are shown as a card with Accept / Not now; every answer is kept on the message (handleSuggestionAnswer)
       const suggestion = out.result.offer === true && !assetType && !actionOptions?.length ? { responses: {} } : null;
-      if (assetType === 'parametric_3d') {
+      // 3D builds cost credits and minutes: with others online, the AI first asks whether anyone wants to add something
+      const others = roster.filter(n => n !== (callerName || participants[callerUid]?.displayName));
+      if (assetType === 'parametric_3d' && assetData?.askFirst && others.length && reason !== 'model3d_followup') {
+        const fromImage = assetData?.fromImage ? messages.find(m => m.id === assetData.fromImage)?.imageUrl : null;
+        await postAiMessage(roomId, room, profile, { content: aiMessage, meta: out.meta }, retryMessageId);
+        const askedAt = Date.now();
+        ask3D = { askedAt, build: { aiMessage: str('model3dBuilding', room.language), assetData, prompt: assetData?.prompt3D || assetData?.title || 'product prototype', meta: out.meta, room, fromImage, sourceMessageId: fromImage ? assetData.fromImage : null } };
+        stateUpdate.pending3DAsk = { at: askedAt };
+      } else if (assetType === 'parametric_3d') {
         // The mesh is generated after the lock is released; the instant parametric preview is the fallback
         // "fromImage": the id of an image message in the transcript; the model is then built from that image
         const fromImage = assetData?.fromImage ? messages.find(m => m.id === assetData.fromImage)?.imageUrl : null;
@@ -263,6 +281,47 @@ export async function runCheck(roomId, secrets, { reason, forced = false, caller
   }
 
   if (pending3D) await run3D(roomId, profile, secrets, pending3D);
+  if (ask3D) await awaitAdditionsThen3D(roomId, profile, secrets, ask3D);
+}
+
+// After asking "anything to add?": wait for 10 quiet seconds (longer while someone types, at most 2 minutes)
+const ASK_QUIET_MS = 10_000;
+const ASK_MAX_MS = 120_000;
+const TYPING_FRESH_MS = 5_000;
+
+/** Builds the 3D model once the others had their say: unchanged if nobody answered, otherwise with their additions. */
+async function awaitAdditionsThen3D(roomId, profile, secrets, { askedAt, build }) {
+  let lastActivity = askedAt;
+  let replies = 0;
+  while (Date.now() - askedAt < ASK_MAX_MS) {
+    await sleep(2000);
+    const state = (await roomAiRef(roomId).get()).data()?.state || {};
+    if (state.pending3DAsk?.at !== askedAt) return; // superseded by a direct request
+    const now = Date.now();
+    const [msgs, typing] = await Promise.all([
+      roomRef(roomId).collection('messages').where('timestamp', '>', askedAt).get(),
+      roomRef(roomId).collection('typing').get()
+    ]);
+    const human = msgs.docs.map(d => d.data()).filter(m => !AI_UIDS.has(m.senderUid));
+    replies = human.length;
+    if (human.length) lastActivity = Math.max(lastActivity, ...human.map(m => m.timestamp || 0));
+    const someoneTyping = typing.docs.some(d => !AI_UIDS.has(d.id) && now - (d.data().timestamp || 0) < TYPING_FRESH_MS);
+    if (someoneTyping) lastActivity = now;
+    if (now - lastActivity >= ASK_QUIET_MS) break;
+  }
+  // Only the handler that still owns the wait goes on
+  const claimed = await db().runTransaction(async tx => {
+    const snap = await tx.get(roomAiRef(roomId));
+    if (snap.data()?.state?.pending3DAsk?.at !== askedAt) return false;
+    tx.set(roomAiRef(roomId), { state: { pending3DAsk: null } }, { merge: true });
+    return true;
+  });
+  if (!claimed) return;
+  if (!replies) return run3D(roomId, profile, secrets, build);
+  return runCheck(roomId, secrets, {
+    reason: 'model3d_followup', forced: true,
+    note: 'You asked the others whether they wanted to add anything before you build the 3D model, and they replied. Build it now with every addition in one model (askFirst false, keep fromImage of the model being changed), unless they asked you to wait.'
+  });
 }
 
 const STAGES = new Set(['discover', 'define', 'develop', 'deliver']);
@@ -343,7 +402,12 @@ export async function handleNewMessage(roomId, messageId, msg, secrets) {
   });
 
   if (isMentioned(msg.content, profile)) {
-    return runCheck(roomId, secrets, { reason: 'mention', forced: true, callerUid: msg.senderUid, callerName: msg.senderName });
+    return runCheck(roomId, secrets, { reason: 'mention', forced: true, callerUid: msg.senderUid, callerName: msg.senderName, requiredTool: TOOLS.has(msg.aiTool) ? msg.aiTool : null });
+  }
+  // Replies to "anything to add before the 3D build?" are handled by awaitAdditionsThen3D
+  if (state.pending3DAsk && Date.now() - state.pending3DAsk.at < ASK_MAX_MS + 30_000) {
+    await logAiCall({ kind: 'trigger_skip', roomId, reason: 'pending_3d_additions', detail: 'waiting for additions before a 3D build', mode: profile.mode });
+    return;
   }
   if (t.maxMessagesBetweenChecks && state.msgsSinceCheck >= t.maxMessagesBetweenChecks) {
     return runCheck(roomId, secrets, { reason: 'max_messages' });

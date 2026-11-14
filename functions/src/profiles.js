@@ -45,7 +45,8 @@ export const DEFAULT_PROFILE = {
     // 'assigned' = the task above (or none); 'ai_suggest' = the AI opens with a few briefs to pick from
     taskMode: 'assigned',
     taskMinutes: 30, // 0 = no time limit (no reminders, no time-up message)
-    reminderMinutes: [5] // minutes before the end at which the AI writes a reminder
+    // Minutes before the end at which the AI writes a reminder, comparing the team's stage with the planned one
+    reminderMinutes: [30, 15, 5]
   },
   // Chat tone: 1 formal ... 5 very casual; maxSentences caps every chat message (assets are not limited)
   style: { casualness: 4, maxSentences: 2 },

@@ -1,5 +1,5 @@
 import { addDoc, updateDoc } from 'firebase/firestore';
-import type { MessageItem } from '../../types';
+import type { MessageItem, AiTool } from '../../types';
 import { roomCollection, roomDocRef, roomRef, stripUndefined, tempId, type RoomContext } from './context';
 import { t } from '../../i18n';
 
@@ -60,18 +60,19 @@ export function useRoomMessages(ctx: RoomContext, setMyTyping: (typing: boolean)
 
   const sendCustomMessage = (customPayload: Partial<MessageItem>) => postMessage(customPayload);
 
-  const sendTextMessage = (text: string, replyTo?: { id: string; senderName: string; text: string }) =>
+  const sendTextMessage = (text: string, replyTo?: { id: string; senderName: string; text: string }, aiTool?: AiTool) =>
     postMessage(
-      { content: text.trim(), ...(replyTo ? { replyTo } : {}) },
+      { content: text.trim(), ...(replyTo ? { replyTo } : {}), ...(aiTool ? { aiTool } : {}) },
       { preview: text.trim().slice(0, 100), failToast: [t('msg.sendFailedTitle'), t('msg.sendFailedText')] }
     );
 
   const sendFileMessage = async (
     fileData: { name: string; size: number; type: 'image' | 'video' | 'document'; url: string; mimeType?: string },
-    caption = ''
+    caption = '',
+    aiTool?: AiTool
   ) => {
     await postMessage(
-      { type: 'file', content: caption || '', fileData },
+      { type: 'file', content: caption || '', fileData, ...(aiTool ? { aiTool } : {}) },
       {
         preview: caption ? caption.slice(0, 100) : `📎 ${fileData.name}`,
         failToast: [t('msg.attachErrorTitle'), t('msg.attachErrorText')]

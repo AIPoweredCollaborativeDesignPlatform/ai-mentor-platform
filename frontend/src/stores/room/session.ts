@@ -99,7 +99,11 @@ export function useRoomSession(ctx: RoomContext) {
       if (!currentRoom.value) {
         currentRoom.value = { ...data, participants: {}, messages: [] };
       } else {
+        // Every field of the room document (progress, nameIsDefault...), then the ones that need a default
+        const { participants: _p, messages: _m, ...fields } = data as RoomData & { participants?: unknown; messages?: unknown };
         Object.assign(currentRoom.value, {
+          ...fields,
+          progress: data.progress,
           hostUid: data.hostUid,
           pin: data.pin,
           roomName: data.roomName,

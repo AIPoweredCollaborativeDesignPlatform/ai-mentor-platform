@@ -80,16 +80,20 @@ watch(boardIds, ids => {
 });
 // Follow the board that was last changed, unless one was picked by hand
 const followBoard = ref(true);
-watch(idx, i => {
+const followAt = (i: number) => {
   if (!followBoard.value) return;
-  for (let j = i; j >= 0 && j > i - 50; j--) {
+  for (let j = i; j >= 0 && j > i - 500; j--) {
     const e = events.value[j];
-    if (e?.kind.startsWith('board_object_')) {
+    // Opening a board counts too, so a new empty board is shown before anyone draws on it
+    if (e?.kind.startsWith('board_object_') || e?.kind === 'whiteboard_open') {
       boardId.value = e.data.boardId;
       return;
     }
   }
-});
+};
+watch(idx, followAt);
+// Ticking "follow" again jumps straight to the board in use at this moment
+watch(followBoard, on => on && followAt(idx.value));
 const boardObjects = computed(() => {
   if (!boardId.value) return [];
   const final = finalBoards.value[boardId.value];

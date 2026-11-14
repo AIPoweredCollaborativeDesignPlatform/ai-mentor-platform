@@ -37,6 +37,8 @@ export async function generateImages(prompts, opts) {
 
 // Sketch look added to every sketch prompt, so the style stays the same whatever the AI writes
 export const SKETCH_STYLE = 'loose pencil product design idea sketch on white paper, black line art with light grey shading, a few construction lines, no text, no colour';
+// Redrawing a shared image: only the object, never the sticky note, paper or notes around it
+const CLEAN = 'plain clean white background, only the object, no paper texture, no sticky note, no handwriting, no text or annotations';
 const REFINE_STYLES = [
   'clean, confident product design presentation sketch of the same object, black pencil line art with light grey shading on white paper, same form and proportions, no text',
   'photorealistic product render of the same object, soft studio lighting, neutral light background, same form and proportions, no text'
@@ -70,7 +72,18 @@ const VARIATION_STYLES = [
 export async function sketchVariations(imageUrl, notes, opts, items = null) {
   const hint = notes ? ` The designers say: ${notes}.` : '';
   const results = await Promise.allSettled(VARIATION_STYLES.map((style, i) =>
-    generateImage(items?.[i] ? `${items[i].prompt}. ${SKETCH_STYLE}` : `${style}. ${SKETCH_STYLE}.${hint}`, { ...opts, imageUrl, strength: i === 0 ? 0.7 : 0.82 })));
+    generateImage(items?.[i] ? `${items[i].prompt}. ${SKETCH_STYLE}, ${CLEAN}` : `${style}. ${SKETCH_STYLE}, ${CLEAN}.${hint}`, { ...opts, imageUrl, strength: i === 0 ? 0.8 : 0.9 })));
+  return results.map(r => (r.status === 'fulfilled' ? r.value : ''));
+}
+
+/**
+ * The AI's "sketch" asset based on an image: refine = the same design cleaned up, from a few views;
+ * variations = new forms developed from it (weaker hold on the original, so it is not just traced).
+ */
+export async function sketchesFromImage(imageUrl, items, mode, opts) {
+  const strength = mode === 'refine' ? 0.72 : 0.88;
+  const results = await Promise.allSettled(items.map(item =>
+    generateImage(`${item.prompt}. ${SKETCH_STYLE}, ${CLEAN}`, { ...opts, imageUrl, strength })));
   return results.map(r => (r.status === 'fulfilled' ? r.value : ''));
 }
 

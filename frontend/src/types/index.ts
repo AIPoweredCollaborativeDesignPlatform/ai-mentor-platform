@@ -33,6 +33,9 @@ export interface ToastMessage {
   }[];
 }
 
+/** Tool tag from a composer button: the AI must answer with this asset type (functions/src/engine.js TOOLS) */
+export type AiTool = 'parametric_3d' | 'sketch' | 'moodboard' | 'fact_check' | 'summary';
+
 export interface MessageItem {
   id: string;
   senderUid: string;
@@ -48,6 +51,7 @@ export interface MessageItem {
   collage?: Record<string, { x: number; y: number; w: number; z?: number; by?: string; at?: number }>;
   timestamp: number;
   status?: 'sending' | 'delivered' | 'failed';
+  aiTool?: AiTool;
   replyTo?: {
     id: string;
     senderName: string;

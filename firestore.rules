@@ -353,7 +353,8 @@ service cloud.firestore {
         // Participants post only as themselves; the researcher (host) is a read-only observer. AI and
         // system messages (notices, profile/room changes, time-up…) are written by Cloud Functions only.
         allow create: if isApprovedParticipant(roomId) && !isRoomHost(roomId) &&
-          request.resource.data.senderUid == request.auth.uid;
+          request.resource.data.senderUid == request.auth.uid &&
+          (!('aiTool' in request.resource.data) || request.resource.data.aiTool in ['parametric_3d', 'sketch', 'moodboard', 'fact_check', 'summary']);
         // Sender and type never change (no re-attributing a message to someone else, the AI or the system).
         // Other members may react/vote, and refresh the thumbnail of a shared board they edit.
         allow update: if !request.resource.data.diff(resource.data).affectedKeys().hasAny(['senderUid', 'type']) && (

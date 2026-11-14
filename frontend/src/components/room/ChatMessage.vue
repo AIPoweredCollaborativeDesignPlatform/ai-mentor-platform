@@ -276,6 +276,7 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
           <span>{{ t('msg.mentioned') }}</span>
         </div>
 
+        <div v-if="msg.aiTool" class="mb-1 inline-flex items-center px-1.5 py-0.5 rounded-md border border-sky-500/40 text-[10px] text-sky-300 select-none">{{ t(`tool.${msg.aiTool}` as any) }}</div>
         <div v-if="msg.replyTo" class="mb-2 px-2.5 py-1 rounded-lg bg-slate-800/50 border-l-2 border-sky-400 text-xs text-slate-300 select-none min-w-0 max-w-full overflow-hidden">
           <div class="font-semibold text-[10px] text-sky-300 truncate">{{ msg.replyTo.senderName }}</div>
           <div class="truncate text-[11px] opacity-80">{{ msg.replyTo.text }}</div>

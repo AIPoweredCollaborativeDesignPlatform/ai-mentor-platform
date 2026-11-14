@@ -244,17 +244,29 @@ export async function sessionTick() {
 
 async function reminderMinutes(roomId) {
   const roomAi = await ensureRoomAi(roomId);
-  return (roomAi.profile?.session?.reminderMinutes || []).map(Number).filter(m => m > 0);
+  // A reminder as long as the session itself would come at the start: skipped
+  const total = Number(roomAi.profile?.session?.taskMinutes) || Infinity;
+  return (roomAi.profile?.session?.reminderMinutes || []).map(Number).filter(m => m > 0 && m < total);
 }
 
 // ---------- AI-written session messages ----------
+
+// Usual Double Diamond plan, as the share of the session at which each stage ends
+const STAGE_PLAN = [['discover', 0.25], ['define', 0.4], ['develop', 0.8], ['deliver', 1]];
+/** Planned stage at this moment and the stage the AI last judged (rooms/{id}.progress). */
+function stagesAt(room, profile) {
+  const s = room.session || {};
+  const total = (Number(profile.session?.taskMinutes) || 0) * 60_000 || (s.endsAt - s.startedAt);
+  const share = total > 0 ? Math.min(1, Math.max(0, (Date.now() - s.startedAt) / total)) : 0;
+  return { plannedStage: STAGE_PLAN.find(([, end]) => share < end)?.[0] || 'deliver', currentStage: room.progress?.stage || 'not judged yet' };
+}
 
 async function writeSessionMessage({ apiKey, roomId, room, profile, memory, kind, minutes }) {
   const sys = await getSystemConfig();
   const model = sys.models.mentor;
   const language = room.language || 'zh-TW';
   const { messages, participants } = await fetchContext(roomId);
-  const system = sessionMessagePrompt({ kind, profile, language, minutesLeft: minutes });
+  const system = sessionMessagePrompt({ kind, profile, language, minutesLeft: minutes, ...(kind === 'reminder' ? stagesAt(room, profile) : {}) });
   const user = `Recent conversation:\n${buildTranscript(messages, participants) || '(no messages yet)'}${
     memory?.summary ? `\n\nYour memory of the session so far: ${memory.summary}` : ''}`;
   const startedAt = Date.now();
@@ -266,6 +278,11 @@ async function writeSessionMessage({ apiKey, roomId, room, profile, memory, kind
       const response = await createMessage(apiKey, { model, max_tokens: 1000, output_config: { effort: 'low' }, system, messages: [{ role: 'user', content: user }] });
       let text = responseText(response).trim();
       if (!text) throw new Error('Empty response');
+      // A reminder the AI found redundant (it just told the time): nothing is posted
+      if (kind === 'reminder' && /^SKIP/i.test(text)) {
+        await logAiCall({ ...log, output: { text, skipped: true }, latencyMs: Date.now() - startedAt });
+        return null;
+      }
       // Kickoff with AI-suggested briefs: {"message", "topics"} -> message + poll
       let topics = [];
       if (kind === 'kickoff' && profile.session?.taskMode === 'ai_suggest') {

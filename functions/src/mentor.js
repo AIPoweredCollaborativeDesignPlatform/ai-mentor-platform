@@ -1,8 +1,12 @@
 import { getSystemConfig } from './config.js';
 import { Anthropic, classifyError, createMessage, parseJsonObject, responseText } from './claude.js';
 import { PROMPT_VERSION, buildTranscript, memoryPrompt, mentorSystemPrompt } from './prompts.js';
-import { generateImages, generateSketches } from './images.js';
+import { generateImages, generateSketches, sketchesFromImage } from './images.js';
+import { imageBlock, sketchBrief } from './sketchBrief.js';
 import { countWebSearches, logAiCall } from './log.js';
+
+// Attempts at getting a valid JSON reply before the error is shown in the chat
+const PARSE_ATTEMPTS = 3;
 
 export const FRIENDLY_ERRORS = {
   KEY_INVALID: 'The AI service key is not configured correctly. Please contact the study administrator.',
@@ -10,7 +14,7 @@ export const FRIENDLY_ERRORS = {
   HIGH_DEMAND: 'The AI service is overloaded right now (high demand). Please retry.',
   NETWORK: 'Could not reach the AI service. Please retry.',
   BAD_REQUEST: 'The AI request was rejected. Please retry or rephrase.',
-  PARSE_ERROR: 'The AI returned an unexpected format. Please retry.',
+  PARSE_ERROR: 'The AI got tangled up for a moment. Please ask again.',
   UNKNOWN: 'The AI request failed. Please retry.'
 };
 
@@ -21,7 +25,7 @@ const usageOf = response => (response?.usage ? { input: response.usage.input_tok
  * transcript, calls Claude, generates moodboard images if needed, and writes the research log.
  * Never throws; on failure returns { error }.
  */
-export async function analyze({ apiKey, falKey, roomId, room, messages, participants, profile, memory, forced, reason, callerUid, visible, note = '', rosterNote = '' }) {
+export async function analyze({ apiKey, falKey, roomId, room, messages, participants, profile, memory, forced, reason, callerUid, visible, note = '', rosterNote = '', requiredTool = null }) {
   const sys = await getSystemConfig();
   const model = sys.models.mentor;
   const language = room.language || 'zh-TW';
@@ -46,12 +50,17 @@ export async function analyze({ apiKey, falKey, roomId, room, messages, particip
     note || (forced ? 'You were explicitly asked by a participant (forced).' : `Automatic check (reason: ${reason}).`)
   }\nRespond with the JSON object only.`;
 
+  // A tool tag (composer button) fixes the asset type, unless that module is off
+  const allowed = { parametric_3d: modules.enable3D, moodboard: modules.enableMoodboard, sketch: modules.enableSketch !== false, fact_check: modules.enableFactRetrieval, summary: modules.enableSummary !== false };
+  const tool = requiredTool && allowed[requiredTool] ? requiredTool : null;
+  const toolLine = tool ? `\nThe participant attached the "${tool}" tool tag to their message: reply with assetType "${tool}", built from their message and the conversation.` : '';
+
   const params = {
     model,
     max_tokens: 8000,
     output_config: { effort: sys.mentorEffort },
     system: systemPrompt,
-    messages: [{ role: 'user', content: userPrompt }]
+    messages: [{ role: 'user', content: [...recentImageBlocks(messages, forced), { type: 'text', text: userPrompt + toolLine }] }]
   };
   const tools = modules.enableFactRetrieval ? [{ type: sys.webSearchTool, name: 'web_search', max_uses: sys.webSearchMaxUses }] : null;
 
@@ -69,30 +78,42 @@ export async function analyze({ apiKey, falKey, roomId, room, messages, particip
     model,
     promptVersion: PROMPT_VERSION,
     language,
-    input: { systemPrompt, userPrompt, messageCount: messages.length },
+    input: { systemPrompt, userPrompt, messageCount: messages.length, requiredTool: tool, imagesSeen: params.messages[0].content.filter(b => b.type === 'text' && b.text.startsWith('[image id=')).map(b => b.text.slice(10, b.text.indexOf(']'))) },
     webSearchOffered: Boolean(tools),
     webSearchFallback: false
   };
 
   try {
-    let response;
-    try {
-      response = await createMessage(apiKey, tools ? { ...params, tools } : params);
-    } catch (err) {
-      // A model/tool-version mismatch must not take the mentor down: retry without web search
-      if (!(tools && err instanceof Anthropic.BadRequestError)) throw err;
-      log.webSearchFallback = true;
-      response = await createMessage(apiKey, params);
+    let response, rawText, parsed;
+    // A reply that is not valid JSON is retried quietly; the team only sees an error if every attempt fails
+    for (let attempt = 1; ; attempt++) {
+      try {
+        response = await createMessage(apiKey, tools && !log.webSearchFallback ? { ...params, tools } : params);
+      } catch (err) {
+        // A model/tool-version mismatch must not take the mentor down: retry without web search
+        if (!(tools && !log.webSearchFallback && err instanceof Anthropic.BadRequestError)) throw err;
+        log.webSearchFallback = true;
+        response = await createMessage(apiKey, params);
+      }
+      rawText = responseText(response);
+      try {
+        parsed = parseJsonObject(rawText);
+        // A tool tag that was ignored counts as a failed attempt too
+        if (tool && parsed.assetType !== tool && attempt < PARSE_ATTEMPTS) throw new Error(`Expected assetType ${tool}, got ${parsed.assetType}`);
+        break;
+      } catch (err) {
+        if (attempt >= PARSE_ATTEMPTS) throw err;
+        log.parseRetries = attempt;
+        console.warn('[mentor.analyze] unparsable reply, retrying', attempt, err?.message || err);
+      }
     }
-    const rawText = responseText(response);
-    const { assessment = null, ...result } = parseJsonObject(rawText);
+    const { assessment = null, ...result } = parsed;
 
     if (forced && !result.shouldIntervene) {
       result.shouldIntervene = true;
       result.aiMessage ||= language === 'en' ? 'How can I help your design discussion?' : '需要我協助你們的設計討論嗎？';
     }
     // Disabled modules never produce assets, whatever the model returned
-    const allowed = { parametric_3d: modules.enable3D, moodboard: modules.enableMoodboard, sketch: modules.enableSketch !== false, fact_check: modules.enableFactRetrieval, summary: modules.enableSummary !== false };
     if (result.assetType && !allowed[result.assetType]) {
       result.assetType = null;
       result.assetData = null;
@@ -108,7 +129,17 @@ export async function analyze({ apiKey, falKey, roomId, room, messages, particip
     }
 
     // Idea sketches: shown with the same collage as moodboards (assetData.images), the first one large
-    if (visible && result.shouldIntervene && result.assetType === 'sketch' && Array.isArray(result.assetData?.sketches)) {
+    // Sketches based on an image of the conversation: Claude reads the image with the discussion, fal redraws it
+    const sourceImage = result.assetType === 'sketch' && result.assetData?.fromImage ? messages.find(m => m.id === result.assetData.fromImage)?.imageUrl : null;
+    if (visible && result.shouldIntervene && sourceImage) {
+      const mode = result.assetData.mode === 'refine' ? 'refine' : 'variations';
+      const brief = await sketchBrief({ apiKey, roomId, roomAi: { profile, memory }, image: sourceImage, notes: String(result.assetData.description || '').slice(0, 300), kind: mode === 'refine' ? 'refineSketch' : 'variations' });
+      const items = brief?.items?.length ? brief.items : (result.assetData.sketches || []).map(s => ({ title: s.title || '', prompt: s.prompt || s.title || 'product idea' }));
+      const urls = items.length ? await sketchesFromImage(sourceImage, items.slice(0, 4), mode, { falKey, model: sys.sketchRefineModel, folder: `sketch/${roomId}` }) : [];
+      result.assetData.images = items.slice(0, 4).map((s, i) => ({ title: s.title || '', prompt: s.prompt || '', url: urls[i], size: i === 0 ? 'large' : 'medium', isAiGenerated: true }));
+      result.assetData.model = sys.sketchRefineModel;
+      result.assetData.sourceMessageId = result.assetData.fromImage;
+    } else if (visible && result.shouldIntervene && result.assetType === 'sketch' && Array.isArray(result.assetData?.sketches)) {
       const sketches = result.assetData.sketches.slice(0, 4);
       const urls = await generateSketches(sketches.map(s => s.prompt || s.title || 'product idea'), { falKey, model: sys.sketchModel, folder: `sketch/${roomId}` });
       result.assetData.images = sketches.map((s, i) => ({ title: s.title || '', prompt: s.prompt || '', url: urls[i], size: i === 0 ? 'large' : 'medium', isAiGenerated: true }));
@@ -130,6 +161,21 @@ export async function analyze({ apiKey, falKey, roomId, room, messages, particip
     await logAiCall({ ...log, error: { category, message: String(err?.message || err).slice(0, 500) }, latencyMs: Date.now() - startedAt });
     return { error: { category, message: FRIENDLY_ERRORS[category] } };
   }
+}
+
+// Images the mentor looks at itself: a mention sees up to 3 from the last 30 messages, an automatic check up to 2 from the last 8
+function recentImageBlocks(messages, forced) {
+  const pool = messages.slice(forced ? -30 : -8).filter(m => m.imageUrl).slice(forced ? -3 : -2);
+  const blocks = [];
+  for (const m of pool) {
+    try {
+      const block = imageBlock(m.imageUrl);
+      blocks.push({ type: 'text', text: `[image id=${m.id}] shared by ${m.senderName}:` }, block);
+    } catch {
+      // An unsupported image is simply left out
+    }
+  }
+  return blocks.length ? [{ type: 'text', text: 'Images shared recently in the conversation (oldest first):' }, ...blocks] : [];
 }
 
 /** Incremental long-term memory update; returns the new memory or null on failure. */

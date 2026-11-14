@@ -30,6 +30,7 @@ const STRINGS = {
   system: { 'zh-TW': '系統', en: 'System' },
   refinedMessage: { 'zh-TW': '已為「{title}」加上彩色 PBR 材質與細節。', en: 'Refined "{title}" with color PBR textures and details.' },
   profileUpdated: { 'zh-TW': '{old} 已將名稱改為 {name} {avatar}', en: '{old} updated profile to {name} {avatar}' },
+  model3dBuilding: { 'zh-TW': '沒有其他補充，我就照目前的內容做 3D 囉 🛠️', en: 'No additions, so I am building the 3D model as it stands 🛠️' },
   model3dFromImage: { 'zh-TW': '依這張圖建立的 3D 模型', en: 'A 3D model built from this image' },
   sketchVariations: { 'zh-TW': '依這張圖延伸畫了幾張發想草圖', en: 'A few idea sketches developed from this image' },
   sketchRefined: { 'zh-TW': '依白板上的草圖畫了乾淨的草圖與渲染圖', en: 'A clean sketch and a render of the drawing from the whiteboard' },
@@ -43,7 +44,7 @@ const STRINGS = {
   'aiError.HIGH_DEMAND': { 'zh-TW': 'AI 服務目前使用量過高，請再試一次。', en: 'The AI service is overloaded right now (high demand). Please retry.' },
   'aiError.NETWORK': { 'zh-TW': '無法連線到 AI 服務，請再試一次。', en: 'Could not reach the AI service. Please retry.' },
   'aiError.BAD_REQUEST': { 'zh-TW': 'AI 請求被拒絕，請再試一次或換個說法。', en: 'The AI request was rejected. Please retry or rephrase.' },
-  'aiError.PARSE_ERROR': { 'zh-TW': 'AI 回傳的格式不正確，請再試一次。', en: 'The AI returned an unexpected format. Please retry.' },
+  'aiError.PARSE_ERROR': { 'zh-TW': '我剛剛卡住了，可以再問我一次嗎？', en: 'I got tangled up for a moment. Could you ask me again?' },
   'aiError.UNKNOWN': { 'zh-TW': 'AI 請求失敗，請再試一次。', en: 'The AI request failed. Please retry.' },
   refinedTitle: { 'zh-TW': '{title}（彩色／PBR）', en: '{title} (Colored / PBR)' }
 };

@@ -3,7 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue';
 import { Box, Check, CornerUpLeft, FileText, Loader2, Palette, Paperclip, PenTool, Send, Sparkles, X } from 'lucide-vue-next';
 import { useAuthStore } from '../../stores/auth';
 import { useRoomStore } from '../../stores/room';
-import type { MessageItem } from '../../types';
+import type { AiTool, MessageItem } from '../../types';
 import { t } from '../../i18n';
 import { compressImage, getVideoDuration, readAsDataUrl } from '../../utils/files';
 import { useRoomAi } from '../../composables/useRoomAi';
@@ -34,13 +34,26 @@ const quickTags = computed(() => {
   const m = aiModules.value;
   return [
     { tag: `@${aiName.value}`, label: `@${aiName.value}`, icon: Sparkles, iconClass: '', accent: true, show: true },
-    { tag: `@${aiName.value} ${t('quick.3dText')}`, label: t('quick.3d'), icon: Box, iconClass: 'text-sky-400', show: m.enable3D },
-    { tag: `@${aiName.value} ${t('quick.sketchText')}`, label: t('quick.sketch'), icon: PenTool, iconClass: 'text-sky-400', show: m.enableSketch !== false },
-    { tag: `@${aiName.value} ${t('quick.moodText')}`, label: t('quick.mood'), icon: Palette, iconClass: 'text-amber-400', show: m.enableMoodboard },
-    { tag: `@${aiName.value} ${t('quick.factText')}`, label: t('quick.fact'), icon: Check, iconClass: 'text-emerald-400', show: m.enableFactRetrieval },
-    { tag: `@${aiName.value} ${t('quick.summaryText')}`, label: t('quick.summary'), icon: FileText, iconClass: 'text-purple-400', show: m.enableSummary }
-  ].filter(q => q.show);
+    ...TOOL_BUTTONS.filter(b => b.show(m))
+  ];
 });
+
+// Tool buttons put a removable tag above the input instead of text: the tag is the command (style/asset type),
+// the text is free. To ask for something else, the tag has to be removed with its X.
+const TOOL_BUTTONS = [
+  { tool: 'parametric_3d' as AiTool, label: 'quick.3d', text: 'quick.3dText', icon: Box, iconClass: 'text-sky-400', show: (m: any) => m.enable3D },
+  { tool: 'sketch' as AiTool, label: 'quick.sketch', text: 'quick.sketchText', icon: PenTool, iconClass: 'text-sky-400', show: (m: any) => m.enableSketch !== false },
+  { tool: 'moodboard' as AiTool, label: 'quick.mood', text: 'quick.moodText', icon: Palette, iconClass: 'text-amber-400', show: (m: any) => m.enableMoodboard },
+  { tool: 'fact_check' as AiTool, label: 'quick.fact', text: 'quick.factText', icon: Check, iconClass: 'text-emerald-400', show: (m: any) => m.enableFactRetrieval },
+  { tool: 'summary' as AiTool, label: 'quick.summary', text: 'quick.summaryText', icon: FileText, iconClass: 'text-sky-400', show: (m: any) => m.enableSummary }
+].map(b => ({ ...b, tag: '', accent: false, label: t(b.label as any), defaultText: b.text }));
+const toolTag = ref<(typeof TOOL_BUTTONS)[number] | null>(null);
+const pickQuick = (q: { tag: string; tool?: AiTool }) => {
+  if (props.isMeetingClosed) return;
+  if (!q.tool) return insertQuickTag(q.tag);
+  toolTag.value = TOOL_BUTTONS.find(b => b.tool === q.tool) || null;
+  nextTick(() => textareaRef.value?.focus());
+};
 
 interface StagedAttachment {
   name: string;
@@ -138,9 +151,16 @@ const onInput = () => {
 // ---------- Sending ----------
 const handleSend = async () => {
   if (isBlocked.value) return;
-  const text = inputMessage.value.trim();
+  const tag = toolTag.value;
+  let text = inputMessage.value.trim();
   const attachment = stagedAttachment.value;
-  if (!text && !attachment) return;
+  if (!text && !attachment && !tag) return;
+  // A tool tag always addresses the AI; with no text, the button's default request is sent
+  if (tag) {
+    const body = text || t(tag.defaultText as any);
+    text = mentionsMentor.value ? body : `@${aiName.value} ${body}`;
+  }
+  toolTag.value = null;
 
   const reply = replyingTo.value
     ? { id: replyingTo.value.id, senderName: replyingTo.value.senderName, text: replyingTo.value.content.slice(0, 100) }
@@ -153,10 +173,11 @@ const handleSend = async () => {
   if (attachment) {
     await roomStore.sendFileMessage(
       { name: attachment.name, size: attachment.size, type: attachment.type, url: attachment.dataUrl, mimeType: attachment.mimeType },
-      text
+      text,
+      tag?.tool
     );
   } else {
-    await roomStore.sendMessage(text, reply);
+    await roomStore.sendMessage(text, reply, tag?.tool);
   }
   emit('sent');
 };
@@ -309,13 +330,25 @@ defineExpose({ setReply, sendFile });
         <button
           v-for="q in quickTags"
           :key="q.label"
-          @click="insertQuickTag(q.tag)"
+          @click="pickQuick(q)"
           :disabled="isMeetingClosed"
           class="px-2 py-0.5 pointer-coarse:py-1.5 rounded-lg border disabled:opacity-40 transition flex items-center gap-1 shrink-0"
           :class="q.accent ? 'border-sky-500/30 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20' : 'border-slate-700 hover:bg-slate-800 text-slate-300'"
         >
           <component :is="q.icon" class="w-3 h-3" :class="q.iconClass" /> {{ q.label }}
         </button>
+      </div>
+
+      <!-- Tool tag: the request type stays until removed with X -->
+      <div v-if="toolTag" class="flex items-center gap-2 text-[11px]">
+        <span class="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-lg border border-sky-500/50 bg-sky-500/10 text-sky-200">
+          <component :is="toolTag.icon" class="w-3 h-3" :class="toolTag.iconClass" />
+          {{ toolTag.label }}
+          <button @click="toolTag = null" class="p-0.5 rounded hover:bg-sky-500/20 cursor-pointer" :title="t('composer.removeTool')" :aria-label="t('composer.removeTool')">
+            <X class="w-3 h-3" />
+          </button>
+        </span>
+        <span class="text-slate-500 truncate">{{ t('composer.toolHint') }}</span>
       </div>
 
       <div v-if="stagedAttachment" class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950 border border-sky-500/50 shadow-lg animate-fade-in">

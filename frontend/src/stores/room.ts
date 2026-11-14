@@ -1,3 +1,4 @@
+import type { AiTool } from '../types';
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import type { ParticipantStatus, RoomData, ToastMessage } from '../types';
@@ -51,10 +52,10 @@ export const useRoomStore = defineStore('room', () => {
   const whiteboard = useRoomWhiteboard(ctx);
   const mentor = useRoomMentor(ctx, session.typingUsers);
 
-  const sendMessage = async (text: string, replyTo?: { id: string; senderName: string; text: string }) => {
+  const sendMessage = async (text: string, replyTo?: { id: string; senderName: string; text: string }, aiTool?: AiTool) => {
     if (!currentRoom.value || !text.trim()) return;
     // Whether the AI responds is decided server-side when the message is stored
-    await messages.sendTextMessage(text, replyTo);
+    await messages.sendTextMessage(text, replyTo, aiTool);
   };
 
   // The server ends the session (status, notice, event log); the room stays open read-only

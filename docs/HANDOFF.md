@@ -13,6 +13,21 @@
 - Admin answer details and whole-version JSON export include the same media context. Shared component displays original image links in a read-only gallery. CSV answer format remains compatible. Snapshot writes now batch 20 x 350KB parts to stay below Firestore request size limits.
 - Tests: test-coding-media.mjs covers targets, AI artifact evidence, privacy/failures, window boundaries, media change isolation and text compatibility; version/bank/sampling regressions and TS checks passed. Released v7.8.46 (v7.8.45 multimodal backend; v7.8.46 inline full-size preview supports data-URI thumbnails). Full build/rules passed. Created ready, NOT active, bank version 2 without new LLM calls: 324 targets (236 added, 52 changed, 36 reused), semantic cache coverage 74/324. Active bank remains version 1. Live whiteboard target preview loaded at 400x300, gallery case displayed 6 images, and nested full-size preview opened successfully with no browser errors. No expert ratings changed. Screenshot: ../../outputs/coding-media-preview.jpg.
 
+
+## 2026-11-12 測試（room 2361）後的修正（Claude，未部署）
+
+- 雙鑽石不會即時變化：前端房間監聽沒帶入 `progress`，已修。
+- 重播：開啟白板也會切換畫面；重新勾選「跟隨」會立即跳到使用中的白板。
+- 導師回覆不是有效 JSON 時靜默重試 3 次；錯誤文字改溫和。
+- 提醒改為剩 30／15／5 分鐘並對照預定階段（既有設定檔仍是 [5]，要到後台改成 30, 15, 5）；時間到維持只提醒、不鎖聊天室（使用者決定）。
+- 3D 先問其他人有沒有補充，10 秒無回應（有人打字就再等）才生成，或一次納入補充。
+- 提示詞升為 `v17-2026-11-12`。
+- 導師現在直接看得到聊天中的圖片（之前只收到 `[image id]` 文字，「讀得到」指的是白板）。
+- 工具按鈕改成可按 × 移除的標籤，伺服器強制對應的資產類型。
+- AI 可依某張圖畫草圖（精緻化或發想），乾淨白底、不畫便條紙；延伸草圖按鈕降低照抄程度。提示詞升為 `v18-2026-11-12`。
+- 圖庫：暫不做（使用者決定）。未修：要真實參考圖時 AI 選草圖而非寫實意象圖。
+- 使用者指示：目前不 push、不 deploy（有其他人同時在改）。
+
 ## Append selected new rooms to a bank (2026-11-12)
 - Admin room checklist uses metadata-only manageCodingBank rooms action; no conversation loading or LLM call for listing. Existing rooms with targets are disabled to prevent duplicate additions. Empty placeholders in an old bank may be replaced when they gain eligible text.
 - append action explicitly identifies the viewed baseVersion and new roomIds. Server validates available rooms and reads conversation/event/semantic data ONLY for selected IDs. Copies untouched base room snapshots and canonical answer scopes verbatim; new rooms get new revision scopes. Creates a complete ready version without automatically activating it. No selected room with zero human text is accepted.

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { isContinuation } from '../utils/chat';
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
 import { onBeforeRouteLeave } from 'vue-router';
 import { Database, FolderSearch, Info, X, ListChecks } from 'lucide-vue-next';
@@ -437,7 +438,7 @@ async function save(status: 'draft' | 'submitted') {
             <article :data-coding-target="message.id === target.id" v-for="message in context" :key="message.id" class="w-fit max-w-[90%] p-3 mb-4 rounded-2xl border" :class="[message.id === target.id ? 'border-sky-500 bg-slate-800' : 'border-slate-700 bg-slate-950', !isHumanMessage(message) ? 'mx-auto' : message.senderUid === firstSpeaker ? 'mr-auto rounded-tl-sm' : 'ml-auto rounded-tr-sm']">
               <p v-if="message.id === target.id" class="text-xs text-sky-400 mb-2">{{ t('coding.targetMessage') }}</p>
               <p v-else-if="messages.indexOf(message) > index" class="text-xs text-amber-400 mb-2">{{ t('coding.afterTarget') }}</p>
-              <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mb-2"><span class="text-sm font-medium text-sky-300">{{ message.senderName }}</span><time class="text-xs text-slate-400" :datetime="new Date(message.timestamp).toISOString()">{{ new Date(message.timestamp).toLocaleTimeString(intlLocale(), { hour: '2-digit', minute: '2-digit' }) }}</time></div><p v-if="humanSender(message) || (phase === 2 && message.id === codingCase?.replyId)" class="whitespace-pre-wrap break-words leading-relaxed">{{ message.content }}</p>
+              <div v-if="message.id === target.id || !isContinuation(context[context.indexOf(message) - 1], message)" class="flex flex-wrap items-center gap-x-3 gap-y-1 mb-2"><span class="text-sm font-medium text-sky-300">{{ message.senderName }}</span><time class="text-xs text-slate-400" :datetime="new Date(message.timestamp).toISOString()">{{ new Date(message.timestamp).toLocaleTimeString(intlLocale(), { hour: '2-digit', minute: '2-digit' }) }}</time></div><p v-if="humanSender(message) || (phase === 2 && message.id === codingCase?.replyId)" class="whitespace-pre-wrap break-words leading-relaxed">{{ message.content }}</p>
               <CodingMedia v-if="hasCodingMedia(message)" :message="message" />
               <p v-if="phase === 2 && message.id === codingCase?.replyId" class="text-sm text-emerald-400 mt-2">{{ t('coding.evaluatedReply') }}</p>
             </article>

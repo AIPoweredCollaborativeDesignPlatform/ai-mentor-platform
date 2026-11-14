@@ -22,6 +22,8 @@ const props = defineProps<{
   msg: MessageItem;
   isMeetingClosed: boolean;
   isResizing: boolean;
+  /** Same sender, same minute as the message above: no avatar, name or time (like LINE) */
+  compact?: boolean;
 }>();
 const emit = defineEmits<{
   (e: 'open-whiteboard', msg: MessageItem): void;
@@ -104,7 +106,6 @@ const sketching = ref(false);
 const moreSketches = async (url: string) => {
   if (sketching.value) return;
   sketching.value = true;
-  roomStore.pushToast(t('sketch.working'), t('sketch.workingText', { name: aiName.value }), 'info');
   try {
     await sketchFromImage(url, msg.value.type === 'file' ? msg.value.content.replace(/^Shared (image|video|document):.*$/, '') : '');
   } catch (e: any) {
@@ -120,7 +121,6 @@ const making3d = ref(false);
 const make3d = async (url: string) => {
   if (making3d.value) return;
   making3d.value = true;
-  roomStore.pushToast(t('sketch.making3d'), t('sketch.making3dText', { name: aiName.value }), 'info');
   try {
     await model3DFromImage(url, msg.value.type === 'file' ? msg.value.content : '', msg.value.id);
   } catch (e: any) {
@@ -218,7 +218,9 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
   </div>
 
   <div v-else class="flex gap-2.5 group relative" :class="isMine ? 'flex-row-reverse' : ''">
+    <div v-if="compact" class="w-8 shrink-0"></div>
     <div
+      v-else
       class="w-8 h-8 rounded-full flex items-center justify-center text-base shrink-0 select-none bg-slate-800 border border-slate-700"
     >
       <!-- The AI has a neutral line icon (no emoji or colour cue that could sway participants) -->
@@ -233,7 +235,7 @@ const hiddenNotice = 'px-3.5 py-3 rounded-xl bg-slate-950/80 border border-slate
       :class="[isMine ? 'items-end' : 'items-start', msg.type === 'ai_asset' ? 'w-full max-w-full sm:max-w-3xl' : 'max-w-[85%] sm:max-w-[75%] md:max-w-[70%]']"
     >
       <!-- Sender line: mine = [time] [name], others = [name] [time] [AI badge] -->
-      <div class="flex items-center gap-1.5 mb-0.5 text-[11px] text-slate-400" :class="isMine ? 'flex-row-reverse' : ''">
+      <div v-if="!compact" class="flex items-center gap-1.5 mb-0.5 text-[11px] text-slate-400" :class="isMine ? 'flex-row-reverse' : ''">
         <span class="font-medium text-slate-300 truncate">{{ msg.senderName }}</span>
         <span class="text-[9px] text-slate-500/70 font-mono tracking-wider">{{ formatTime(msg.timestamp) }}</span>      </div>
 

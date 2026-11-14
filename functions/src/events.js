@@ -7,7 +7,7 @@ import { FieldValue, getFirestore } from 'firebase-admin/firestore';
  * with the same shape and source: 'client'. P4b exports this collection to Drive.
  */
 
-const AI_UIDS = new Set(['ai_mentor', 'ai_mentor_3d']);
+const AI_UIDS = new Set(['ai_mentor', 'ai_mentor_3d', 'ai_mentor_image']);
 const MAX_STRING = 20_000;
 // Whiteboard objects are kept whole (freehand paths are long strings) so the board can be replayed;
 // the object document itself is already below Firestore's 1 MiB limit

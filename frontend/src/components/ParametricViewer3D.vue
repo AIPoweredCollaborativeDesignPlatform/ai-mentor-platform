@@ -555,7 +555,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="mt-3 bg-slate-950/80 border border-slate-700/80 rounded-2xl p-4 shadow-xl">
+  <div class="mt-2">
     <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
       <div class="flex items-center gap-2">
         <Box class="w-5 h-5 text-sky-400" />

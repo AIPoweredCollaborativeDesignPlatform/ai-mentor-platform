@@ -5,7 +5,7 @@ import { Clock, Eye, Loader2, MessageSquare, PenTool, Power, Users, X } from 'lu
 import { useAuthStore } from '../stores/auth';
 import { useRoomStore } from '../stores/room';
 import type { MessageItem } from '../types';
-import { formatDate, isDuplicateBoardPointer, isMentioning } from '../utils/chat';
+import { formatDate, isContinuation, isDuplicateBoardPointer, isMentioning } from '../utils/chat';
 import { useNotificationSound } from '../composables/useNotificationSound';
 import { useWhiteboardResize, useWhiteboardSession, type WhiteboardHandle } from '../composables/useWhiteboardSession';
 import { useAiReadTracking } from '../composables/useAiReadTracking';
@@ -169,6 +169,8 @@ const visibleChatMessages = computed(() => {
   });
 });
 
+const isGrouped = (index: number) => !showDateDivider(visibleChatMessages.value[index], index) && isContinuation(visibleChatMessages.value[index - 1], visibleChatMessages.value[index]);
+
 const showDateDivider = (msg: MessageItem, index: number) => {
   const prev = visibleChatMessages.value[index - 1];
   return !prev || new Date(msg.timestamp).toDateString() !== new Date(prev.timestamp).toDateString();
@@ -230,6 +232,24 @@ const scrollToMessage = (id: string) => {
   }, 300); // wait for the drawer to close
 };
 
+// No browser right-click menu in the room (text fields keep it for paste / spelling)
+const blockContextMenu = (e: MouseEvent) => {
+  const el = e.target as HTMLElement | null;
+  if (el?.closest('input, textarea, [contenteditable="true"]')) return;
+  e.preventDefault();
+};
+
+// Preview of a new message while scrolled up ("Name: text..."), gone after a few seconds
+const peek = ref<{ name: string; text: string } | null>(null);
+let peekTimer: ReturnType<typeof setTimeout> | undefined;
+const showPeek = (m: MessageItem) => {
+  const text = m.content?.trim() || (m.type === 'ai_asset' ? t('room.peekAsset') : m.fileData ? t('room.peekFile') : '');
+  peek.value = { name: m.senderName, text: text.replace(/\s+/g, ' ').slice(0, 60) + (text.length > 60 ? '…' : '') };
+  clearTimeout(peekTimer);
+  peekTimer = setTimeout(() => (peek.value = null), 4000);
+};
+watch(showScrollFab, atTop => !atTop && (peek.value = null));
+
 // New message from someone else: chime, plus a toast if it @mentions me; follow the stream unless scrolled up
 let lastKnownMsgCount = 0;
 watch(() => roomStore.currentRoom?.messages.length, (count = 0) => {
@@ -237,6 +257,7 @@ watch(() => roomStore.currentRoom?.messages.length, (count = 0) => {
     const latest = roomStore.currentRoom!.messages[count - 1];
     if (latest && latest.senderUid !== authStore.uid && latest.senderUid !== 'system') {
       playNotificationSound();
+      if (showScrollFab.value && showChatPane.value) showPeek(latest);
       if (!showChatPane.value) unseenChat.value++;
       if (isMentioning(latest, authStore.displayName, authStore.uid)) {
         roomStore.pushToast(
@@ -376,7 +397,7 @@ onUnmounted(() => {
     <p class="text-xs">{{ t('room.verifying') }}</p>
   </div>
 
-  <div v-else class="h-[100dvh] flex flex-col bg-slate-950 text-slate-100 overflow-hidden px-safe pt-safe">
+  <div v-else class="h-[100dvh] flex flex-col bg-slate-950 text-slate-100 overflow-hidden px-safe pt-safe" @contextmenu="blockContextMenu">
     <RoomHeader
       :pin="pin"
       :isMeetingClosed="isLegacyClosed"
@@ -468,8 +489,8 @@ onUnmounted(() => {
         <div class="relative flex-1 min-h-0 flex flex-col">
           <DesignProgress :viewAt="progressViewAt" />
         <main ref="chatContainerRef" @scroll="handleScroll" class="flex-1 overflow-y-auto w-full relative custom-scrollbar" :class="{ 'is-scrolling': isScrolling }">
-          <div class="max-w-5xl mx-auto w-full p-3 sm:p-5 space-y-3">
-            <div v-for="(msg, idx) in visibleChatMessages" :key="msg.id" :id="'msg_' + msg.id" :data-ts="msg.timestamp" :data-ai-msg="isAiMessage(msg) ? msg.id : undefined" class="transition-colors duration-500 rounded-xl">
+          <div class="max-w-5xl mx-auto w-full p-3 sm:p-5">
+            <div v-for="(msg, idx) in visibleChatMessages" :key="msg.id" :id="'msg_' + msg.id" :data-ts="msg.timestamp" :data-ai-msg="isAiMessage(msg) ? msg.id : undefined" class="transition-colors duration-500 rounded-xl" :class="idx === 0 ? '' : isGrouped(idx) ? 'mt-1' : 'mt-3'">
               <div v-if="showDateDivider(msg, idx)" class="flex items-center justify-center my-3.5 gap-3 select-none">
                 <div class="h-px bg-slate-700/40 flex-1 max-w-[120px] sm:max-w-[160px]"></div>
                 <span class="text-[11px] font-mono font-medium text-slate-500 tracking-wider">{{ formatDate(msg.timestamp) }}</span>
@@ -479,6 +500,7 @@ onUnmounted(() => {
                 :msg="msg"
                 :isMeetingClosed="isMeetingClosed"
                 :isResizing="isResizingWhiteboard"
+                :compact="isGrouped(idx)"
                 @open-whiteboard="wb.openWhiteboardAsset"
                 @open-document="openDocument"
                 @open-pdf="openPdf"
@@ -490,6 +512,18 @@ onUnmounted(() => {
           </div>
 
           <div class="h-2 w-full"></div>
+
+          <!-- Newest message while reading further up: a short preview that fades away; click jumps down -->
+          <Transition enter-from-class="opacity-0 translate-y-2" leave-to-class="opacity-0 translate-y-2" enter-active-class="transition duration-200" leave-active-class="transition duration-300">
+            <button
+              v-if="peek && showScrollFab"
+              @click="peek = null; scrollToBottom()"
+              class="sticky bottom-16 mx-auto w-fit z-20 flex items-center gap-2 max-w-[min(90%,28rem)] px-3 py-1.5 rounded-full bg-slate-800/95 border border-slate-700 shadow-xl text-xs text-slate-200 cursor-pointer"
+            >
+              <span class="font-medium text-sky-300 shrink-0">{{ peek.name }}</span>
+              <span class="truncate text-slate-300">{{ peek.text }}</span>
+            </button>
+          </Transition>
 
           <button
             v-show="showScrollFab"

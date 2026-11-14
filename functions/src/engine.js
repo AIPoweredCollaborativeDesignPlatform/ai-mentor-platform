@@ -15,7 +15,8 @@ import { autoRenameRoom } from './rooms.js';
  *  - @mention → immediate response (unless the condition has no visible AI)
  *  - otherwise a check runs when the chat pauses (pauseSeconds, ≥ minNewMessages),
  *    after maxMessagesBetweenChecks, or after stallSeconds of silence
- *  - automatic checks are visible only in 'proactive' mode outside the cooldown;
+ *  - a message that answers the AI (reply_to_ai) is checked at once; the AI decides whether to go on
+ *  - automatic checks are visible only in 'proactive' mode outside the (optional, default 0) cooldown;
  *    all other checks run as invisible shadow assessments (if enabled) for the research log
  *  - every assessment updates the Double Diamond display (rooms/{id}.progress) unless the condition has no AI
  * roomAi/{roomId} is server/admin-only; participants only see rooms/{id}.ai (publicAiView).
@@ -28,7 +29,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const LOCK_MS = 150_000;
 const TYPING_BEFORE_POST_MS = 2500;
 const CONTEXT_MESSAGES = 60;
-const AI_UIDS = new Set(['ai_mentor', 'ai_mentor_3d', 'system']);
+const AI_UIDS = new Set(['ai_mentor', 'ai_mentor_3d', 'ai_mentor_image', 'system']);
 // Tool tags a participant can attach to a message (composer buttons): the AI must answer with that asset type
 const TOOLS = new Set(['parametric_3d', 'sketch', 'moodboard', 'fact_check', 'summary']);
 
@@ -99,10 +100,16 @@ const isMentioned = (content, profile) => {
 };
 
 // ---------- AI presence (typing doc must be refreshed: clients drop entries older than 5s) ----------
+// One typing doc per kind of work, so the chat can list them in order: writing, drawing images, building a 3D model
+const PRESENCE = {
+  text: { uid: 'ai_mentor', displayName: 'AI', avatar: '✨' },
+  image: { uid: 'ai_mentor_image', displayName: 'AI (image)', avatar: '🖼️' },
+  mesh: { uid: 'ai_mentor_3d', displayName: 'AI (3D)', avatar: '🎨' }
+};
 export function startPresence(roomId, kind, task) {
-  const uid = kind === 'mesh' ? 'ai_mentor_3d' : 'ai_mentor';
+  const { uid, displayName, avatar } = PRESENCE[kind] || PRESENCE.text;
   const typingRef = roomRef(roomId).collection('typing').doc(uid);
-  const write = () => typingRef.set({ uid, displayName: kind === 'mesh' ? 'AI (3D)' : 'AI', avatar: kind === 'mesh' ? '🎨' : '✨', timestamp: Date.now() }).catch(() => {});
+  const write = () => typingRef.set({ uid, displayName, avatar, timestamp: Date.now() }).catch(() => {});
   write();
   const timer = setInterval(write, 3000);
   if (task) roomRef(roomId).update({ aiActiveTask: { callerName: task.callerName || '', callerUid: task.callerUid || '', type: task.type, prompt: task.prompt || '', startedAt: Date.now() } }).catch(() => {});
@@ -377,6 +384,18 @@ async function run3D(roomId, profile, secrets, { aiMessage, assetData, prompt, m
   }
 }
 
+const REPLY_WINDOW_MS = 3 * 60_000;
+/** Whether a message answers the AI: a reply to an AI message, or the first message after the AI spoke. */
+async function answersAi(roomId, messageId, msg) {
+  if (msg.replyTo?.id) {
+    const replied = await roomRef(roomId).collection('messages').doc(msg.replyTo.id).get().catch(() => null);
+    return replied?.data()?.senderUid === 'ai_mentor';
+  }
+  const recent = await roomRef(roomId).collection('messages').orderBy('timestamp', 'desc').limit(3).get().catch(() => null);
+  const prev = recent?.docs.map(d => ({ id: d.id, ...d.data() })).find(m => m.id !== messageId && m.senderUid !== 'system');
+  return prev?.senderUid === 'ai_mentor' && (msg.timestamp || Date.now()) - (prev.timestamp || 0) < REPLY_WINDOW_MS;
+}
+
 /** Entry point for each new chat message (Firestore trigger). */
 export async function handleNewMessage(roomId, messageId, msg, secrets) {
   // Opening a private whiteboard draft is not part of the conversation
@@ -405,6 +424,15 @@ export async function handleNewMessage(roomId, messageId, msg, secrets) {
     return runCheck(roomId, secrets, { reason: 'mention', forced: true, callerUid: msg.senderUid, callerName: msg.senderName, requiredTool: TOOLS.has(msg.aiTool) ? msg.aiTool : null });
   }
   // Replies to "anything to add before the 3D build?" are handled by awaitAdditionsThen3D
+  const pendingAsk = state.pending3DAsk && Date.now() - state.pending3DAsk.at < ASK_MAX_MS + 30_000;
+  // An answer to the AI (a reply to its message, or the next message after it) is judged at once, without
+  // waiting for a pause or more messages; the AI itself decides whether the back-and-forth continues
+  if (!pendingAsk && profile.mode === 'proactive' && await answersAi(roomId, messageId, msg)) {
+    return runCheck(roomId, secrets, {
+      reason: 'reply_to_ai',
+      note: `Automatic check (reason: reply_to_ai): ${msg.senderName || 'A participant'}'s latest message seems to answer you. If it continues a conversation with you, reply briefly; if they are really talking to each other, stay silent.`
+    });
+  }
   if (state.pending3DAsk && Date.now() - state.pending3DAsk.at < ASK_MAX_MS + 30_000) {
     await logAiCall({ kind: 'trigger_skip', roomId, reason: 'pending_3d_additions', detail: 'waiting for additions before a 3D build', mode: profile.mode });
     return;

@@ -567,8 +567,14 @@ export const sketchFromImage = onCall(
     const notes = String(request.data?.notes || '').slice(0, 300);
     const secrets = await engineSecrets();
     // Claude reads the image with the conversation first, so the sketches stay on the team's topic
-    const brief = await sketchBrief({ apiKey: secrets.anthropic, roomId, roomAi, image: imageUrl, notes, kind: 'variations' });
-    const urls = await sketchVariations(imageUrl, notes, { falKey: secrets.fal, model: sys.sketchRefineModel, folder: `sketch/${roomId}` }, brief?.items);
+    const stop = startPresence(roomId, 'image');
+    let brief, urls;
+    try {
+      brief = await sketchBrief({ apiKey: secrets.anthropic, roomId, roomAi, image: imageUrl, notes, kind: 'variations' });
+      urls = await sketchVariations(imageUrl, notes, { falKey: secrets.fal, model: sys.sketchRefineModel, folder: `sketch/${roomId}` }, brief?.items);
+    } finally {
+      await stop();
+    }
     await logAiCall({ ...baseLog(request, 'sketch_variations', sys.sketchRefineModel), input: { image: isUpload ? `data URL (${imageUrl.length} bytes)` : imageUrl, notes, brief }, output: { urls } });
     if (!urls.some(Boolean)) throw new HttpsError('internal', 'Sketch generation failed');
     const room = (await getFirestore().doc(`rooms/${roomId}`).get()).data() || {};
@@ -577,7 +583,7 @@ export const sketchFromImage = onCall(
     await postAiMessage(roomId, room, roomAi.profile, {
       content: str('sketchVariations', room.language),
       assetType: 'sketch',
-      assetPayload: { title: str('sketchVariations', room.language), source: isUpload ? 'chat upload' : imageUrl, model: sys.sketchRefineModel, images: urls.map((url, i) => ({ title: titles[i], url, size: i === 0 ? 'large' : 'medium', isAiGenerated: true })) },
+      assetPayload: { title: str('sketchVariations', room.language), fromImageAsset: true, source: isUpload ? 'chat upload' : imageUrl, model: sys.sketchRefineModel, images: urls.map((url, i) => ({ title: titles[i], url, size: i === 0 ? 'large' : 'medium', isAiGenerated: true })) },
       meta: { model: sys.sketchRefineModel, callerUid: request.auth.uid }
     });
     return { ok: true };
@@ -634,12 +640,18 @@ export const sketchFromBoard = onCall(
     const sys = await getSystemConfig();
     const notes = String(request.data?.notes || '').slice(0, 300);
     const secrets = await engineSecrets();
-    const brief = await sketchBrief({ apiKey: secrets.anthropic, roomId, roomAi, image: imageDataUrl, notes, kind: 'refine' });
-    const urls = await refineSketch(imageDataUrl, notes, { falKey: secrets.fal, model: sys.sketchRefineModel, folder: `sketch/${roomId}` }, brief?.items);
+    const stop = startPresence(roomId, 'image');
+    let brief, urls;
+    try {
+      brief = await sketchBrief({ apiKey: secrets.anthropic, roomId, roomAi, image: imageDataUrl, notes, kind: 'refine' });
+      urls = await refineSketch(imageDataUrl, notes, { falKey: secrets.fal, model: sys.sketchRefineModel, folder: `sketch/${roomId}` }, brief?.items);
+    } finally {
+      await stop();
+    }
     await logAiCall({ ...baseLog(request, 'sketch_refine', sys.sketchRefineModel), input: { imageBytes: imageDataUrl.length, notes, brief }, output: { urls } });
     if (!urls.some(Boolean)) throw new HttpsError('internal', 'Sketch generation failed');
     const room = (await getFirestore().doc(`rooms/${roomId}`).get()).data() || {};
-    const titles = room.language === 'en' ? ['Clean sketch', 'Render'] : ['乾淨草圖', '渲染圖'];
+    const titles = room.language === 'en' ? ['Clean line art', 'Render'] : ['乾淨線稿', '渲染圖'];
     await postAiMessage(roomId, room, roomAi.profile, {
       content: str('sketchRefined', room.language),
       assetType: 'sketch',

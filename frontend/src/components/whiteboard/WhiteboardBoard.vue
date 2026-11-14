@@ -1042,21 +1042,36 @@ function restack() {
 const deleteSelection = () => deleteObjects(selection.value);
 
 // ---------- images ----------
+// The image appears at once from the local file; it is stored (and shared) when the upload finishes.
+// Its stored src is the Storage link, so the shared copy never reloads it here.
 async function insertImageFile(file: File, at?: fabric.Point) {
-  if (!file.type.startsWith('image/')) return;
-  showToast(t('wb.uploadingImage'), true);
+  if (!file.type.startsWith('image/') || !canvas) return;
+  let img: BoardObject | null = null;
+  let localUrl = '';
   try {
-    await ensureBoard();
     const blob = await downscaleImage(file);
-    const ext = blob.type === 'image/png' ? 'png' : 'jpg';
-    const path = `rooms/${props.roomId}/boards/${props.boardId}/${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}.${ext}`;
-    const snap = await uploadBytes(storageRef(storage, path), blob, { contentType: blob.type });
-    const url = await getDownloadURL(snap.ref);
-    const img = await createImage(url, at || viewportCenter(), 480, nextZ());
-    await addObjects([img]);
+    localUrl = URL.createObjectURL(blob);
+    const upload = (async () => {
+      await ensureBoard();
+      const ext = blob.type === 'image/png' ? 'png' : 'jpg';
+      const path = `rooms/${props.roomId}/boards/${props.boardId}/${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}.${ext}`;
+      const snap = await uploadBytes(storageRef(storage, path), blob, { contentType: blob.type });
+      return getDownloadURL(snap.ref);
+    })();
+    img = await createImage(localUrl, at || viewportCenter(), 480, nextZ());
+    insertByZ(prepare(img));
+    canvas.setActiveObject(img);
+    canvas.requestRenderAll();
+    showToast(t('wb.uploadingImage'), true);
+    const url = await upload;
+    (img as any).getSrc = () => url;
+    record(new Map([[img.id, null]]), [img.id]);
+    await persist([img]);
     showToast(t('wb.imageAdded'));
   } catch (e) {
     console.error('[whiteboard] image upload failed', e);
+    if (img) removeLocal(img.id);
+    canvas?.requestRenderAll();
     showToast(t('wb.imageFailed'));
   }
 }
@@ -1108,20 +1123,41 @@ async function svgObject(svg: string, center: fabric.Point, maxSide: number) {
   return img;
 }
 
+// While the AI works, a frame with a calm animation (and the request in light text) marks where the result will land
+interface AiPending { id: number; x: number; y: number; w: number; h: number; prompt: string }
+const aiPending = ref<AiPending[]>([]);
+let pendingSeq = 0;
+const addPending = (center: fabric.Point, w: number, h: number, prompt: string) => {
+  const id = ++pendingSeq;
+  aiPending.value.push({ id, x: center.x, y: center.y, w, h, prompt });
+  return () => (aiPending.value = aiPending.value.filter(p => p.id !== id));
+};
+const pendingStyle = (p: AiPending) => {
+  void viewTick.value;
+  const v = canvas?.viewportTransform;
+  if (!v) return { display: 'none' };
+  const z = v[0];
+  return { left: `${(p.x - p.w / 2) * z + v[4]}px`, top: `${(p.y - p.h / 2) * z + v[5]}px`, width: `${p.w * z}px`, height: `${p.h * z}px` };
+};
+
 async function generateSvg() {
   const prompt = ai.prompt.trim();
-  if (!prompt || ai.busy) return;
-  ai.busy = true;
+  if (!prompt) return;
   ai.error = '';
+  ai.prompt = '';
+  ai.open = false;
+  const center = viewportCenter();
+  const done = addPending(center, 360, 360, prompt);
   try {
     const svg = await generateSvgForWhiteboard(prompt);
-    await addObjects([await svgObject(svg, viewportCenter(), 360)]);
-    ai.prompt = '';
-    ai.open = false;
+    await addObjects([await svgObject(svg, center, 360)]);
   } catch (e: any) {
+    // The request comes back into the box with the reason
+    ai.prompt = prompt;
     ai.error = e?.title || e?.message || t('wb.generationFailed');
+    ai.open = true;
   } finally {
-    ai.busy = false;
+    done();
   }
 }
 
@@ -1129,13 +1165,16 @@ async function sketchToSvg() {
   const list = selection.value.filter(o => !(o instanceof fabric.Textbox));
   if (!list.length || ai.busy || !canvas) return;
   ai.busy = true;
-  showToast(t('wb.redrawing', { name: aiName.value }), true);
+  let done = () => {};
   try {
     canvas.discardActiveObject();
     const png = await renderObjects(list, { maxW: 1024, maxH: 1024, format: 'png', background: '#ffffff' });
     const rects = list.map(o => o.getBoundingRect());
     const minX = Math.min(...rects.map(r => r.left)), minY = Math.min(...rects.map(r => r.top));
     const maxX = Math.max(...rects.map(r => r.left + r.width)), maxY = Math.max(...rects.map(r => r.top + r.height));
+    // The redraw lands to the right of the original
+    const guess = Math.max(maxX - minX, maxY - minY, 120);
+    done = addPending(new fabric.Point(maxX + 40 + guess / 2, (minY + maxY) / 2), guess, guess, t('wb.sketchToSvg'));
     const svg = await redrawSketchToSvg(png);
     const side = Math.max(maxX - minX, maxY - minY, 120);
     const img = await svgObject(svg, new fabric.Point((minX + maxX) / 2, (minY + maxY) / 2), side);
@@ -1154,6 +1193,7 @@ async function sketchToSvg() {
   } catch (e: any) {
     showToast(e?.title || t('wb.sketchFailed'));
   } finally {
+    done();
     ai.busy = false;
   }
 }
@@ -1163,7 +1203,6 @@ async function boardToSketch() {
   const list = selection.value.filter(o => !(o instanceof fabric.Textbox));
   if (!list.length || ai.busy || !canvas) return;
   ai.busy = true;
-  showToast(t('wb.sketching', { name: aiName.value }), true);
   try {
     const png = await renderObjects(list, { maxW: 1024, maxH: 1024, format: 'png', background: '#ffffff' });
     const notes = selection.value.filter(o => o instanceof fabric.Textbox).map(o => (o as fabric.Textbox).text || '').join(' ').slice(0, 300);
@@ -1476,6 +1515,12 @@ const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(()
         <canvas ref="canvasEl"></canvas>
         <canvas ref="overlayEl" class="absolute inset-0 pointer-events-none"></canvas>
 
+        <!-- AI at work: where its result will appear -->
+        <div v-for="p in aiPending" :key="p.id" class="wb-pending absolute pointer-events-none z-10" :style="pendingStyle(p)">
+          <div class="wb-pending-dots"><span></span><span></span><span></span></div>
+          <p class="wb-pending-text">{{ p.prompt }}</p>
+        </div>
+
         <!-- Remote cursors -->
         <template v-for="p in others" :key="p.uid">
           <div class="absolute left-0 top-0 pointer-events-none z-10 transition-transform duration-75" :style="cursorStyle(p)">
@@ -1508,7 +1553,7 @@ const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(()
           :title="`${tl.label} (${tl.key})`"
           @click="tool = tl.id"
         >
-          <component :is="tl.icon" class="w-4 h-4" />
+          <component :is="tl.icon" class="w-4 h-4" v-bind="tl.id === 'sticky' ? { fill: stickyColor, color: '#0f172a', strokeWidth: 1.5 } : {}" />
         </button>
         <button class="wb-tool" :title="t('wb.insertImage')" @click="fileInput?.click()"><ImageIcon class="w-4 h-4" /></button>
         <button v-if="showWhiteboardAi" class="wb-tool text-fuchsia-300" :class="{ 'wb-tool-active': ai.open }" :title="t('wb.generateWith', { name: aiName })" @click="ai.open = !ai.open">
@@ -1662,6 +1707,36 @@ const tools = computed<{ id: Tool; icon: any; label: string; key: string }[]>(()
 </template>
 
 <style scoped>
+.wb-pending {
+  border: 1.5px dashed rgb(56 189 248 / 0.55);
+  border-radius: 14px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px;
+  background: linear-gradient(110deg, rgb(56 189 248 / 0.05) 30%, rgb(56 189 248 / 0.16) 50%, rgb(56 189 248 / 0.05) 70%);
+  background-size: 250% 100%;
+  animation: wb-shimmer 2.2s ease-in-out infinite;
+}
+.wb-pending-dots { display: flex; gap: 6px; }
+.wb-pending-dots span {
+  width: 8px; height: 8px; border-radius: 9999px; background: rgb(56 189 248 / 0.7);
+  animation: wb-bounce 1.2s ease-in-out infinite;
+}
+.wb-pending-dots span:nth-child(2) { animation-delay: 0.15s; }
+.wb-pending-dots span:nth-child(3) { animation-delay: 0.3s; }
+.wb-pending-text {
+  max-width: 100%; font-size: 12px; line-height: 1.4; color: rgb(148 163 184 / 0.85); text-align: center;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+@keyframes wb-shimmer { 0% { background-position: 100% 0; } 100% { background-position: -150% 0; } }
+@keyframes wb-bounce { 0%, 80%, 100% { transform: translateY(0); opacity: 0.45; } 40% { transform: translateY(-6px); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .wb-pending, .wb-pending-dots span { animation: none; }
+}
 /* The board itself stays light in both themes (ink colours are chosen for a light surface) */
 .wb-grid {
   background-color: #f9fafb;

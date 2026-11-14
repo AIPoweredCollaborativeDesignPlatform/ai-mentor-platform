@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { t } from '../i18n';
 import { computed, ref } from 'vue';
-import { Palette, Copy, Check, ExternalLink, Sparkles, X } from 'lucide-vue-next';
+import { Palette, Check, ExternalLink, Sparkles, X } from 'lucide-vue-next';
 
 const props = defineProps<{
   assetData: any;
@@ -22,6 +22,8 @@ const emit = defineEmits<{
   (e: 'make-3d', url: string): void;
 }>();
 const isSketch = computed(() => props.kind === 'sketch');
+// Images developed from an image in the chat keep its look, so they are not called sketches
+const isExtended = computed(() => isSketch.value && Boolean(props.assetData?.fromImageAsset || props.assetData?.source));
 const putOnWhiteboard = () => {
   if (!selectedItem.value) return;
   emit('to-whiteboard', selectedItem.value.url);
@@ -156,6 +158,7 @@ const pos = (i: number): Pos => {
   return saved ? { x: saved.x, y: saved.y, w: saved.w, z: saved.z ?? 1 } : defaultLayout.value[i];
 };
 
+const hasSide = computed(() => Boolean(props.assetData?.palette?.length || props.assetData?.materials?.length));
 const boardRef = ref<HTMLElement | null>(null);
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 const startDrag = (e: PointerEvent, i: number, mode: 'move' | 'resize') => {
@@ -202,13 +205,13 @@ const startDrag = (e: PointerEvent, i: number, mode: 'move' | 'resize') => {
 </script>
 
 <template>
-  <div class="mt-3 bg-slate-900 border border-slate-800 rounded-2xl p-4">
+  <div class="mt-2">
     <!-- Header with strictly non-wrapping AI Generated pill -->
     <div class="flex items-center justify-between gap-2 mb-3 min-w-0">
       <div class="flex items-center gap-2 min-w-0">
         <Palette class="w-4 h-4 sm:w-5 sm:h-5 text-slate-400 shrink-0" />
         <h4 class="font-semibold text-slate-100 text-xs sm:text-sm tracking-wide truncate">
-          {{ assetData?.title || t(isSketch ? 'sketch.title' : 'mood.title') }}
+          {{ assetData?.title || t(isExtended ? 'extend.title' : isSketch ? 'sketch.title' : 'mood.title') }}
         </h4>
       </div>
       <span class="text-[9px] sm:text-[10px] bg-slate-800 text-slate-400 font-mono px-2 py-0.5 rounded-full border border-slate-700 whitespace-nowrap shrink-0">
@@ -229,13 +232,15 @@ const startDrag = (e: PointerEvent, i: number, mode: 'move' | 'resize') => {
 
     <p v-if="assetData?.description" class="text-xs text-slate-400 mb-3 leading-relaxed">{{ assetData.description }}</p>
 
-    <!-- Collage: loose layout the team can rearrange together (drag to move, corner to resize) -->
-    <div v-if="items.length" class="mb-3">
+    <!-- Collage: loose layout the team can rearrange together (drag to move, corner to resize).
+         Colours and materials sit beside it on wide screens and below it, compact, on phones -->
+    <div class="grid gap-3" :class="hasSide && items.length ? 'sm:grid-cols-[minmax(0,1fr)_10rem]' : ''">
+    <div v-if="items.length" class="min-w-0">
       <h5 class="text-xs font-semibold text-slate-400 mb-1.5 flex items-center justify-between gap-2">
-        <span>{{ t(isSketch ? 'sketch.imagery' : 'mood.imagery') }}</span>
+        <span>{{ t(isExtended ? 'extend.title' : isSketch ? 'sketch.imagery' : 'mood.imagery') }}</span>
         <span v-if="editable" class="text-[10px] font-normal text-slate-500">{{ t('mood.arrangeHint') }}</span>
       </h5>
-      <div ref="boardRef" class="relative w-full aspect-[4/3] sm:aspect-[16/10] rounded-xl bg-slate-950 border border-slate-800 overflow-hidden select-none">
+      <div ref="boardRef" class="relative w-full aspect-[4/3] sm:aspect-[16/10] rounded-xl bg-slate-950 overflow-hidden select-none">
         <div
           v-for="(img, i) in items"
           :key="i"
@@ -266,40 +271,37 @@ const startDrag = (e: PointerEvent, i: number, mode: 'move' | 'resize') => {
       </div>
     </div>
 
-    <!-- Color Palette -->
-    <div v-if="assetData?.palette?.length" class="mb-3">
-      <h5 class="text-xs font-semibold text-slate-400 mb-1.5">{{ t('mood.palette') }}</h5>
-      <div class="grid grid-cols-4 gap-2">
-        <button
-          v-for="color in assetData.palette"
-          :key="color.hex"
-          @click="copyColor(color.hex)"
-          class="flex flex-col items-center p-2 rounded-xl border border-slate-800 hover:border-slate-600 bg-slate-900/60 transition group text-center cursor-pointer"
-        >
-          <div
-            class="w-full h-8 rounded-lg mb-1.5 border border-white/10 shadow-inner"
-            :style="{ backgroundColor: color.hex }"
-          ></div>
-          <span class="text-[11px] font-mono text-slate-200 flex items-center gap-1">
-            {{ color.hex }}
-            <Check v-if="copiedHex === color.hex" class="w-3 h-3 text-emerald-400" />
-            <Copy v-else class="w-2.5 h-2.5 opacity-0 group-hover:opacity-100 text-slate-400" />
-          </span>
-          <span class="text-[10px] text-slate-400 truncate w-full">{{ color.name }}</span>
-        </button>
-      </div>
-    </div>
+      <div v-if="hasSide" class="min-w-0 space-y-2.5">
+        <!-- Color Palette -->
+        <div v-if="assetData?.palette?.length">
+          <h5 class="text-[11px] font-semibold text-slate-400 mb-1">{{ t('mood.palette') }}</h5>
+          <div class="grid grid-cols-6 sm:grid-cols-3 gap-1.5">
+            <button
+              v-for="color in assetData.palette"
+              :key="color.hex"
+              @click="copyColor(color.hex)"
+              class="group flex flex-col items-center cursor-pointer"
+              :title="`${color.name || ''} ${color.hex}`.trim()"
+            >
+              <span class="w-full h-6 rounded-md border border-white/10" :style="{ backgroundColor: color.hex }"></span>
+              <span class="text-[9px] font-mono text-slate-400 group-hover:text-slate-200 flex items-center gap-0.5 mt-0.5">
+                {{ color.hex }}
+                <Check v-if="copiedHex === color.hex" class="w-2.5 h-2.5 text-emerald-400" />
+              </span>
+            </button>
+          </div>
+        </div>
 
-    <!-- Materials list -->
-    <div v-if="assetData?.materials?.length" class="space-y-1.5">
-      <h5 class="text-xs font-semibold text-slate-400">{{ t('mood.materials') }}</h5>
-      <div
-        v-for="(mat, idx) in assetData.materials"
-        :key="idx"
-        class="text-xs bg-slate-900/60 border border-slate-800 rounded-lg p-2 flex justify-between items-center"
-      >
-        <span class="font-medium text-slate-200">{{ mat.name }}</span>
-        <span class="text-slate-400 text-[11px]">{{ mat.feature }}</span>
+        <!-- Materials list -->
+        <div v-if="assetData?.materials?.length">
+          <h5 class="text-[11px] font-semibold text-slate-400 mb-1">{{ t('mood.materials') }}</h5>
+          <ul class="space-y-0.5 text-[11px] leading-snug">
+            <li v-for="(mat, idx) in assetData.materials" :key="idx" class="min-w-0">
+              <span class="font-medium text-slate-200">{{ mat.name }}</span>
+              <span v-if="mat.feature" class="text-slate-500"> · {{ mat.feature }}</span>
+            </li>
+          </ul>
+        </div>
       </div>
     </div>
 

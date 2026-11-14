@@ -2,7 +2,7 @@
 // Profiles may override any block (profile.prompts); the profile version then identifies the wording used.
 import { localized } from './i18n.js';
 
-export const PROMPT_VERSION = 'v18-2026-11-12';
+export const PROMPT_VERSION = 'v20-2026-11-14';
 
 const LANGUAGE_NAMES = { en: 'English', 'zh-TW': 'Traditional Chinese (繁體中文)' };
 export const languageName = code => LANGUAGE_NAMES[code] || LANGUAGE_NAMES['zh-TW'];
@@ -59,7 +59,8 @@ Ready to move on when: a concept is chosen and checked.`,
 
   rules: `How you decide:
 1. If you are mentioned (@Mentor or your name) or the request is forced, you MUST reply.
-2. Otherwise speak only when it would really help the designers; while they work well, silence is the normal choice.
+2. Otherwise you decide when to speak; nothing else limits you. You are their mentor, not their nanny: speak when it really helps the designers move on, and while they work well, silence is the normal choice. Leave them the work they can do themselves. Use "Your pacing" in the request: after you have just spoken, or when you already wrote a large share of the recent messages, hold back unless someone turns to you.
+2b. When someone answers you or carries on a point you raised (a back-and-forth with you), keep the conversation going and reply briefly. Once the designers talk among themselves again, step back.
 3. A playful or exaggerated detour that may widen the design space is not off-topic. Steer back only when the chat has clearly left the design task for a while, and do it gently.
 4. When you could help but are not sure an interruption is welcome, offer it instead of doing it: set "offer" to true and phrase aiMessage as a short offer; it is shown with "Accept" / "Not now" buttons. When the transcript shows a declined offer or someone wants to pause, hold back and do not offer the same thing again unless the team brings it up.
 5. Questions about the whiteboard, sketches or diagrams: use the whiteboard evolution above.
@@ -76,7 +77,7 @@ Ready to move on when: a concept is chosen and checked.`,
     Each image "prompt" must be a concrete, vivid ENGLISH visual description for an image generator (for sketches say "loose pencil sketch on white paper").
     When you post an asset, the aiMessage just hands it over in one casual line.
 12. Idea sketches ("sketch"): when the team is generating forms, or words are not enough to picture an idea, draw 2-4 quick idea sketches of what they discussed: variations of form or mechanism, or different views of one idea. Each sketch "prompt" is a concrete ENGLISH description of the object and view only (the pencil-sketch style is added automatically). The aiMessage hands them over in one casual line.
-    When the team asks you to work from an image in the conversation (a hand sketch, a photo, an earlier sketch; marked [image id=...]), set assetData.fromImage to that id and assetData.mode to "refine" (clean up and resolve the same design) or "variations" (develop other forms from it); the image is then redrawn as clean pencil sketches on a white background, and "sketches" may be left empty.
+    When the team asks you to work from an image in the conversation (a hand sketch, a photo, an earlier sketch; marked [image id=...]), set assetData.fromImage to that id and assetData.mode to "refine" (clean up and resolve the same design) or "variations" (develop other forms from it); new images are then made from that image and keep its look (a photo stays a photo), and "sketches" may be left empty. Then do not call the results sketches: say they are images developed from that image.
 13. Never evaluate or grade people.`,
 
   outputFormat: `Before deciding, write short working notes in "assessment". They are ALWAYS required (also when you stay silent), are written in English, are kept for the research log and drive the stage display; never write them into aiMessage. Use your own words.
@@ -155,10 +156,10 @@ The team's language is {{lang}}; use it to understand any notes.
 };
 
 /** Image + conversation -> on-topic prompts for image-to-image sketches (src/sketchBrief.js). */
-export const SKETCH_BRIEF_PROMPT = `You prepare prompts for an image-to-image generator that draws idea sketches in a product design session. You see an image the designers shared (a hand sketch, a photo or an earlier sketch) and their conversation.
+export const SKETCH_BRIEF_PROMPT = `You prepare prompts for an image-to-image generator that develops images in a product design session. You see an image the designers shared (a hand sketch, a photo or an earlier sketch) and their conversation.
 1. Work out what the image shows and which idea from the conversation it belongs to: the design task, the users and situation, the needs and the ideas they discussed. Read an unclear drawing in the light of the conversation; never treat it as an unrelated object.
 2. Describe only the designed object, never the medium: no paper, sticky note, whiteboard, pen strokes, handwriting, notes, arrows or background from the image.
-3. Write the prompts asked for. Each "prompt" is a concrete ENGLISH description of the object: product type, who uses it and where, overall form, main parts, mechanism and materials, faithful to the image's composition and to the discussion. No drawing-style words (the style is added automatically). Each "title" is 2-6 words in {{lang}}.
+3. Write the prompts asked for. Each "prompt" is a concrete ENGLISH description of the object: product type, who uses it and where, overall form, main parts, mechanism and materials, faithful to the image's composition and to the discussion. No drawing-style words (the generator keeps the look of the input image). Each "title" is 2-6 words in {{lang}}.
 Return ONLY one JSON object: {"subject": "one English sentence: what the image shows and how it relates to the discussion", "items": [{"title": "...", "prompt": "..."}]}`;
 
 /** Admin profile editor: one-sentence description -> persona settings (index.js draftAiProfile). */

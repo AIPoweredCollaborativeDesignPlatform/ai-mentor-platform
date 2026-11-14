@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { t } from '../../i18n';
 import { computed } from 'vue';
-import { Bot, Box, X } from 'lucide-vue-next';
+import { Bot, X } from 'lucide-vue-next';
 import { useRoomStore } from '../../stores/room';
 import { useAuthStore } from '../../stores/auth';
 import { AI_TYPING_UIDS, formatTypingText } from '../../utils/chat';
@@ -12,9 +12,19 @@ const { aiEnabled, aiName } = useRoomAi();
 
 const humanTypers = computed(() => roomStore.typingUsers.filter(u => !AI_TYPING_UIDS.includes(u.uid)));
 const authStore = useAuthStore();
-// A room-wide AI task (someone @mentioned the AI) or the AI's own check; shown as one chip
+// A room-wide AI task (someone @mentioned the AI) or the AI's own check
 const activeTask = computed(() => (aiEnabled.value ? roomStore.currentRoom?.aiActiveTask : null));
-const isAiThinking = computed(() => aiEnabled.value && (roomStore.isAnalyzing || Boolean(activeTask.value)));
+const isDrawing = computed(() => roomStore.typingUsers.some(u => u.uid === 'ai_mentor_image'));
+const isAiThinking = computed(() => roomStore.isAnalyzing || Boolean(activeTask.value));
+// What the AI is doing, in order: writing, drawing images, building a 3D model (one line, e.g. "typing… / generating images…")
+const aiSteps = computed(() => {
+  if (!aiEnabled.value) return [];
+  const steps: string[] = [];
+  if (isAiThinking.value && !isDrawing.value) steps.push(t('status.aiTyping'));
+  if (isDrawing.value) steps.push(t('status.aiImages'));
+  if (roomStore.isGenerating3D) steps.push(t('status.aiModel'));
+  return steps;
+});
 const canStopTask = computed(() => !activeTask.value || activeTask.value.callerUid === authStore.uid || roomStore.isHost);
 
 // One row of fixed height, always reserved: statuses appear and disappear without moving the chat
@@ -32,18 +42,13 @@ const stopButton = 'ml-1 px-1.5 py-0.5 pointer-coarse:py-1 rounded-md bg-rose-50
       </span>
     </div>
 
-    <div v-if="isAiThinking" :class="chip">
+    <div v-if="aiSteps.length" :class="chip">
       <Bot class="w-3.5 h-3.5 text-slate-500" />
-      <span>{{ activeTask?.callerName ? t('composer.aiRespondingTo', { name: aiName, caller: activeTask.callerName }) : t('status.aiThinking', { name: aiName }) }}</span>
+      <span>{{ aiName }} {{ aiSteps.join(' / ') }}</span>
+      <span class="flex gap-0.5 items-center">
+        <span v-for="d in [0, 150, 300]" :key="d" class="w-1 h-1 rounded-full bg-slate-500 animate-pulse" :style="{ animationDelay: `${d}ms` }"></span>
+      </span>
       <button v-if="canStopTask" @click="roomStore.abortCurrentAiGeneration()" :class="stopButton" :title="t('status.interruptAi')">
-        <X class="w-3 h-3" /> {{ t('common.stop') }}
-      </button>
-    </div>
-
-    <div v-if="aiEnabled && roomStore.isGenerating3D" :class="chip">
-      <Box class="w-3.5 h-3.5 text-slate-500" />
-      <span>{{ roomStore.generating3DStatus || t('status.generating3D') }}</span>
-      <button @click="roomStore.abortCurrentAiGeneration()" :class="stopButton" :title="t('status.cancel3D')">
         <X class="w-3 h-3" /> {{ t('common.stop') }}
       </button>
     </div>

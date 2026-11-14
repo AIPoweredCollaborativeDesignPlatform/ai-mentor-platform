@@ -3,7 +3,13 @@ import DOMPurify from 'dompurify';
 import type { MessageItem } from '../types';
 import { intlLocale, t } from '../i18n';
 
-export const AI_TYPING_UIDS = ['ai_mentor', 'ai_mentor_3d'];
+export const AI_TYPING_UIDS = ['ai_mentor', 'ai_mentor_3d', 'ai_mentor_image'];
+
+/** Same sender within the same clock minute as the previous message: shown without avatar, name and time (like LINE). */
+export function isContinuation(prev: { senderUid?: string; timestamp: number } | undefined, msg: { senderUid?: string; timestamp: number }) {
+  if (!prev || !msg.senderUid || prev.senderUid !== msg.senderUid || msg.senderUid === 'system') return false;
+  return Math.floor(prev.timestamp / 60000) === Math.floor(msg.timestamp / 60000);
+}
 
 /** Renders chat text as sanitized HTML; inline markdown for plain messages, block markdown for structured ones. */
 export function formatMessageText(text: string): string {

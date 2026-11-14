@@ -500,7 +500,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="mt-3 bg-slate-950/90 border border-indigo-500/30 rounded-2xl p-3 sm:p-4 shadow-2xl relative w-full">
+  <div class="mt-2 relative w-full">
     <!-- Header info -->
     <div class="flex items-center justify-between mb-2 gap-2">
       <div class="flex items-center gap-2 min-w-0">
@@ -528,7 +528,7 @@ onUnmounted(() => {
 
     <!-- 3D Canvas Container -->
     <div
-      class="w-full rounded-xl overflow-hidden bg-slate-950 border border-slate-800 relative group select-none h-72 sm:h-96"
+      class="w-full rounded-xl overflow-hidden bg-slate-950 relative group select-none h-72 sm:h-96"
       style="width: 100%; display: block;"
       @wheel.capture="handleWheel"
     >
@@ -612,7 +612,7 @@ onUnmounted(() => {
       </div>
 
       <!-- Unified Parallel Controls in Bottom-Right (Eliminates extra bottom row!) -->
-      <div v-if="isModelInteractive" class="absolute bottom-3 right-3 flex items-center gap-1 bg-slate-950/90 p-1.5 rounded-xl border border-slate-700/80 shadow-2xl z-20">
+      <div v-if="isModelInteractive" class="absolute bottom-2 right-2 flex items-center gap-1 bg-slate-900/70 backdrop-blur-sm p-1 rounded-xl z-20">
         <!-- Zoom & Reset Controls -->
         <button
           @click="zoomIn"
@@ -671,7 +671,7 @@ onUnmounted(() => {
       <!-- Gesture Helper Badge -->
       <div
         v-if="isModelInteractive"
-        class="absolute top-2.5 left-2.5 pointer-events-none text-[10px] text-slate-300 bg-slate-950/80 px-2.5 py-1 rounded-md border border-slate-800 z-10"
+        class="absolute top-2 left-2.5 pointer-events-none text-[10px] text-slate-400 z-10"
       >
         {{ t('glb.dragHint') }}
       </div>

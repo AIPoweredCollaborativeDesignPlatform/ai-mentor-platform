@@ -1,3 +1,4 @@
+import { startPresence } from './engine.js';
 import { getSystemConfig } from './config.js';
 import { Anthropic, classifyError, createMessage, parseJsonObject, responseText } from './claude.js';
 import { PROMPT_VERSION, buildTranscript, memoryPrompt, mentorSystemPrompt } from './prompts.js';
@@ -46,7 +47,7 @@ export async function analyze({ apiKey, falKey, roomId, room, messages, particip
     roomNaming: profile.mode === 'proactive' && Boolean(room.nameIsDefault) && !room.autoNamedAt
   });
   // `note` replaces the generic trigger line for system-initiated responses (e.g. a settled poll)
-  const userPrompt = `Conversation transcript:\n${buildTranscript(messages, participants)}\n\n${rosterNote ? `${rosterNote}\n` : ''}${
+  const userPrompt = `Conversation transcript:\n${buildTranscript(messages, participants)}\n\n${rosterNote ? `${rosterNote}\n` : ''}${pacingNote(messages)}\n${
     note || (forced ? 'You were explicitly asked by a participant (forced).' : `Automatic check (reason: ${reason}).`)
   }\nRespond with the JSON object only.`;
 
@@ -119,6 +120,9 @@ export async function analyze({ apiKey, falKey, roomId, room, messages, particip
       result.assetData = null;
     }
 
+    const drawsImages = visible && result.shouldIntervene && (result.assetType === 'moodboard' || result.assetType === 'sketch');
+    const stopImage = drawsImages ? startPresence(roomId, 'image') : null;
+    try {
     if (visible && result.shouldIntervene && result.assetType === 'moodboard' && Array.isArray(result.assetData?.images)) {
       const urls = await generateImages(result.assetData.images.map(i => i.prompt || i.title || 'design concept'), {
         falKey,
@@ -138,12 +142,16 @@ export async function analyze({ apiKey, falKey, roomId, room, messages, particip
       const urls = items.length ? await sketchesFromImage(sourceImage, items.slice(0, 4), mode, { falKey, model: sys.sketchRefineModel, folder: `sketch/${roomId}` }) : [];
       result.assetData.images = items.slice(0, 4).map((s, i) => ({ title: s.title || '', prompt: s.prompt || '', url: urls[i], size: i === 0 ? 'large' : 'medium', isAiGenerated: true }));
       result.assetData.model = sys.sketchRefineModel;
+      result.assetData.fromImageAsset = true;
       result.assetData.sourceMessageId = result.assetData.fromImage;
     } else if (visible && result.shouldIntervene && result.assetType === 'sketch' && Array.isArray(result.assetData?.sketches)) {
       const sketches = result.assetData.sketches.slice(0, 4);
       const urls = await generateSketches(sketches.map(s => s.prompt || s.title || 'product idea'), { falKey, model: sys.sketchModel, folder: `sketch/${roomId}` });
       result.assetData.images = sketches.map((s, i) => ({ title: s.title || '', prompt: s.prompt || '', url: urls[i], size: i === 0 ? 'large' : 'medium', isAiGenerated: true }));
       result.assetData.model = sys.sketchModel;
+    }
+    } finally {
+      await stopImage?.();
     }
 
     const meta = { model, promptVersion: PROMPT_VERSION, usage: usageOf(response), profileId: profile.id || null, profileVersion: profile.version ?? null };
@@ -161,6 +169,17 @@ export async function analyze({ apiKey, falKey, roomId, room, messages, particip
     await logAiCall({ ...log, error: { category, message: String(err?.message || err).slice(0, 500) }, latencyMs: Date.now() - startedAt });
     return { error: { category, message: FRIENDLY_ERRORS[category] } };
   }
+}
+
+// How much the AI has been talking: there is no fixed cooldown, the AI paces itself with these figures (rule 2)
+function pacingNote(messages) {
+  const now = Date.now();
+  const chat = messages.filter(m => m.senderUid !== 'system' && m.timestamp);
+  const recent = chat.filter(m => now - m.timestamp < 10 * 60_000);
+  const recentMine = recent.filter(m => m.senderUid === 'ai_mentor').length;
+  const last = chat.filter(m => m.senderUid === 'ai_mentor').at(-1);
+  const since = last ? `${Math.round((now - last.timestamp) / 60_000)} min ago` : 'never yet';
+  return `Your pacing: your last message was ${since}; in the last 10 minutes you wrote ${recentMine} of ${recent.length} messages.`;
 }
 
 // Images the mentor looks at itself: a mention sees up to 3 from the last 30 messages, an automatic check up to 2 from the last 8

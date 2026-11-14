@@ -12,7 +12,7 @@ import {
   KIND_GROUPS, describe, fmtOffset, groupOf, indexAt, loadAiThoughts, loadEvents, segmentsOf, loadFinalBoard, membersOf, stateAt, wasTruncated,
   type AiThought, type ReplayMessage, type ReplayObject, type ResearchEvent
 } from '../utils/replay';
-import { formatMessageText } from '../utils/chat';
+import { formatMessageText, isContinuation } from '../utils/chat';
 
 /** Admin-only replay of one room from its research event log (/#/admin/replay/:roomId). */
 const route = useRoute();
@@ -307,8 +307,8 @@ onMounted(async () => {
         <section class="rounded-2xl border border-slate-800 bg-slate-900/70 flex flex-col h-[60dvh] min-h-[300px] lg:h-[440px]">
           <h2 class="px-3 py-2 text-xs font-semibold text-slate-300 border-b border-slate-800">{{ tr('rp.chat', { count: state.messages.filter(m => !m.deleted).length }) }}</h2>
           <div ref="chatRef" class="flex-1 overflow-y-auto p-3 space-y-2 text-xs">
-            <div v-for="m in state.messages" :key="m.id" :class="m.deleted ? 'opacity-40 line-through' : ''">
-              <div class="text-[10px] text-slate-500">
+            <div v-for="(m, mi) in state.messages" :key="m.id" :class="[m.deleted ? 'opacity-40 line-through' : '', isContinuation(state.messages[mi - 1], m) ? '!mt-0.5' : '']">
+              <div v-if="!isContinuation(state.messages[mi - 1], m)" class="text-[10px] text-slate-500">
                 <b :class="ROLE_CLASS[m.senderUid?.startsWith('ai_mentor') ? 'ai' : m.senderUid === 'system' ? 'system' : 'participant']">
                   {{ who({ uid: m.senderUid, role: m.senderUid?.startsWith('ai_mentor') ? 'ai' : m.senderUid === 'system' ? 'system' : 'participant' }) }}
                 </b>

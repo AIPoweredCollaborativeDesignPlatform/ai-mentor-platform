@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
-import { Box, Check, CornerUpLeft, FileText, Loader2, Palette, Paperclip, PenTool, Send, Sparkles, X } from 'lucide-vue-next';
+import { Box, Check, CornerUpLeft, FileText, Palette, Paperclip, PenTool, Send, Sparkles, X } from 'lucide-vue-next';
 import { useAuthStore } from '../../stores/auth';
 import { useRoomStore } from '../../stores/room';
 import type { AiTool, MessageItem } from '../../types';
@@ -339,18 +339,6 @@ defineExpose({ setReply, sendFile });
         </button>
       </div>
 
-      <!-- Tool tag: the request type stays until removed with X -->
-      <div v-if="toolTag" class="flex items-center gap-2 text-[11px]">
-        <span class="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-lg border border-sky-500/50 bg-sky-500/10 text-sky-200">
-          <component :is="toolTag.icon" class="w-3 h-3" :class="toolTag.iconClass" />
-          {{ toolTag.label }}
-          <button @click="toolTag = null" class="p-0.5 rounded hover:bg-sky-500/20 cursor-pointer" :title="t('composer.removeTool')" :aria-label="t('composer.removeTool')">
-            <X class="w-3 h-3" />
-          </button>
-        </span>
-        <span class="text-slate-500 truncate">{{ t('composer.toolHint') }}</span>
-      </div>
-
       <div v-if="stagedAttachment" class="flex items-center justify-between p-2.5 rounded-xl bg-slate-950 border border-sky-500/50 shadow-lg animate-fade-in">
         <div class="flex items-center gap-2.5 min-w-0">
           <img v-if="stagedAttachment.previewUrl" :src="stagedAttachment.previewUrl" class="w-10 h-10 rounded-lg object-cover border border-slate-700 shrink-0" />
@@ -421,6 +409,16 @@ defineExpose({ setReply, sendFile });
             </button>
           </div>
 
+          <!-- The frame holds the tool tag (removable only with its X) and the text box -->
+          <div class="flex items-start gap-1.5 w-full bg-slate-950 border border-slate-700 rounded-xl focus-within:border-sky-500 transition" :class="{ 'opacity-50': isBlocked }">
+          <span v-if="toolTag" class="ml-1.5 mt-[9px] inline-flex items-center gap-1 pl-1.5 pr-0.5 py-0.5 rounded-lg border border-sky-500/50 bg-sky-500/10 text-sky-200 text-[11px] whitespace-nowrap shrink-0 select-none">
+            <span class="text-sky-300">@{{ aiName }}</span>
+            <component :is="toolTag.icon" class="w-3 h-3" :class="toolTag.iconClass" />
+            {{ toolTag.label }}
+            <button @click="toolTag = null" class="p-0.5 rounded hover:bg-sky-500/20 cursor-pointer" :title="t('composer.removeTool')" :aria-label="t('composer.removeTool')">
+              <X class="w-3 h-3" />
+            </button>
+          </span>
           <textarea
             ref="textareaRef"
             v-model="inputMessage"
@@ -431,34 +429,30 @@ defineExpose({ setReply, sendFile });
             enterkeyhint="send"
             :placeholder="isMeetingClosed
               ? lockedText || t('room.closedReadOnly')
-              : isMuted ? t('room.mutedText') : aiEnabled ? t('composer.placeholderAi', { ai: aiName }) : t('composer.placeholder')"
-            class="block w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-[11px] leading-5 text-base sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500 transition resize-none min-h-[44px] max-h-32 overflow-y-auto disabled:opacity-50"
+              : isMuted ? t('room.mutedText') : toolTag ? t('composer.toolHint') : aiEnabled ? t('composer.placeholderAi', { ai: aiName }) : t('composer.placeholder')"
+            class="block flex-1 min-w-0 bg-transparent px-3 py-[11px] leading-5 text-base sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none resize-none min-h-[42px] max-h-32 overflow-y-auto"
+            :class="{ 'pl-1': toolTag }"
             rows="1"
           ></textarea>
+          </div>
         </div>
 
         <button
-          v-if="!inputMessage.trim() && !stagedAttachment"
+          @click="handleSend"
+          :disabled="isBlocked || (!inputMessage.trim() && !stagedAttachment && !toolTag)"
+          class="px-3 py-2.5 bg-sky-600 hover:bg-sky-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-white rounded-xl font-semibold shadow transition flex items-center justify-center gap-1.5 shrink-0 h-11 min-w-[44px] cursor-pointer"
+          :title="t('composer.send')"
+          :aria-label="t('composer.send')"
+        >
+          <Send class="w-4 h-4" />
+        </button>
+        <button
           @click="sendQuickThumbsUp"
           :disabled="isBlocked"
           class="px-3 py-2.5 bg-slate-800 hover:bg-slate-700 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed text-sky-400 rounded-xl font-semibold shadow transition flex items-center justify-center shrink-0 h-11 min-w-[44px] cursor-pointer text-lg select-none"
           :title="t('composer.thumbsUp')"
         >
           👍
-        </button>
-        <button
-          v-else
-          @click="handleSend"
-          :disabled="isBlocked || (mentionsMentor && (roomStore.aiCooldownRemaining > 0 || roomStore.isAnalyzing))"
-          class="px-3.5 py-2.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl font-semibold shadow transition flex items-center justify-center gap-1.5 shrink-0 h-11 min-w-[44px] cursor-pointer"
-          :title="mentionsMentor && roomStore.aiCooldownRemaining > 0 ? t('composer.cooldown', { seconds: roomStore.aiCooldownRemaining }) : t('composer.send')"
-        >
-          <span v-if="mentionsMentor && roomStore.aiCooldownRemaining > 0" class="text-xs font-mono text-amber-200">{{ roomStore.aiCooldownRemaining }}s</span>
-          <Loader2 v-else-if="mentionsMentor && roomStore.isAnalyzing" class="w-4 h-4 animate-spin text-sky-200" />
-          <template v-else>
-            <Send class="w-4 h-4" />
-            <span class="hidden sm:inline">{{ t('common.send') }}</span>
-          </template>
         </button>
       </div>
     </div>

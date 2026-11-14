@@ -26,7 +26,14 @@
 - 工具按鈕改成可按 × 移除的標籤，伺服器強制對應的資產類型。
 - AI 可依某張圖畫草圖（精緻化或發想），乾淨白底、不畫便條紙；延伸草圖按鈕降低照抄程度。提示詞升為 `v18-2026-11-12`。
 - 圖庫：暫不做（使用者決定）。未修：要真實參考圖時 AI 選草圖而非寫實意象圖。
-- 使用者指示：目前不 push、不 deploy（有其他人同時在改）。
+- 使用者指示：目前不 push、不 deploy（有其他人同時在改）。（2026-11-14 已 push 並部署 v7.8.48）
+
+### 2026-11-14 之後（Claude，未部署）
+- 聊天室介面：工具標籤放進輸入框內；固定的發送鈕；同一人同一分鐘的訊息只顯示一次頭貼、名字和時間（聊天、重播、編碼頁）；往上捲時有新訊息會浮出預覽；不顯示瀏覽器右鍵選單（輸入框除外）；3D／圖片卡拿掉多層外框；情緒板色票與材質移到側欄。
+- AI 狀態列依序顯示「輸入中／生成圖片中／生成模型中」（新的 typing 文件 `ai_mentor_image`），取代原本的提示框。
+- 白板：AI 生成 SVG 時，在預定位置顯示動畫占位框與 prompt；上傳圖片先用本機檔案顯示，背景上傳；便利貼圖示顯示目前顏色。
+- 以圖延伸：維持圖生圖（保留原圖風格），按鈕與標題改為「以這張圖延伸更多圖」「延伸圖」；只有純文生圖才叫草圖；白板「草圖／渲染」改名「精修／渲染」（乾淨線稿＋渲染圖）。
+- AI 發言節奏：預設冷卻改為 0，由 AI 自行拿捏（提示詞給「上次發言幾分鐘前、近 10 分鐘佔幾則」，規則 2／2b：導師而非保母，一來一回時接著回）。回覆 AI 的訊息（回覆 AI 訊息，或 AI 發言後 3 分鐘內的下一則）立即判斷（`reason: reply_to_ai`）。既有設定檔的 `cooldownSeconds` 仍是 180，要到後台改成 0。提示詞 `v20-2026-11-14`。
 
 ## Append selected new rooms to a bank (2026-11-12)
 - Admin room checklist uses metadata-only manageCodingBank rooms action; no conversation loading or LLM call for listing. Existing rooms with targets are disabled to prevent duplicate additions. Empty placeholders in an old bank may be replaced when they gain eligible text.

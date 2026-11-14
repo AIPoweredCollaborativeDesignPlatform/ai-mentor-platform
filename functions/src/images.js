@@ -58,32 +58,33 @@ export async function refineSketch(imageDataUrl, notes, opts, items = null) {
   return results.map(r => (r.status === 'fulfilled' ? r.value : ''));
 }
 
-// An uploaded sketch or photo -> new idea sketches that develop it further (image-to-image)
+// An uploaded image -> new images that develop it further (image-to-image)
 const VARIATION_STYLES = [
-  'product design idea sketch developing the object in the input image: the same idea with a cleaner, more resolved form',
-  'product design idea sketch of a bolder variation of the object in the input image: change the overall form and proportions',
-  'product design idea sketch of a variation of the object in the input image: a different mechanism, joint or way of use'
+  'the object in the input image developed further: the same idea with a cleaner, more resolved form',
+  'a bolder variation of the object in the input image: change the overall form and proportions',
+  'a variation of the object in the input image: a different mechanism, joint or way of use'
 ];
 
 /**
- * Uploaded sketch or photo -> 3 idea sketches that take it further. `items` (from sketchBrief) keep them on
- * the team's topic; the lower strength keeps the composition of the original.
+ * Uploaded image -> 3 more images that take it further (image-to-image). They keep the look of the original
+ * (a photo stays a photo, a sketch a sketch), so the UI calls them "more images from this one", not sketches.
+ * `items` (from sketchBrief) are Claude's instructions for each one and keep them on the team's topic.
  */
 export async function sketchVariations(imageUrl, notes, opts, items = null) {
   const hint = notes ? ` The designers say: ${notes}.` : '';
   const results = await Promise.allSettled(VARIATION_STYLES.map((style, i) =>
-    generateImage(items?.[i] ? `${items[i].prompt}. ${SKETCH_STYLE}, ${CLEAN}` : `${style}. ${SKETCH_STYLE}, ${CLEAN}.${hint}`, { ...opts, imageUrl, strength: i === 0 ? 0.8 : 0.9 })));
+    generateImage(items?.[i] ? `${items[i].prompt}. ${CLEAN}` : `${style}. ${CLEAN}.${hint}`, { ...opts, imageUrl, strength: i === 0 ? 0.8 : 0.9 })));
   return results.map(r => (r.status === 'fulfilled' ? r.value : ''));
 }
 
 /**
- * The AI's "sketch" asset based on an image: refine = the same design cleaned up, from a few views;
- * variations = new forms developed from it (weaker hold on the original, so it is not just traced).
+ * The AI's image asset based on an image in the chat (image-to-image, keeps the original's look):
+ * refine = the same design cleaned up, from a few views; variations = new forms developed from it.
  */
 export async function sketchesFromImage(imageUrl, items, mode, opts) {
   const strength = mode === 'refine' ? 0.72 : 0.88;
   const results = await Promise.allSettled(items.map(item =>
-    generateImage(`${item.prompt}. ${SKETCH_STYLE}, ${CLEAN}`, { ...opts, imageUrl, strength })));
+    generateImage(`${item.prompt}. ${CLEAN}`, { ...opts, imageUrl, strength })));
   return results.map(r => (r.status === 'fulfilled' ? r.value : ''));
 }
 
